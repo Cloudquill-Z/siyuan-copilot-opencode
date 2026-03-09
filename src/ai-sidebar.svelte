@@ -53,6 +53,7 @@
     export let plugin: any;
     export let initialMessage: string = ''; // 初始消息
     export let mode: 'sidebar' | 'dialog' = 'sidebar'; // 使用模式：sidebar或dialog
+    export let respondToGlobalActions: boolean = false; // 是否响应全局事件（仅标签页实例）
 
     interface ChatSession {
         id: string;
@@ -1428,6 +1429,8 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
         document.addEventListener('scroll', closeContextMenu, true);
         // 添加全局复制事件监听器
         document.addEventListener('copy', handleCopyEvent);
+        // 监听文档总结事件
+        window.addEventListener('copilot-summarize-doc', handleSummarizeDoc as EventListener);
     });
 
     onDestroy(async () => {
@@ -1442,6 +1445,8 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
         document.removeEventListener('scroll', closeContextMenu, true);
         // 移除全局复制事件监听器
         document.removeEventListener('copy', handleCopyEvent);
+        // 移除文档总结事件监听器
+        window.removeEventListener('copilot-summarize-doc', handleSummarizeDoc as EventListener);
 
         // 保存工具配置
         if (isToolConfigLoaded) {
@@ -6324,6 +6329,61 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
         }
     }
 
+    // 一键添加当前文档到上下文
+    async function addCurrentDocToContext() {
+        const currentProtyle = getActiveEditor(false)?.protyle;
+        const blockId = currentProtyle?.block?.id;
+        if (!blockId) {
+            pushErrMsg(t('aiSidebar.errors.noActiveDocument'));
+            return;
+        }
+        const blocks = await sql(`SELECT * FROM blocks WHERE id = '${blockId}' OR root_id = '${blockId}'`);
+        const docBlock = blocks?.find(b => b.type === 'd');
+        if (!docBlock) {
+            const rootId = blocks?.[0]?.root_id;
+            if (rootId) {
+                const rootBlocks = await sql(`SELECT * FROM blocks WHERE id = '${rootId}' AND type = 'd'`);
+                if (rootBlocks?.[0]) {
+                    await addDocumentToContext(rootBlocks[0].id, rootBlocks[0].content || rootBlocks[0].fcontent || rootBlocks[0].id);
+                    return;
+                }
+            }
+            pushErrMsg(t('aiSidebar.errors.noActiveDocument'));
+            return;
+        }
+        await addDocumentToContext(docBlock.id, docBlock.content || docBlock.fcontent || docBlock.id);
+    }
+
+    // 基于已有上下文文档直接发送总结请求
+    async function summarizeContextDoc() {
+        if (contextDocuments.length === 0) return;
+        currentInput = t('menu.summarizePrompt');
+        await tick();
+        sendMessage();
+    }
+
+    // 处理文档总结事件（从右键菜单触发）
+    async function handleSummarizeDoc(event: CustomEvent) {
+        const { docId } = event.detail;
+        if (!docId) return;
+        try {
+            const blocks = await sql(`SELECT * FROM blocks WHERE id = '${docId}' AND type = 'd'`);
+            const docBlock = blocks?.[0];
+            if (!docBlock) return;
+            const docTitle = docBlock.content || docBlock.fcontent || docId;
+            // 添加文档到上下文
+            await addDocumentToContext(docId, docTitle);
+            // 设置输入并自动发送
+            await tick();
+            currentInput = t('menu.summarizePrompt');
+            await tick();
+            sendMessage();
+        } catch (error) {
+            console.error('Summarize doc error:', error);
+            pushErrMsg(t('aiSidebar.errors.addDocumentFailed'));
+        }
+    }
+
     // 获取当前聚焦的编辑器
     function getProtyle() {
         return getActiveEditor(false)?.protyle;
@@ -9081,18 +9141,18 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
     <div class="ai-sidebar__header">
         <h3 class="ai-sidebar__title">
             <button
-                class="b3-button b3-button--text"
+                class="b3-button b3-button--text b3-tooltips b3-tooltips__s"
                 on:click={openTranslateDialog}
-                title={t('aiSidebar.translate.openDialog') || '翻译'}
+                aria-label={t('aiSidebar.translate.openDialog') || '翻译'}
             >
                 <svg class="b3-button__icon"><use xlink:href="#iconTranslate"></use></svg>
             </button>
             <div class="ai-sidebar__webapp-menu-container">
                 <button
-                    class="b3-button b3-button--text"
+                    class="b3-button b3-button--text b3-tooltips b3-tooltips__s"
                     bind:this={webAppMenuButton}
                     on:click={toggleWebAppMenu}
-                    title="小程序"
+                    aria-label={t('aiSidebar.webapp.title') || '小程序'}
                 >
                     <svg class="b3-button__icon"><use xlink:href="#iconCopilotWebApp"></use></svg>
                 </button>
@@ -9141,9 +9201,9 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
 
         <div class="ai-sidebar__actions">
             <button
-                class="b3-button b3-button--text"
+                class="b3-button b3-button--text b3-tooltips b3-tooltips__s"
                 on:click={newSession}
-                title={t('aiSidebar.session.new')}
+                aria-label={t('aiSidebar.session.new')}
             >
                 <svg class="b3-button__icon"><use xlink:href="#iconAdd"></use></svg>
             </button>
@@ -9159,32 +9219,32 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                 on:update={e => handleSessionUpdate(e.detail.sessions)}
             />
             <button
-                class="b3-button b3-button--text"
+                class="b3-button b3-button--text b3-tooltips b3-tooltips__s"
                 on:click={copyAsMarkdown}
-                title={t('aiSidebar.actions.copyAllChat')}
+                aria-label={t('aiSidebar.actions.copyAllChat')}
             >
                 <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
             </button>
             <button
-                class="b3-button b3-button--text"
+                class="b3-button b3-button--text b3-tooltips b3-tooltips__s"
                 on:click={() => openSaveToNoteDialog()}
-                title={t('aiSidebar.actions.saveToNote')}
+                aria-label={t('aiSidebar.actions.saveToNote')}
             >
                 <svg class="b3-button__icon"><use xlink:href="#iconDownload"></use></svg>
             </button>
             <button
-                class="b3-button b3-button--text"
+                class="b3-button b3-button--text b3-tooltips b3-tooltips__s"
                 on:click={clearChat}
-                title={t('aiSidebar.actions.clear')}
+                aria-label={t('aiSidebar.actions.clear')}
             >
                 <svg class="b3-button__icon"><use xlink:href="#iconTrashcan"></use></svg>
             </button>
             <div class="ai-sidebar__open-window-menu-container" style="position: relative;">
                 <button
-                    class="b3-button b3-button--text"
+                    class="b3-button b3-button--text b3-tooltips b3-tooltips__s"
                     bind:this={openWindowMenuButton}
                     on:click={toggleOpenWindowMenu}
-                    title="在新窗口打开"
+                    aria-label={t('aiSidebar.actions.openWindow') || '在新窗口打开'}
                 >
                     <svg class="b3-button__icon"><use xlink:href="#iconOpenWindow"></use></svg>
                 </button>
@@ -9206,9 +9266,9 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                 {/if}
             </div>
             <button
-                class="b3-button b3-button--text"
+                class="b3-button b3-button--text b3-tooltips b3-tooltips__s"
                 on:click={toggleFullscreen}
-                title={isFullscreen ? '退出全屏' : '全屏查看'}
+                aria-label={isFullscreen ? '退出全屏' : '全屏查看'}
             >
                 <svg class="b3-button__icon">
                     <use
@@ -9217,9 +9277,9 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                 </svg>
             </button>
             <button
-                class="b3-button b3-button--text"
+                class="b3-button b3-button--text b3-tooltips b3-tooltips__s"
                 on:click={openSettings}
-                title={t('aiSidebar.actions.settings')}
+                aria-label={t('aiSidebar.actions.settings')}
             >
                 <svg class="b3-button__icon"><use xlink:href="#iconSettings"></use></svg>
             </button>
@@ -10001,41 +10061,41 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                 {#if !firstMessage.multiModelResponses || (firstMessage.multiModelResponses && firstMessage.multiModelResponses.some(r => r.isSelected))}
                     <div class="ai-message__actions">
                         <button
-                            class="b3-button b3-button--text ai-message__action"
+                            class="b3-button b3-button--text ai-message__action b3-tooltips b3-tooltips__n"
                             on:click={() => copyMessage(getActualMessageContent(firstMessage))}
-                            title={t('aiSidebar.actions.copyMessage')}
+                            aria-label={t('aiSidebar.actions.copyMessage')}
                         >
                             <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
                         </button>
                         <button
-                            class="b3-button b3-button--text ai-message__action"
+                            class="b3-button b3-button--text ai-message__action b3-tooltips b3-tooltips__n"
                             on:click={() => openSaveToNoteDialog(messageIndex)}
-                            title={t('aiSidebar.actions.saveToNote')}
+                            aria-label={t('aiSidebar.actions.saveToNote')}
                         >
                             <svg class="b3-button__icon">
                                 <use xlink:href="#iconDownload"></use>
                             </svg>
                         </button>
                         <button
-                            class="b3-button b3-button--text ai-message__action"
+                            class="b3-button b3-button--text ai-message__action b3-tooltips b3-tooltips__n"
                             on:click={() => startEditMessage(messageIndex)}
-                            title={t('aiSidebar.actions.editMessage')}
+                            aria-label={t('aiSidebar.actions.editMessage')}
                         >
                             <svg class="b3-button__icon"><use xlink:href="#iconEdit"></use></svg>
                         </button>
                         <button
-                            class="b3-button b3-button--text ai-message__action"
+                            class="b3-button b3-button--text ai-message__action b3-tooltips b3-tooltips__n"
                             on:click={() => deleteMessage(messageIndex)}
-                            title={t('aiSidebar.actions.deleteMessage')}
+                            aria-label={t('aiSidebar.actions.deleteMessage')}
                         >
                             <svg class="b3-button__icon">
                                 <use xlink:href="#iconTrashcan"></use>
                             </svg>
                         </button>
                         <button
-                            class="b3-button b3-button--text ai-message__action"
+                            class="b3-button b3-button--text ai-message__action b3-tooltips b3-tooltips__n"
                             on:click={() => regenerateMessage(messageIndex)}
-                            title={group.type === 'user'
+                            aria-label={group.type === 'user'
                                 ? t('aiSidebar.actions.resend')
                                 : t('aiSidebar.actions.regenerate')}
                         >
@@ -10798,10 +10858,10 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
         />
         <div class="ai-sidebar__bottom-row">
             <button
-                class="b3-button b3-button--text ai-sidebar__upload-btn"
+                class="b3-button b3-button--text ai-sidebar__upload-btn b3-tooltips b3-tooltips__n"
                 on:click={triggerFileUpload}
                 disabled={isUploadingFile || isLoading}
-                title={t('aiSidebar.actions.upload')}
+                aria-label={t('aiSidebar.actions.upload')}
             >
                 {#if isUploadingFile}
                     <svg class="b3-button__icon ai-sidebar__loading-icon">
@@ -10812,10 +10872,10 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                 {/if}
             </button>
             <button
-                class="b3-button b3-button--text ai-sidebar__weblink-btn"
+                class="b3-button b3-button--text ai-sidebar__weblink-btn b3-tooltips b3-tooltips__n"
                 on:click={openWebLinkDialog}
                 disabled={isFetchingWebContent || isLoading}
-                title="添加网页链接"
+                aria-label={t('aiSidebar.actions.addWebLink')}
             >
                 {#if isFetchingWebContent}
                     <svg class="b3-button__icon ai-sidebar__loading-icon">
@@ -10826,7 +10886,23 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                 {/if}
             </button>
             <button
-                class="b3-button b3-button--text ai-sidebar__search-btn"
+                class="b3-button b3-button--text ai-sidebar__add-current-doc-btn b3-tooltips b3-tooltips__n"
+                on:click={addCurrentDocToContext}
+                aria-label={t('aiSidebar.actions.addCurrentDoc')}
+            >
+                <svg class="b3-button__icon"><use xlink:href="#iconFile"></use></svg>
+            </button>
+            {#if contextDocuments.length > 0}
+            <button
+                class="b3-button b3-button--text b3-tooltips b3-tooltips__n"
+                on:click={summarizeContextDoc}
+                aria-label={t('aiSidebar.actions.summarizeContext')}
+            >
+                <svg class="b3-button__icon"><use xlink:href="#iconCopilot"></use></svg>
+            </button>
+            {/if}
+            <button
+                class="b3-button b3-button--text ai-sidebar__search-btn b3-tooltips b3-tooltips__n"
                 on:click={() => {
                     isSearchDialogOpen = !isSearchDialogOpen;
                     // 打开对话框时，如果搜索关键词为空，自动加载当前文档
@@ -10834,15 +10910,15 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                         searchDocuments();
                     }
                 }}
-                title={t('aiSidebar.actions.search')}
+                aria-label={t('aiSidebar.actions.search')}
             >
                 <svg class="b3-button__icon"><use xlink:href="#iconSearch"></use></svg>
             </button>
             <div class="ai-sidebar__prompt-actions">
                 <button
-                    class="b3-button b3-button--text"
+                    class="b3-button b3-button--text b3-tooltips b3-tooltips__n"
                     on:click={() => (isPromptSelectorOpen = !isPromptSelectorOpen)}
-                    title={t('aiSidebar.prompt.title')}
+                    aria-label={t('aiSidebar.prompt.title')}
                 >
                     <svg class="b3-button__icon"><use xlink:href="#iconQuote"></use></svg>
                 </button>
@@ -11700,9 +11776,6 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
         gap: 8px;
         flex-shrink: 1; /* 标题可以缩小 */
         min-width: 0; /* 允许标题缩小 */
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
     }
 
     .ai-sidebar__unsaved {

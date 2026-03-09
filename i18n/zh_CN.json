@@ -1,4 +1,8 @@
 {
+    "menu": {
+        "summarizeDoc": "AI 总结文章",
+        "summarizePrompt": "请总结这篇文章的主要内容"
+    },
     "settings": {
         "settingsPanel": "设置面板",
         "settingsGroup": {
@@ -205,6 +209,9 @@
             "clear": "清空对话",
             "settings": "打开设置",
             "upload": "上传文件",
+            "addCurrentDoc": "添加当前文档到上下文",
+            "summarizeContext": "AI 总结文档",
+            "addWebLink": "添加网页链接",
             "search": "搜索并添加文档",
             "send": "发送",
             "stop": "停止",
@@ -388,6 +395,7 @@
             "noModel": "请选择一个模型",
             "copyFailed": "复制失败",
             "addDocumentFailed": "添加文档失败",
+            "noActiveDocument": "没有打开的文档",
             "saveSessionFailed": "保存会话失败",
             "savePromptFailed": "保存提示词失败",
             "emptySession": "当前会话为空，无需保存",

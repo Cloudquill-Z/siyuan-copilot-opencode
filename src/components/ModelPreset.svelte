@@ -844,9 +844,9 @@
 <div class="model-settings-button">
     <button
         bind:this={buttonElement}
-        class="b3-button b3-button--text model-settings-button__trigger"
+        class="b3-button b3-button--text model-settings-button__trigger b3-tooltips b3-tooltips__n"
         on:click|stopPropagation={toggleDropdown}
-        title={currentPresetName || t('aiSidebar.modelSettings.title')}
+        aria-label={currentPresetName || t('aiSidebar.modelSettings.title')}
     >
         <svg class="b3-button__icon"><use xlink:href="#iconModelSetting"></use></svg>
         {#if currentPresetName}

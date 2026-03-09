@@ -1,3 +1,8 @@
+## v1.6.14 / 20260303
+- ✨ 新增"添加当前文档到上下文"按钮，一键将当前打开的文档添加为AI上下文
+- ✨ 新增文档树右键菜单"AI 总结文章"功能，右键文档即可自动总结
+- 🎨 所有按钮添加悬浮提示（使用思源原生 b3-tooltips），涵盖顶部工具栏、消息操作栏、底部按钮栏和模型预设按钮
+
 ## v1.6.13 / 20260228
 - 🐛 Fix Nano Banana image generation compatibility issues，感谢[altairwei](https://github.com/Achuan-2/siyuan-plugin-copilot/pull/112)贡献
 

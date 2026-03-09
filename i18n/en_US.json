@@ -1,4 +1,8 @@
 {
+    "menu": {
+        "summarizeDoc": "AI Summarize",
+        "summarizePrompt": "Please summarize the main content of this article"
+    },
     "settings": {
         "settingsPanel": "Settings Panel",
         "settingsGroup": {
@@ -206,6 +210,9 @@
             "clear": "Clear Chat",
             "settings": "Open Settings",
             "upload": "Upload File",
+            "addCurrentDoc": "Add Current Document to Context",
+            "summarizeContext": "AI Summarize Document",
+            "addWebLink": "Add Web Link",
             "search": "Search and Add Document",
             "send": "Send",
             "stop": "Stop",
@@ -389,6 +396,7 @@
             "noModel": "Please select a model",
             "copyFailed": "Copy failed",
             "addDocumentFailed": "Failed to add document",
+            "noActiveDocument": "No active document",
             "saveSessionFailed": "Failed to save session",
             "savePromptFailed": "Failed to save prompt",
             "emptySession": "Current session is empty, no need to save",
