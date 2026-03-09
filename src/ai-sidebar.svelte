@@ -6338,21 +6338,31 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
             pushErrMsg(t('aiSidebar.errors.noActiveDocument'));
             return;
         }
-        const blocks = await sql(`SELECT * FROM blocks WHERE id = '${blockId}' OR root_id = '${blockId}'`);
+        const blocks = await sql(
+            `SELECT * FROM blocks WHERE id = '${blockId}' OR root_id = '${blockId}'`
+        );
         const docBlock = blocks?.find(b => b.type === 'd');
         if (!docBlock) {
             const rootId = blocks?.[0]?.root_id;
             if (rootId) {
-                const rootBlocks = await sql(`SELECT * FROM blocks WHERE id = '${rootId}' AND type = 'd'`);
+                const rootBlocks = await sql(
+                    `SELECT * FROM blocks WHERE id = '${rootId}' AND type = 'd'`
+                );
                 if (rootBlocks?.[0]) {
-                    await addDocumentToContext(rootBlocks[0].id, rootBlocks[0].content || rootBlocks[0].fcontent || rootBlocks[0].id);
+                    await addDocumentToContext(
+                        rootBlocks[0].id,
+                        rootBlocks[0].content || rootBlocks[0].fcontent || rootBlocks[0].id
+                    );
                     return;
                 }
             }
             pushErrMsg(t('aiSidebar.errors.noActiveDocument'));
             return;
         }
-        await addDocumentToContext(docBlock.id, docBlock.content || docBlock.fcontent || docBlock.id);
+        await addDocumentToContext(
+            docBlock.id,
+            docBlock.content || docBlock.fcontent || docBlock.id
+        );
     }
 
     // 基于已有上下文文档直接发送总结请求
@@ -10905,13 +10915,13 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                 <svg class="b3-button__icon"><use xlink:href="#iconFile"></use></svg>
             </button>
             {#if contextDocuments.length > 0}
-            <button
-                class="b3-button b3-button--text b3-tooltips b3-tooltips__n"
-                on:click={summarizeContextDoc}
-                aria-label={t('aiSidebar.actions.summarizeContext')}
-            >
-                <svg class="b3-button__icon"><use xlink:href="#iconCopilot"></use></svg>
-            </button>
+                <button
+                    class="b3-button b3-button--text b3-tooltips b3-tooltips__n"
+                    on:click={summarizeContextDoc}
+                    aria-label={t('aiSidebar.actions.summarizeContext')}
+                >
+                    <svg class="b3-button__icon"><use xlink:href="#iconCopilot"></use></svg>
+                </button>
             {/if}
             <button
                 class="b3-button b3-button--text ai-sidebar__search-btn b3-tooltips b3-tooltips__n"
