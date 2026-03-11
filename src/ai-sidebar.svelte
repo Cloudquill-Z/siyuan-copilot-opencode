@@ -3549,7 +3549,6 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
 
         const isDeepseekThinkingAgent =
             chatMode === 'agent' &&
-            currentProvider === 'deepseek' &&
             modelConfig.capabilities?.thinking &&
             (modelConfig.thinkingEnabled || false);
 
@@ -3587,8 +3586,17 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                     baseMsg.name = msg.name;
                 }
 
-                if (isDeepseekThinkingAgent && msg.reasoning_content) {
+                // 只有在启用 thinking 模式时才保留 reasoning_content
+                // Kimi 等模型在未启用 thinking 时看到 reasoning_content 会报错
+                if (isDeepseekThinkingAgent && msg.reasoning_content !== undefined) {
                     baseMsg.reasoning_content = msg.reasoning_content;
+                }
+
+                // 只有在启用 thinking 模式且有 tool_calls 时，才确保 reasoning_content 字段存在
+                if (isDeepseekThinkingAgent && msg.tool_calls && msg.tool_calls.length > 0) {
+                    if (baseMsg.reasoning_content === undefined) {
+                        baseMsg.reasoning_content = '';
+                    }
                 }
 
                 // 只处理历史用户消息的上下文（不是最后一条消息）
@@ -4209,10 +4217,15 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                                         tool_calls: toolCalls,
                                     };
 
-                                    if (isDeepseekThinkingAgent && streamingThinking) {
-                                        assistantMessage.reasoning_content = streamingThinking;
-                                        assistantMessage.thinking = streamingThinking;
+                                    // 只有在启用 thinking 模式时才添加 reasoning_content
+                                    // Kimi 等模型在未启用 thinking 时看到 reasoning_content 会报错
+                                    if (isDeepseekThinkingAgent) {
+                                        assistantMessage.reasoning_content = streamingThinking || '';
+                                        if (streamingThinking) {
+                                            assistantMessage.thinking = streamingThinking;
+                                        }
                                     }
+
                                     messages = [...messages, assistantMessage];
                                     firstToolCallMessageIndex = messages.length - 1;
                                 } else {
@@ -4223,10 +4236,14 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                                         ...toolCalls,
                                     ];
 
-                                    if (isDeepseekThinkingAgent && streamingThinking) {
-                                        existingMessage.reasoning_content = streamingThinking;
-                                        existingMessage.thinking = streamingThinking;
+                                    // 只有在启用 thinking 模式时才更新 reasoning_content
+                                    if (isDeepseekThinkingAgent) {
+                                        existingMessage.reasoning_content = streamingThinking || '';
+                                        if (streamingThinking) {
+                                            existingMessage.thinking = streamingThinking;
+                                        }
                                     }
+
                                     messages = [...messages];
                                 }
                                 streamingMessage = '';
@@ -4328,8 +4345,17 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                                         baseMsg.name = msg.name;
                                     }
 
-                                    if (isDeepseekThinkingAgent && msg.reasoning_content) {
+                                    // 只有在启用 thinking 模式时才保留 reasoning_content
+                                    // Kimi 等模型在未启用 thinking 时看到 reasoning_content 会报错
+                                    if (isDeepseekThinkingAgent && msg.reasoning_content !== undefined) {
                                         baseMsg.reasoning_content = msg.reasoning_content;
+                                    }
+
+                                    // 只有在启用 thinking 模式且有 tool_calls 时，才确保 reasoning_content 字段存在
+                                    if (isDeepseekThinkingAgent && msg.tool_calls && msg.tool_calls.length > 0) {
+                                        if (baseMsg.reasoning_content === undefined) {
+                                            baseMsg.reasoning_content = '';
+                                        }
                                     }
 
                                     return baseMsg;
@@ -4369,8 +4395,9 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                                         // 将AI的最终回复存储到 finalReply 字段
                                         existingMessage.finalReply = processedContent;
 
-                                        if (isDeepseekThinkingAgent && streamingThinking) {
-                                            existingMessage.reasoning_content = streamingThinking;
+                                        // 只有在启用 thinking 模式时才更新 reasoning_content
+                                        if (isDeepseekThinkingAgent) {
+                                            existingMessage.reasoning_content = streamingThinking || '';
                                         }
 
                                         // 添加思考内容（如果有）

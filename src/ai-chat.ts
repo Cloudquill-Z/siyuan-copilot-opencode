@@ -214,6 +214,8 @@ export function isGemini3Model(modelId: string): boolean {
     return baseModelId.includes('gemini-3');
 }
 
+
+
 /**
  * 计算 Claude 模型的思考预算 token 数
  */
@@ -501,8 +503,17 @@ async function chatOpenAIFormat(
         }
 
         // 深度思考模式下需要回传的思维链内容（如 DeepSeek reasoning_content）
-        if ((msg as any).reasoning_content) {
+        // 注意：只有在启用 thinking 模式时才传递 reasoning_content
+        if (options.enableThinking && (msg as any).reasoning_content !== undefined) {
             formatted.reasoning_content = (msg as any).reasoning_content;
+        }
+
+        // 只有在启用 thinking 模式且有 tool_calls 时，才确保 reasoning_content 字段存在
+        // Kimi K2.5 等模型在启用 thinking 且有 tool_calls 时要求必须提供 reasoning_content
+        if (options.enableThinking && msg.tool_calls && msg.tool_calls.length > 0) {
+            if (formatted.reasoning_content === undefined) {
+                formatted.reasoning_content = '';
+            }
         }
 
         // 添加工具调用信息
@@ -534,6 +545,14 @@ async function chatOpenAIFormat(
         requestBody.tool_choice = 'auto'; // 让模型自动决定是否调用工具
     }
 
+    // 检测是否是 Kimi K2.5 模型（通过模型ID判断）
+    const isKimiK25 = /kimi-k2\.5/i.test(options.model);
+
+    // Kimi K2.5 特殊处理：官方不允许设置 temperature
+    if (isKimiK25) {
+        delete requestBody.temperature;
+    }
+
     // 处理思考模式：界面控制优先
     // 如果界面未启用思考模式，删除自定义参数中可能存在的思考模式设置
     if (!options.enableThinking) {
@@ -543,6 +562,12 @@ async function chatOpenAIFormat(
         delete requestBody.enable_thinking;
         if (requestBody.extra_body?.google?.thinking_config) {
             delete requestBody.extra_body.google.thinking_config;
+        }
+
+        // Kimi K2.5 特殊处理：未启用 thinking 时需要显式设置为 disabled
+        // 否则默认为 enabled，会导致 API 报错
+        if (isKimiK25) {
+            requestBody.thinking = { type: 'disabled' };
         }
     } else {
         // 如果启用思考模式，添加相关参数
@@ -562,6 +587,10 @@ async function chatOpenAIFormat(
                 type: 'enabled',
                 budget_tokens: budgetTokens
             };
+        }
+        // Kimi K2.5 启用 thinking 时需要设置 thinking: {type: "enabled"}
+        else if (isKimiK25) {
+            requestBody.thinking = { type: 'enabled' };
         }
         // 检查是否是通过 OpenAI 兼容 API 调用的 Gemini 模型
         else if (isSupportedThinkingGeminiModel(options.model)) {
