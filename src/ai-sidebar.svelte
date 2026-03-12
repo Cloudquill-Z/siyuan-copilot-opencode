@@ -37,7 +37,11 @@
         removeFile,
     } from './api';
     import { saveAsset, loadAsset, base64ToBlob, readAssetAsText } from './utils/assets';
-    import { parseMultipleWebPages, fetchWithWebView, parseWebPageToMarkdown } from './utils/webParser';
+    import {
+        parseMultipleWebPages,
+        fetchWithWebView,
+        parseWebPageToMarkdown,
+    } from './utils/webParser';
     import MultiModelSelector from './components/MultiModelSelector.svelte';
     import SessionManager from './components/SessionManager.svelte';
     import ToolSelector, { type ToolConfig } from './components/ToolSelector.svelte';
@@ -1243,6 +1247,7 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
     // Agent 模式
     let isToolSelectorOpen = false;
     let selectedTools: ToolConfig[] = []; // 选中的工具配置列表
+    let toolAutoApproveSettings: Record<string, boolean> = {}; // 所有工具的 autoApprove 配置（包括未选中的）
     // 用户选择的工具数量（排除系统工具 get_siyuan_skills）
     $: userToolCount = (selectedTools || []).filter(t => t.name !== 'get_siyuan_skills').length;
     let toolCallsInProgress: Set<string> = new Set(); // 正在执行的工具调用ID
@@ -1251,7 +1256,7 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
     let pendingToolCall: ToolCall | null = null; // 待批准的工具调用
     let isToolApprovalDialogOpen = false; // 工具批准对话框是否打开
     let isToolConfigLoaded = false; // 标记工具配置是否已加载
-    let lastSavedToolsConfigSnapshot = '[]'; // 最近一次已加载/已保存的工具配置快照
+    let lastSavedToolsConfigSnapshot = JSON.stringify({ selectedTools: [], toolAutoApproveSettings: {} }); // 最近一次已加载/已保存的工具配置快照
 
     // 多模型对话
     let enableMultiModel = false; // 是否启用多模型模式
@@ -1803,10 +1808,10 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                 } else {
                     // 解析失败，尝试使用 WebView 模式
                     pushMsg(`普通模式失败，尝试 WebView 模式: ${result.url}`);
-                    
+
                     try {
                         const webviewResult = await fetchWithWebView(result.url);
-                        
+
                         if (webviewResult.success && webviewResult.markdown) {
                             // 从 URL 中提取文件名
                             const urlObj = new URL(result.url);
@@ -2950,7 +2955,12 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
 
                     const contextText = msg.contextDocuments
                         .map(doc => {
-                            const label = doc.type === 'doc' ? '文档' : doc.type === 'webpage' ? '网页' : '块';
+                            const label =
+                                doc.type === 'doc'
+                                    ? '文档'
+                                    : doc.type === 'webpage'
+                                      ? '网页'
+                                      : '块';
 
                             // agent模式：文档块只传递ID，不传递内容
                             if (chatMode === 'agent' && doc.type === 'doc') {
@@ -3115,7 +3125,12 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                     if (contextDocumentsWithLatestContent.length > 0) {
                         const contextText = contextDocumentsWithLatestContent
                             .map(doc => {
-                                const label = doc.type === 'doc' ? '文档' : doc.type === 'webpage' ? '网页' : '块';
+                                const label =
+                                    doc.type === 'doc'
+                                        ? '文档'
+                                        : doc.type === 'webpage'
+                                          ? '网页'
+                                          : '块';
 
                                 // agent模式：文档块只传递ID，不传递内容
                                 if (chatMode === 'agent' && doc.type === 'doc') {
@@ -3186,7 +3201,12 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                     if (contextDocumentsWithLatestContent.length > 0) {
                         const contextText = contextDocumentsWithLatestContent
                             .map(doc => {
-                                const label = doc.type === 'doc' ? '文档' : doc.type === 'webpage' ? '网页' : '块';
+                                const label =
+                                    doc.type === 'doc'
+                                        ? '文档'
+                                        : doc.type === 'webpage'
+                                          ? '网页'
+                                          : '块';
 
                                 // agent模式：文档块只传递ID，不传递内容
                                 if (chatMode === 'agent' && doc.type === 'doc') {
@@ -3662,7 +3682,12 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                     // 构建上下文文本（agent模式下，文档块只传递ID）
                     const contextText = msg.contextDocuments
                         .map(doc => {
-                            const label = doc.type === 'doc' ? '文档' : doc.type === 'webpage' ? '网页' : '块';
+                            const label =
+                                doc.type === 'doc'
+                                    ? '文档'
+                                    : doc.type === 'webpage'
+                                      ? '网页'
+                                      : '块';
 
                             // agent模式：文档块只传递ID，不传递内容
                             if (chatMode === 'agent' && doc.type === 'doc') {
@@ -3819,7 +3844,12 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                     if (contextDocumentsWithLatestContent.length > 0) {
                         const contextText = contextDocumentsWithLatestContent
                             .map(doc => {
-                                const label = doc.type === 'doc' ? '文档' : doc.type === 'webpage' ? '网页' : '块';
+                                const label =
+                                    doc.type === 'doc'
+                                        ? '文档'
+                                        : doc.type === 'webpage'
+                                          ? '网页'
+                                          : '块';
 
                                 // agent模式：文档块只传递ID，不传递内容
                                 if (chatMode === 'agent' && doc.type === 'doc') {
@@ -3894,7 +3924,12 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                     if (contextDocumentsWithLatestContent.length > 0) {
                         const contextText = contextDocumentsWithLatestContent
                             .map(doc => {
-                                const label = doc.type === 'doc' ? '文档' : doc.type === 'webpage' ? '网页' : '块';
+                                const label =
+                                    doc.type === 'doc'
+                                        ? '文档'
+                                        : doc.type === 'webpage'
+                                          ? '网页'
+                                          : '块';
 
                                 // agent模式：文档块只传递ID，不传递内容
                                 if (chatMode === 'agent' && doc.type === 'doc') {
@@ -4433,10 +4468,19 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
 
                                         // 对于用户消息，如果有上下文文档，需要重新注入上下文内容
                                         // 因为 msg.content 只存储了原始输入，不包含上下文
-                                        if (msg.role === 'user' && msg.contextDocuments && msg.contextDocuments.length > 0) {
+                                        if (
+                                            msg.role === 'user' &&
+                                            msg.contextDocuments &&
+                                            msg.contextDocuments.length > 0
+                                        ) {
                                             const contextText = msg.contextDocuments
                                                 .map(doc => {
-                                                    const label = doc.type === 'doc' ? '文档' : doc.type === 'webpage' ? '网页' : '块';
+                                                    const label =
+                                                        doc.type === 'doc'
+                                                            ? '文档'
+                                                            : doc.type === 'webpage'
+                                                              ? '网页'
+                                                              : '块';
                                                     if (doc.type === 'doc') {
                                                         return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\``;
                                                     } else {
@@ -6824,13 +6868,13 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
         } else if (event.dataTransfer.types.includes(Constants.SIYUAN_DROP_TAB)) {
             const data = event.dataTransfer.getData(Constants.SIYUAN_DROP_TAB);
             const payload = JSON.parse(data);
-            
+
             // 检查是否是 webview 网页标签页
             // payload 中没有 type 字段，需要通过 customModelType 判断
             const customModelType = payload?.children?.customModelType;
             const tabTitle = payload?.title;
             const webviewUrl = payload?.children?.customModelData?.app?.url;
-            
+
             // 判断是否是 webview 网页标签页：customModelType 包含 copilot-webapp
             const isWebViewTab = customModelType && customModelType.includes(WEBAPP_TAB_TYPE);
             console.log(isWebViewTab, webviewUrl);
@@ -6838,21 +6882,21 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
             if (isWebViewTab && webviewUrl) {
                 // 是 webview 网页，直接使用 WebView 模式获取内容（因为已经是 webview 打开的）
                 pushMsg(`正在获取网页内容: ${tabTitle || webviewUrl}`);
-                
+
                 try {
                     const webviewResult = await fetchWithWebView(webviewUrl);
-                    
+
                     if (webviewResult.success && webviewResult.markdown) {
                         // 从 URL 中提取文件名
                         const urlObj = new URL(webviewUrl);
                         const fileName = `${urlObj.hostname.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.md`;
-                        
+
                         // 保存为 SiYuan 资源
                         const assetPath = await saveAsset(
                             new Blob([webviewResult.markdown], { type: 'text/markdown' }),
                             fileName
                         );
-                        
+
                         // 添加到附件列表，标记为网页类型（与添加网页链接弹窗一致）
                         currentAttachments = [
                             ...currentAttachments,
@@ -6866,14 +6910,16 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                                 url: webviewUrl, // 保存原始URL
                             },
                         ];
-                        
+
                         pushMsg(`✓ 成功添加网页: ${webviewResult.title || tabTitle || webviewUrl}`);
                     } else {
                         pushErrMsg(`✗ 获取失败: ${webviewUrl} - ${webviewResult.error}`);
                     }
                 } catch (error) {
                     console.error('获取网页内容失败:', error);
-                    pushErrMsg(`✗ 获取网页失败: ${error instanceof Error ? error.message : String(error)}`);
+                    pushErrMsg(
+                        `✗ 获取网页失败: ${error instanceof Error ? error.message : String(error)}`
+                    );
                 }
             } else {
                 // 普通文档标签页
@@ -6882,7 +6928,7 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                     await addItemByBlockId(rootId, false);
                 }
             }
-            
+
             const tab = document.querySelector(
                 `li[data-type="tab-header"][data-id="${payload.id}"]`
             ) as HTMLElement;
@@ -8120,12 +8166,19 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
             } else {
                 selectedTools = [];
             }
+            // 加载所有工具的 autoApprove 配置（包括未选中的工具）
+            if (data?.toolAutoApproveSettings && typeof data.toolAutoApproveSettings === 'object') {
+                toolAutoApproveSettings = data.toolAutoApproveSettings;
+            } else {
+                toolAutoApproveSettings = {};
+            }
             // 初始化快照，避免初次加载触发自动保存
-            lastSavedToolsConfigSnapshot = JSON.stringify(selectedTools || []);
+            lastSavedToolsConfigSnapshot = JSON.stringify({ selectedTools: selectedTools || [], toolAutoApproveSettings: toolAutoApproveSettings || {} });
         } catch (error) {
             console.error('[ToolConfig] Load error:', error);
             selectedTools = [];
-            lastSavedToolsConfigSnapshot = JSON.stringify(selectedTools);
+            toolAutoApproveSettings = {};
+            lastSavedToolsConfigSnapshot = JSON.stringify({ selectedTools: [], toolAutoApproveSettings: {} });
         } finally {
             // 标记配置已加载完成，此后才允许自动保存
             isToolConfigLoaded = true;
@@ -8138,14 +8191,18 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
             return;
         }
 
-        const currentSnapshot = JSON.stringify(selectedTools || []);
+        const currentConfig = { 
+            selectedTools: selectedTools || [], 
+            toolAutoApproveSettings: toolAutoApproveSettings || {} 
+        };
+        const currentSnapshot = JSON.stringify(currentConfig);
         // 配置未变化时不落盘，避免安装后自动生成配置文件
         if (currentSnapshot === lastSavedToolsConfigSnapshot) {
             return;
         }
 
         try {
-            await plugin.saveData('agent-tools-config.json', { selectedTools });
+            await plugin.saveData('agent-tools-config.json', currentConfig);
             lastSavedToolsConfigSnapshot = currentSnapshot;
         } catch (error) {
             console.error('[ToolConfig] Save error:', error);
@@ -8156,6 +8213,17 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
     $: {
         // 只在配置加载完成后，且确实有变化时才保存
         if (isToolConfigLoaded && selectedTools) {
+            // 使用 tick 确保在下一个事件循环保存，避免频繁保存
+            tick().then(() => {
+                saveToolsConfig();
+            });
+        }
+    }
+
+    // 监听 autoApprove 设置变化，自动保存
+    $: {
+        // 只在配置加载完成后，且确实有变化时才保存
+        if (isToolConfigLoaded && toolAutoApproveSettings) {
             // 使用 tick 确保在下一个事件循环保存，避免频繁保存
             tick().then(() => {
                 saveToolsConfig();
@@ -8856,7 +8924,12 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                     // 构建上下文文本
                     const contextText = msg.contextDocuments
                         .map(doc => {
-                            const label = doc.type === 'doc' ? '文档' : doc.type === 'webpage' ? '网页' : '块';
+                            const label =
+                                doc.type === 'doc'
+                                    ? '文档'
+                                    : doc.type === 'webpage'
+                                      ? '网页'
+                                      : '块';
                             return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\`\n\n\`\`\`markdown\n${doc.content}\n\`\`\``;
                         })
                         .join('\n\n---\n\n');
@@ -9026,7 +9099,12 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                     if (contextDocumentsWithLatestContent.length > 0) {
                         const contextText = contextDocumentsWithLatestContent
                             .map(doc => {
-                                const label = doc.type === 'doc' ? '文档' : doc.type === 'webpage' ? '网页' : '块';
+                                const label =
+                                    doc.type === 'doc'
+                                        ? '文档'
+                                        : doc.type === 'webpage'
+                                          ? '网页'
+                                          : '块';
                                 return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\`\n\n\`\`\`markdown\n${doc.content}\n\`\`\``;
                             })
                             .join('\n\n---\n\n');
@@ -9092,7 +9170,12 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                     if (contextDocumentsWithLatestContent.length > 0) {
                         const contextText = contextDocumentsWithLatestContent
                             .map(doc => {
-                                const label = doc.type === 'doc' ? '文档' : doc.type === 'webpage' ? '网页' : '块';
+                                const label =
+                                    doc.type === 'doc'
+                                        ? '文档'
+                                        : doc.type === 'webpage'
+                                          ? '网页'
+                                          : '块';
                                 return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\`\n\n\`\`\`markdown\n${doc.content}\n\`\`\``;
                             })
                             .join('\n\n---\n\n');
@@ -11736,7 +11819,11 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
 
     <!-- 工具选择器对话框 -->
     {#if isToolSelectorOpen}
-        <ToolSelector bind:selectedTools on:close={() => (isToolSelectorOpen = false)} />
+        <ToolSelector 
+            bind:selectedTools 
+            bind:toolAutoApproveSettings 
+            on:close={() => (isToolSelectorOpen = false)} 
+        />
     {/if}
 
     <!-- 保存到笔记对话框 -->

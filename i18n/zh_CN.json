@@ -615,6 +615,12 @@
         "siyuan_get_doc_tree": {
             "name": "获取文档树"
         },
+        "siyuan_fetch_sync_post": {
+            "name": "思源笔记任意API调用"
+        },
+        "siyuan_delete_block": {
+            "name": "删除块"
+        },
         "calling": "正在调用工具",
         "called": "工具已调用",
         "result": "工具结果",

@@ -11,22 +11,24 @@
     import { t } from '../utils/i18n';
 
     export let selectedTools: ToolConfig[] = [];
+    export let toolAutoApproveSettings: Record<string, boolean> = {}; // 所有工具的 autoApprove 配置
 
     const dispatch = createEventDispatcher();
 
     // 使用本地状态管理选中工具，避免双向绑定的问题
     let localSelectedTools: ToolConfig[] = [...selectedTools];
 
-    // 持久化保存每个工具的自动批准配置（无论是否选中）
+    // 本地缓存的 autoApprove 配置（从外部 settings 初始化）
     let toolAutoApproveMap: Map<string, boolean> = new Map();
 
     // 当外部 selectedTools 改变时，同步到本地状态
     $: if (selectedTools) {
         localSelectedTools = [...selectedTools];
-        // 同步 autoApprove 配置到持久化存储
-        selectedTools.forEach(t => {
-            toolAutoApproveMap.set(t.name, t.autoApprove);
-        });
+    }
+
+    // 当外部 toolAutoApproveSettings 改变时，同步到本地 Map
+    $: if (toolAutoApproveSettings) {
+        toolAutoApproveMap = new Map(Object.entries(toolAutoApproveSettings));
     }
 
     function close() {
@@ -43,12 +45,14 @@
                 'siyuan_set_block_attrs',
                 'siyuan_insert_block',
                 'siyuan_update_block',
+                'siyuan_delete_block',
                 'siyuan_create_document',
                 'siyuan_get_doc_tree',
                 'siyuan_list_notebooks',
                 'siyuan_create_notebook',
                 'siyuan_rename_document',
                 'siyuan_move_documents',
+                'siyuan_fetch_sync_post',
             ],
         },
         other: {
@@ -88,23 +92,27 @@
         const currentValue = toolAutoApproveMap.get(toolName) ?? false;
         const newValue = !currentValue;
         
-        // 更新持久化配置
+        // 更新本地 Map
         toolAutoApproveMap.set(toolName, newValue);
+        
+        // 将 Map 转换为对象，通知父组件更新
+        const newSettings: Record<string, boolean> = {};
+        toolAutoApproveMap.forEach((value, key) => {
+            newSettings[key] = value;
+        });
+        toolAutoApproveSettings = newSettings;
+        dispatch('autoApproveChange', { toolName, value: newValue, settings: newSettings });
         
         if (index >= 0) {
             // 工具已选中,更新其自动批准状态
-            // 创建新数组以触发响应式更新
             localSelectedTools = localSelectedTools.map((tool, i) =>
                 i === index ? { ...tool, autoApprove: newValue } : tool
             );
-        } else {
-            // 工具未选中,添加工具并设置自动批准
-            localSelectedTools = [...localSelectedTools, { name: toolName, autoApprove: newValue }];
+            // 同步到导出 prop
+            selectedTools = [...localSelectedTools];
+            // 通知父组件更新
+            dispatch('update', localSelectedTools);
         }
-        // 同步到导出 prop 以支持 bind:selectedTools
-        selectedTools = [...localSelectedTools];
-        // 通知父组件更新
-        dispatch('update', localSelectedTools);
     }
 
     // 用户可选择的工具列表（排除系统工具 get_siyuan_skills）

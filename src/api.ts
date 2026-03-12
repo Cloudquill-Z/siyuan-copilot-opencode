@@ -3,15 +3,15 @@
  * API 文档见 [API_zh_CN.md](https://github.com/siyuan-note/siyuan/blob/master/API_zh_CN.md)
  */
 
-import { fetchPost, fetchSyncPost, IWebSocketData, openTab, Constants } from "siyuan";
+import { fetchPost, fetchSyncPost, IWebSocketData, openTab, Constants, platformUtils } from "siyuan";
 import { getFrontend, openMobileFileById } from 'siyuan';
 
-
-export async function request(url: string, data: any) {
+export async function request(url: string, data: any, returnType: 'data' | 'response' = 'data') {
     let response: IWebSocketData = await fetchSyncPost(url, data);
     let res = response.code === 0 ? response.data : null;
-    return res;
+    return returnType === 'data' ? res : response;
 }
+
 
 // **************************************** Riff (闪卡) ****************************************
 
@@ -885,4 +885,39 @@ export async function version(): Promise<string> {
 
 export async function currentTime(): Promise<number> {
     return request('/api/system/currentTime', {});
+}
+
+
+export async function sendNotification(
+    title: string,
+    body: string,
+    // 支持三种形式：数字（秒），Date 对象，或可被 Date.parse 解析的时间字符串（ISO 等）
+    whenOrDelay: number | string | Date = 0,
+    timeoutType: 'default' | 'never' = 'default'
+) {
+    let delayInSeconds = 0;
+
+    if (typeof whenOrDelay === 'number') {
+        delayInSeconds = Math.max(0, Math.floor(whenOrDelay));
+    } else if (whenOrDelay instanceof Date) {
+        const diffMs = whenOrDelay.getTime() - Date.now();
+        delayInSeconds = Math.max(0, Math.ceil(diffMs / 1000));
+    } else if (typeof whenOrDelay === 'string') {
+        const t = Date.parse(whenOrDelay);
+        if (isNaN(t)) {
+            console.warn('sendNotification: invalid time string, sending immediately');
+            delayInSeconds = 0;
+        } else {
+            const diffMs = t - Date.now();
+            delayInSeconds = Math.max(0, Math.ceil(diffMs / 1000));
+        }
+    }
+
+    return platformUtils.sendNotification({
+        channel: "Siyuan Copilot",
+        title: title,
+        body: body,
+        delayInSeconds: delayInSeconds,
+        timeoutType: timeoutType,
+    });
 }
