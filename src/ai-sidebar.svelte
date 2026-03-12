@@ -2802,6 +2802,10 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                             if (isAborted) {
                                 return;
                             }
+                            // 如果用户已经选择答案，不再更新消息
+                            if (!isWaitingForAnswerSelection) {
+                                return;
+                            }
                             if (multiModelResponses[index]) {
                                 const convertedText = convertLatexToMarkdown(text);
                                 // 处理content中的base64图片，保存为assets文件
@@ -2845,6 +2849,10 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                         onError: (error: Error) => {
                             // 如果是主动中断，不显示错误
                             if (error.message !== 'Request aborted' && multiModelResponses[index]) {
+                                // 如果用户已经选择答案，不再更新消息
+                                if (!isWaitingForAnswerSelection) {
+                                    return;
+                                }
                                 multiModelResponses[index].error = error.message;
                                 multiModelResponses[index].isLoading = false;
                                 multiModelResponses = [...multiModelResponses];
@@ -2877,6 +2885,10 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
             } catch (error) {
                 // 如果是主动中断，不显示错误
                 if ((error as Error).message !== 'Request aborted' && multiModelResponses[index]) {
+                    // 如果用户已经选择答案，不再更新消息
+                    if (!isWaitingForAnswerSelection) {
+                        return;
+                    }
                     multiModelResponses[index].error = (error as Error).message;
                     multiModelResponses[index].isLoading = false;
                     multiModelResponses = [...multiModelResponses];
@@ -7118,6 +7130,10 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
         return t('aiSidebar.session.new');
     }
 
+    // 保存会话的锁，防止并发保存导致竞态条件
+    let isSavingSession = false;
+    let pendingSaveSilent: boolean | null = null;
+
     async function saveCurrentSession(silent: boolean = false) {
         if (messages.filter(m => m.role !== 'system').length === 0) {
             if (!silent) {
@@ -7126,10 +7142,19 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
             return;
         }
 
-        const now = Date.now();
+        // 如果正在保存，标记待处理的保存请求
+        if (isSavingSession) {
+            pendingSaveSilent = silent;
+            return;
+        }
 
-        // 【修复】在保存前重新加载最新的会话列表，避免多页签覆盖问题
-        await loadSessions();
+        isSavingSession = true;
+
+        try {
+            const now = Date.now();
+
+            // 【修复】在保存前重新加载最新的会话列表，避免多页签覆盖问题
+            await loadSessions();
 
         if (currentSessionId) {
             // 更新现有会话
@@ -7230,6 +7255,15 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
 
         if (!silent) {
             pushMsg(t('aiSidebar.success.saveSessionSuccess'));
+        }
+        } finally {
+            isSavingSession = false;
+            // 如果有待处理的保存请求，执行它
+            if (pendingSaveSilent !== null) {
+                const silentToUse = pendingSaveSilent;
+                pendingSaveSilent = null;
+                await saveCurrentSession(silentToUse);
+            }
         }
     }
 
