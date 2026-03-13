@@ -75,7 +75,9 @@ export const getDefaultSettings = () => ({
             customApiUrl: '',
             models: []
         },
-        customProviders: [] as CustomProviderConfig[]
+        customProviders: [] as CustomProviderConfig[],
+        disabledBuiltInProviders: [] as string[],
+        providerOrder: [] as string[]
     } as Record<string, any>,
     selectedProviderId: 'openai' as string,  // 设置面板中选中的平台
     currentProvider: 'openai' as string,      // 对话中当前使用的平台

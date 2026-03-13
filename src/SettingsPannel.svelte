@@ -63,6 +63,67 @@
     let showAddPlatform = false;
     let newPlatformName = '';
 
+    // 拖拽排序相关状态
+    let dragOverIndex: number | null = null;
+    let dragSourceIndex: number | null = null;
+    let dragSourceId: string | null = null;
+
+    // 处理拖拽开始
+    function handleDragStart(e: DragEvent, index: number, providerId: string) {
+        dragSourceIndex = index;
+        dragSourceId = providerId;
+        e.dataTransfer?.setData('text/plain', providerId);
+        e.dataTransfer!.effectAllowed = 'move';
+    }
+
+    // 处理拖拽进入
+    function handleDragEnter(index: number) {
+        if (index !== dragSourceIndex) {
+            dragOverIndex = index;
+        }
+    }
+
+    // 处理拖拽结束
+    function handleDragEnd() {
+        dragOverIndex = null;
+        dragSourceIndex = null;
+        dragSourceId = null;
+    }
+
+    // 处理放置
+    function handleDrop(e: DragEvent, targetIndex: number) {
+        e.preventDefault();
+        dragOverIndex = null;
+        
+        if (dragSourceIndex === null || dragSourceIndex === targetIndex) {
+            return;
+        }
+
+        // 重新排序
+        const items = [...allProviderOptions];
+        const [removed] = items.splice(dragSourceIndex, 1);
+        items.splice(targetIndex, 0, removed);
+
+        // 保存新顺序
+        const newOrder = items.map(p => p.id);
+        settings = {
+            ...settings,
+            aiProviders: {
+                ...settings.aiProviders,
+                providerOrder: newOrder,
+            },
+        };
+
+        saveSettings();
+        pushMsg(t('platform.reorderSuccess') || '平台顺序已更新');
+    }
+
+    // 处理拖拽悬停（防止默认行为）
+    function handleDragOver(e: DragEvent) {
+        e.preventDefault();
+        e.dataTransfer!.dropEffect = 'move';
+    }
+
     function handleProviderChange() {
         saveSettings();
     }
@@ -209,7 +270,27 @@
             })
         );
 
-        return [...builtIn, ...custom];
+        const allProviders = [...builtIn, ...custom];
+        
+        // 根据保存的顺序排序
+        const savedOrder = settings.aiProviders?.providerOrder || [];
+        if (savedOrder.length > 0) {
+            // 创建ID到位置的映射
+            const orderMap = new Map(savedOrder.map((id, index) => [id, index]));
+            // 按顺序排序，未在顺序中的放到最后
+            allProviders.sort((a, b) => {
+                const orderA = orderMap.get(a.id);
+                const orderB = orderMap.get(b.id);
+                if (orderA !== undefined && orderB !== undefined) {
+                    return orderA - orderB;
+                }
+                if (orderA !== undefined) return -1;
+                if (orderB !== undefined) return 1;
+                return 0;
+            });
+        }
+        
+        return allProviders;
     })();
 
     // 获取当前选中平台的名称 - 使用响应式语句
@@ -505,6 +586,7 @@
                 Achuan: { apiKey: '', customApiUrl: '', models: [] },
                 customProviders: [],
                 disabledBuiltInProviders: [],
+                providerOrder: [],
             };
         }
 
@@ -533,6 +615,11 @@
         // 确保 disabledBuiltInProviders 数组存在
         if (!settings.aiProviders.disabledBuiltInProviders) {
             settings.aiProviders.disabledBuiltInProviders = [];
+        }
+
+        // 确保 providerOrder 数组存在
+        if (!settings.aiProviders.providerOrder) {
+            settings.aiProviders.providerOrder = [];
         }
 
         // 恢复选中的平台ID（仅用于设置面板显示）
@@ -712,11 +799,15 @@
                         {/if}
 
                         <div class="platform-list">
-                            {#each allProviderOptions as platform}
+                            {#each allProviderOptions as platform, index (platform.id)}
                                 <div
                                     class="platform-item"
                                     class:platform-item--selected={selectedProviderId ===
                                         platform.id}
+                                    class:platform-item--dragging={dragSourceIndex === index}
+                                    class:platform-item--drag-over-top={dragOverIndex === index && dragSourceIndex !== null && dragSourceIndex > index}
+                                    class:platform-item--drag-over-bottom={dragOverIndex === index && dragSourceIndex !== null && dragSourceIndex < index}
+                                    draggable="true"
                                     on:click={() => {
                                         selectedProviderId = platform.id;
                                         handleProviderSelect();
@@ -727,9 +818,20 @@
                                             handleProviderSelect();
                                         }
                                     }}
+                                    on:dragstart={e => handleDragStart(e, index, platform.id)}
+                                    on:dragenter={() => handleDragEnter(index)}
+                                    on:dragend={handleDragEnd}
+                                    on:dragover={handleDragOver}
+                                    on:drop={e => handleDrop(e, index)}
                                     role="button"
                                     tabindex="0"
+                                    title={t('platform.dragToReorder') || '拖动以排序'}
                                 >
+                                    <div class="platform-item__drag-handle">
+                                        <svg class="b3-button__icon">
+                                            <use xlink:href="#iconDrag"></use>
+                                        </svg>
+                                    </div>
                                     <div class="platform-item__info">
                                         <span class="platform-item__name">{platform.name}</span>
                                         <span class="platform-item__type">
@@ -1061,6 +1163,7 @@
         border: 1px solid var(--b3-border-color);
         cursor: pointer;
         transition: all 0.2s;
+        position: relative;
 
         &:hover {
             background: var(--b3-theme-surface);
@@ -1071,6 +1174,65 @@
             background: var(--b3-theme-primary-lightest);
             border-color: var(--b3-theme-primary);
         }
+
+        // 拖拽时的样式
+        &.platform-item--dragging {
+            opacity: 0.5;
+            background: var(--b3-theme-surface);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            transform: scale(1.02);
+        }
+
+        // 顶部放置指示器
+        &.platform-item--drag-over-top::before {
+            content: '';
+            position: absolute;
+            top: -4px;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--b3-theme-primary);
+            border-radius: 2px;
+            z-index: 1;
+        }
+
+        // 底部放置指示器
+        &.platform-item--drag-over-bottom::after {
+            content: '';
+            position: absolute;
+            bottom: -4px;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--b3-theme-primary);
+            border-radius: 2px;
+            z-index: 1;
+        }
+    }
+
+    .platform-item__drag-handle {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-right: 8px;
+        padding: 2px;
+        cursor: grab;
+        opacity: 0.4;
+        transition: opacity 0.2s;
+        flex-shrink: 0;
+
+        &:hover {
+            opacity: 0.8;
+        }
+
+        &:active {
+            cursor: grabbing;
+        }
+
+        svg {
+            width: 14px;
+            height: 14px;
+        }
     }
 
     .platform-item__info {
@@ -1078,6 +1240,7 @@
         flex-direction: column;
         gap: 2px;
         flex: 1;
+        min-width: 0;
     }
 
     .platform-item__name {

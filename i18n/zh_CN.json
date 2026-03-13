@@ -145,8 +145,8 @@
             "promptPlaceholder": "请根据以下用户消息生成一个简洁的会话标题（不超过20个字，不要使用引号）：\n\n{message}"
         },
         "openLinksInWebView": {
-            "title": "在 WebView 中打开链接",
-            "description": "点击思源笔记中的 https 链接时，在内置 WebView 标签页中打开，而不是外部浏览器"
+            "title": "在思源内部打开网页链接",
+            "description": "点击笔记中的网页链接时，在内置网页标签页中打开，而不是外部浏览器"
         },
         "soulDocId": {
             "title": "SOUL 文档 ID",

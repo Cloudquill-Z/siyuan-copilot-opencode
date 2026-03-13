@@ -86,6 +86,22 @@
             });
         }
 
+        // 根据 providerOrder 排序
+        const savedOrder = providers?.providerOrder || [];
+        if (savedOrder.length > 0) {
+            const orderMap = new Map(savedOrder.map((id, index) => [id, index]));
+            list.sort((a, b) => {
+                const orderA = orderMap.get(a.id);
+                const orderB = orderMap.get(b.id);
+                if (orderA !== undefined && orderB !== undefined) {
+                    return orderA - orderB;
+                }
+                if (orderA !== undefined) return -1;
+                if (orderB !== undefined) return 1;
+                return 0;
+            });
+        }
+
         return list;
     }
 
