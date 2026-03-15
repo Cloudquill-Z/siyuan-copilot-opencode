@@ -10,6 +10,7 @@ export interface ToolCall {
     function: {
         name: string;
         arguments: string;
+        thought_signature?: string; // Gemini 思维链签名，Agent 模式必须回传
     };
 }
 
@@ -725,44 +726,45 @@ async function chatGeminiFormat(
     const contents = await Promise.all(options.messages
         .filter(msg => msg.role !== 'system')
         .map(async msg => {
-            const role = msg.role === 'assistant' ? 'model' : 'user';
+            // 处理角色
+            let role = msg.role === 'assistant' ? 'model' : 'user';
+            if (msg.role === 'tool') {
+                role = 'tool'; // Gemini 原生支持 tool 角色
+            }
 
-            // 处理多模态内容
-            if (typeof msg.content === 'string') {
-                const parts: any[] = [{ text: msg.content }];
-
-                // 如果是assistant消息且有生成的图片，添加inline_data
-                if (msg.role === 'assistant' && msg.generatedImages && msg.generatedImages.length > 0) {
-                    msg.generatedImages.forEach(img => {
-                        parts.push({
-                            inline_data: {
-                                mime_type: img.mimeType,
-                                data: img.data
+            // 处理工具调用结果 (Gemini 格式: functionResponse)
+            if (msg.role === 'tool') {
+                return {
+                    role: 'tool',
+                    parts: [{
+                        functionResponse: {
+                            name: msg.name || '',
+                            response: {
+                                content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
                             }
-                        });
-                    });
+                        }
+                    }]
+                };
+            }
+
+            // 处理多模态内容或工具调用信息
+            const parts: any[] = [];
+            if (typeof msg.content === 'string') {
+                if (msg.content) {
+                    parts.push({ text: msg.content });
                 }
-
-                return { role, parts };
             } else {
-                // 转换为 Gemini 格式
-                const parts: any[] = [];
-
                 for (const part of msg.content) {
                     if (part.type === 'text' && part.text) {
                         parts.push({ text: part.text });
                     } else if (part.type === 'image_url' && part.image_url) {
-                        // Gemini 使用 inline_data 格式
                         let base64Data = '';
                         if (part.image_url.url.startsWith('data:')) {
                             base64Data = part.image_url.url.replace(/^data:image\/\w+;base64,/, '');
                         } else {
-                            // 尝试转换为 base64 (支持 blob URL)
                             base64Data = await imageUrlToBase64(part.image_url.url);
                         }
-                        const mimeType =
-                            part.image_url.url.match(/^data:(image\/\w+);base64,/)?.[1] ||
-                            'image/jpeg';
+                        const mimeType = part.image_url.url.match(/^data:(image\/\w+);base64,/)?.[1] || 'image/jpeg';
                         parts.push({
                             inline_data: {
                                 mime_type: mimeType,
@@ -771,21 +773,34 @@ async function chatGeminiFormat(
                         });
                     }
                 }
+            }
 
-                // 如果是assistant消息且有生成的图片，添加inline_data
-                if (msg.role === 'assistant' && msg.generatedImages && msg.generatedImages.length > 0) {
-                    msg.generatedImages.forEach(img => {
-                        parts.push({
-                            inline_data: {
-                                mime_type: img.mimeType,
-                                data: img.data
-                            }
-                        });
+            // 添加工具调用信息 (Gemini 格式: functionCall)
+            if (msg.tool_calls) {
+                for (const toolCall of msg.tool_calls) {
+                    parts.push({
+                        functionCall: {
+                            name: toolCall.function.name,
+                            args: JSON.parse(toolCall.function.arguments || '{}'),
+                            thought_signature: toolCall.function.thought_signature
+                        }
                     });
                 }
-
-                return { role, parts };
             }
+
+            // 如果是Assistant消息且有生成的图片，添加inline_data
+            if (msg.role === 'assistant' && msg.generatedImages && msg.generatedImages.length > 0) {
+                msg.generatedImages.forEach(img => {
+                    parts.push({
+                        inline_data: {
+                            mime_type: img.mimeType,
+                            data: img.data
+                        }
+                    });
+                });
+            }
+
+            return { role, parts };
         }));
 
     const systemInstruction = options.messages.find(msg => msg.role === 'system');
@@ -823,9 +838,21 @@ async function chatGeminiFormat(
         // 如果启用思考模式，添加 thinkingConfig 参数
         // 这会覆盖自定义参数中的设置
         requestBody.generationConfig.thinkingConfig = {
-            thinkingBudget: -1, // -1 表示动态思考
             includeThoughts: true // 包含思考过程
         };
+        // Gemini API 要求设置 includeThoughts 时不能同时设置某些参数或需要特殊预算
+        // 这里默认不设置 thinkingBudget，让模型自动决定
+    }
+
+    // 添加工具定义 (Gemini 原生格式)
+    if (options.tools && options.tools.length > 0) {
+        requestBody.tools = [{
+            function_declarations: options.tools.map((tool: any) => ({
+                name: tool.function?.name || tool.name,
+                description: tool.function?.description || tool.description,
+                parameters: tool.function?.parameters || tool.parameters
+            }))
+        }];
     }
 
     if (systemInstruction) {
@@ -918,7 +945,6 @@ async function handleStreamResponse(
     let buffer = '';
     let isThinkingPhase = false;
     let toolCalls: ToolCall[] = [];
-    let toolCallBuffer: Record<number, { id?: string; name?: string; arguments?: string }> = {};
     const generatedImages: GeneratedImageData[] = [];
 
     try {
@@ -988,20 +1014,38 @@ async function handleStreamResponse(
                         if (delta?.tool_calls) {
                             for (const toolCallDelta of delta.tool_calls) {
                                 const index = toolCallDelta.index;
-                                if (!toolCallBuffer[index]) {
-                                    toolCallBuffer[index] = {};
-                                }
-
-                                // 累积工具调用信息
-                                if (toolCallDelta.id) {
-                                    toolCallBuffer[index].id = toolCallDelta.id;
-                                }
-                                if (toolCallDelta.function?.name) {
-                                    toolCallBuffer[index].name = toolCallDelta.function.name;
-                                }
-                                if (toolCallDelta.function?.arguments) {
-                                    toolCallBuffer[index].arguments =
-                                        (toolCallBuffer[index].arguments || '') + toolCallDelta.function.arguments;
+                                
+                                // 检查此 index 是否属于一个新工具调用
+                                // 1. 此 index 还没有对应的调用
+                                // 2. 或者 delta 提供了新的 ID（且与当前此 index 记录的 ID 不同）
+                                const currentCall = toolCalls.find(tc => (tc as any)._index === index && (!toolCallDelta.id || tc.id === toolCallDelta.id));
+                                
+                                if (!currentCall || (toolCallDelta.id && toolCallDelta.id !== currentCall.id)) {
+                                    const newCall: ToolCall = {
+                                        id: toolCallDelta.id || `call_${Math.random().toString(36).substring(2, 9)}`,
+                                        type: 'function',
+                                        function: {
+                                            name: toolCallDelta.function?.name || '',
+                                            arguments: toolCallDelta.function?.arguments || '',
+                                            thought_signature: toolCallDelta.function?.thought_signature
+                                        }
+                                    };
+                                    (newCall as any)._index = index;
+                                    toolCalls.push(newCall);
+                                } else {
+                                    // 更新现有的调用内容
+                                    if (toolCallDelta.id) {
+                                        currentCall.id = toolCallDelta.id;
+                                    }
+                                    if (toolCallDelta.function?.name) {
+                                        currentCall.function.name = toolCallDelta.function.name;
+                                    }
+                                    if (toolCallDelta.function?.arguments) {
+                                        currentCall.function.arguments += toolCallDelta.function.arguments;
+                                    }
+                                    if (toolCallDelta.function?.thought_signature) {
+                                        currentCall.function.thought_signature = toolCallDelta.function.thought_signature;
+                                    }
                                 }
                             }
                         }
@@ -1030,21 +1074,13 @@ async function handleStreamResponse(
         }
 
         // 处理完整的工具调用
-        if (Object.keys(toolCallBuffer).length > 0) {
-            toolCalls = Object.values(toolCallBuffer)
-                .filter(tc => tc.id && tc.name && tc.arguments)
-                .map(tc => ({
-                    id: tc.id!,
-                    type: 'function' as const,
-                    function: {
-                        name: tc.name!,
-                        arguments: tc.arguments!,
-                    },
-                }));
-
-            if (toolCalls.length > 0 && options.onToolCallComplete) {
-                options.onToolCallComplete(toolCalls);
-            }
+        if (toolCalls.length > 0 && options.onToolCallComplete) {
+            // 移除临时使用的 _index 属性
+            const cleanToolCalls = toolCalls.map(tc => {
+                const { _index, ...rest } = tc as any;
+                return rest as ToolCall;
+            });
+            options.onToolCallComplete(cleanToolCalls);
         }
 
         // 如果有生成的图片，调用回调（等待完成，避免与 onComplete 并发竞态）
@@ -1087,6 +1123,7 @@ async function handleGeminiStreamResponse(
     let thinkingText = '';
     let buffer = '';
     let isThinkingPhase = false;
+    let toolCalls: ToolCall[] = [];
     const generatedImages: GeneratedImageData[] = [];
 
     try {
@@ -1141,6 +1178,21 @@ async function handleGeminiStreamResponse(
                                 fullText += part.text;
                                 options.onChunk?.(part.text);
                             }
+
+                            // 处理工具调用
+                            if (part.functionCall) {
+                                toolCalls.push({
+                                    id: `call_${Math.random().toString(36).substring(2, 9)}`,
+                                    type: 'function',
+                                    function: {
+                                        name: part.functionCall.name,
+                                        arguments: typeof part.functionCall.args === 'string'
+                                            ? part.functionCall.args
+                                            : JSON.stringify(part.functionCall.args || {}),
+                                        thought_signature: part.functionCall.thought_signature
+                                    }
+                                });
+                            }
                         }
                     }
                 } catch (e) {
@@ -1157,6 +1209,11 @@ async function handleGeminiStreamResponse(
         // 如果有生成的图片，调用回调（等待完成，避免与 onComplete 并发竞态）
         if (generatedImages.length > 0 && options.onImageGenerated) {
             await options.onImageGenerated(generatedImages);
+        }
+
+        // 处理完整的工具调用
+        if (toolCalls.length > 0 && options.onToolCallComplete) {
+            options.onToolCallComplete(toolCalls);
         }
 
         await options.onComplete?.(fullText);
