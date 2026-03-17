@@ -601,27 +601,63 @@ siyuan_insert_block({
 - 需要查看特定块的完整内容
 - 获取块的Markdown或Kramdown源码
 - 分析块的结构和格式
+- 对内容进行过滤、搜索、替换处理
 
 ## 返回格式
 支持两种格式：
 1. markdown: 标准Markdown格式，适合阅读
 2. kramdown: 包含块ID信息的格式，适合编程处理
 
+## Command 参数（可选）
+用于对返回的文本进行处理，支持管道符 | 拼接多个命令：
+
+### length
+返回文本的长度（字符数）。
+示例: "length"
+
+### grep [pattern]
+使用普通文本或正则表达式搜索匹配的行。
+- pattern: 搜索模式，支持普通字符串或正则表达式（用 /pattern/flags 格式）
+示例: "grep 关键字"
+示例: "grep /^# /"  (匹配所有一级标题)
+
+### replace [pattern] [replacement]
+使用普通文本或正则表达式替换文本。
+- pattern: 要替换的模式，支持普通字符串或正则（用 /pattern/flags 格式）
+- replacement: 替换内容，支持 $1, $2 等捕获组引用
+示例: "replace foo bar" (将 foo 替换为 bar)
+示例: "replace /\\d+/ [数字]" (将所有数字替换为 [数字])
+
+### head [n] 或 head [start] [end]
+获取指定范围的行。
+- head 10: 返回前10行
+- head 5 15: 返回第5到15行（包含）
+示例: "head 20"
+示例: "head 100 200"
+
+### 管道组合
+使用 | 拼接多个命令，按顺序执行。
+示例: "grep /^# / | head 10" (获取前10个标题)
+示例: "replace /foo/g bar | head 50" (替换后将结果限制为50行)
+
 ## 使用场景
 - 读取文档内容用于分析或摘要
 - 获取代码块的源代码
 - 提取表格、列表等结构化数据
 - 检查块的引用和链接
+- 搜索特定内容（配合 grep）
+- 分块读取长文档（配合 head）
 
 ## 长文档处理
-- 对于大型文档，会分块返回内容
-- 每次最多返回1000个块的信息
-- 可以通过多次调用处理完整文档
-- 优先返回最相关的内容部分
+- 对于大型文档，建议配合 command 参数分块读取
+- 先使用 "length" 获取总长度
+- 使用 "head 1 100" 逐步读取内容
+- 使用 "grep 关键字" 快速定位相关内容
 
 ## 注意事项
 - 块ID必须存在且有效
-- Kramdown格式包含额外的元数据`,
+- Kramdown格式包含额外的元数据
+- 命令执行顺序为从左到右`,
         {
             type: 'object',
             properties: {
@@ -633,6 +669,10 @@ siyuan_insert_block({
                     type: 'string',
                     description: '返回格式：markdown（纯文本）或 kramdown（包含ID信息）',
                     enum: ['markdown', 'kramdown'],
+                },
+                command: {
+                    type: 'string',
+                    description: '可选。文本处理命令，支持 length、grep、replace、head 及管道组合。详见工具描述。',
                 },
             },
             required: ['id', 'format'],
@@ -2850,26 +2890,143 @@ export async function siyuan_update_block(
 }
 
 /**
+ * 解析并执行单条命令
+ */
+function executeCommand(content: string, cmdStr: string): string {
+    const parts = cmdStr.trim().split(/\s+/);
+    const cmd = parts[0]?.toLowerCase();
+    
+    switch (cmd) {
+        case 'length': {
+            return String(content.length);
+        }
+        
+        case 'grep': {
+            if (parts.length < 2) {
+                throw new Error('grep 命令需要 pattern 参数');
+            }
+            const patternStr = parts.slice(1).join(' ');
+            let regex: RegExp;
+            
+            // 检测是否为 /pattern/flags 格式
+            const regexMatch = patternStr.match(/^\/(.*)\/([gimuy]*)$/);
+            if (regexMatch) {
+                regex = new RegExp(regexMatch[1], regexMatch[2] || 'm');
+            } else {
+                // 普通字符串匹配
+                regex = new RegExp(patternStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'm');
+            }
+            
+            const lines = content.split('\n');
+            const matchedLines = lines.filter(line => regex.test(line));
+            return matchedLines.join('\n');
+        }
+        
+        case 'replace': {
+            if (parts.length < 3) {
+                throw new Error('replace 命令需要 pattern 和 replacement 参数');
+            }
+            
+            // 最后一个参数是 replacement，中间的是 pattern
+            const replacement = parts[parts.length - 1];
+            const patternStr = parts.slice(1, -1).join(' ');
+            
+            let regex: RegExp;
+            // 检测是否为 /pattern/flags 格式
+            const regexMatch = patternStr.match(/^\/(.*)\/([gimuy]*)$/);
+            if (regexMatch) {
+                regex = new RegExp(regexMatch[1], regexMatch[2] || 'g');
+            } else {
+                // 普通字符串替换，全局替换
+                regex = new RegExp(patternStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+            }
+            
+            return content.replace(regex, replacement);
+        }
+        
+        case 'head': {
+            if (parts.length < 2) {
+                throw new Error('head 命令需要行数参数');
+            }
+            
+            const lines = content.split('\n');
+            
+            if (parts.length === 2) {
+                // head n: 返回前 n 行
+                const n = parseInt(parts[1], 10);
+                if (isNaN(n) || n < 1) {
+                    throw new Error('head 参数必须是正整数');
+                }
+                return lines.slice(0, n).join('\n');
+            } else {
+                // head start end: 返回第 start 到 end 行（1-based，包含）
+                const start = parseInt(parts[1], 10);
+                const end = parseInt(parts[2], 10);
+                if (isNaN(start) || isNaN(end) || start < 1 || end < start) {
+                    throw new Error('head 参数格式错误，应为 "head start end"');
+                }
+                return lines.slice(start - 1, end).join('\n');
+            }
+        }
+        
+        default:
+            throw new Error(`未知命令: ${cmd}`);
+    }
+}
+
+/**
+ * 执行命令管道（支持 | 连接的多条命令）
+ */
+function executeCommandPipeline(content: string, command: string): string {
+    if (!command || command.trim() === '') {
+        return content;
+    }
+    
+    // 分割管道命令
+    const commands = command.split('|').map(cmd => cmd.trim()).filter(cmd => cmd);
+    
+    let result = content;
+    for (const cmd of commands) {
+        result = executeCommand(result, cmd);
+    }
+    
+    return result;
+}
+
+/**
  * 获取块内容
+ * @param id 块ID
+ * @param format 格式：markdown 或 kramdown
+ * @param command 可选的文本处理命令
  */
 export async function siyuan_get_block_content(
     id: string,
-    format: 'markdown' | 'kramdown'
+    format: 'markdown' | 'kramdown',
+    command?: string
 ): Promise<string> {
     try {
+        let content: string;
+        
         if (format === 'kramdown') {
             const result = await getBlockKramdown(id);
             if (!result || !result.kramdown) {
                 throw new Error('获取Kramdown内容失败');
             }
-            return result.kramdown;
+            content = result.kramdown;
         } else {
             const result = await exportMdContent(id, false, false, 2, 0, false);
             if (!result || !result.content) {
                 throw new Error('获取Markdown内容失败');
             }
-            return result.content;
+            content = result.content;
         }
+        
+        // 如果有命令参数，执行文本处理
+        if (command && command.trim()) {
+            content = executeCommandPipeline(content, command);
+        }
+        
+        return content;
     } catch (error) {
         console.error('Get block content error:', error);
         throw new Error(`获取块内容失败: ${(error as Error).message}`);
@@ -3810,7 +3967,7 @@ export async function executeToolCall(toolCall: ToolCall): Promise<string> {
                 return JSON.stringify(updateResult, null, 2);
 
             case 'siyuan_get_block_content':
-                return await siyuan_get_block_content(args.id, args.format);
+                return await siyuan_get_block_content(args.id, args.format, args.command);
 
             case 'siyuan_create_document':
                 const docId = await siyuan_create_document(args.notebook, args.path, args.markdown);

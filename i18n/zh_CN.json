@@ -208,7 +208,9 @@
             "thinking": "思考过程",
             "streamingIndicator": "正在生成...",
             "interrupted": "[生成已中断]",
-            "messageCount": "条消息"
+            "messageCount": "条消息",
+            "params": "参数",
+            "result": "结果"
         },
         "actions": {
             "copy": "复制",

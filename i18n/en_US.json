@@ -209,7 +209,9 @@
             "thinking": "Thinking Process",
             "streamingIndicator": "Generating...",
             "interrupted": "[Generation Interrupted]",
-            "messageCount": "messages"
+            "messageCount": "messages",
+            "params": "Parameters",
+            "result": "Result"
         },
         "actions": {
             "copy": "Copy",
