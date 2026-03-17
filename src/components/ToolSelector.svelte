@@ -161,6 +161,50 @@
         }
         expandedTools = expandedTools;
     }
+
+    // 检查某个类别的工具是否全部选中
+    function isCategoryFullySelected(tools: Tool[]): boolean {
+        if (tools.length === 0) return false;
+        return tools.every(tool => selectedSet.has(tool.function.name));
+    }
+
+    // 检查某个类别的工具是否部分选中
+    function isCategoryPartiallySelected(tools: Tool[]): boolean {
+        if (tools.length === 0) return false;
+        const selectedCount = tools.filter(tool => selectedSet.has(tool.function.name)).length;
+        return selectedCount > 0 && selectedCount < tools.length;
+    }
+
+    // 切换类别的全选/取消全选
+    function toggleCategory(tools: Tool[]) {
+        const allSelected = isCategoryFullySelected(tools);
+        
+        if (allSelected) {
+            // 取消全选该类别：从 localSelectedTools 中移除该类别的所有工具
+            const toolNamesToRemove = new Set(tools.map(t => t.function.name));
+            localSelectedTools = localSelectedTools.filter(
+                t => !toolNamesToRemove.has(t.name)
+            );
+        } else {
+            // 全选该类别：添加该类别的所有未选中工具
+            const toolNamesInCategory = new Set(tools.map(t => t.function.name));
+            // 保留不在该类别的工具
+            const toolsOutsideCategory = localSelectedTools.filter(
+                t => !toolNamesInCategory.has(t.name)
+            );
+            // 添加该类别的所有工具
+            const newCategorySelections = tools.map(tool => ({
+                name: tool.function.name,
+                autoApprove: toolAutoApproveMap.get(tool.function.name) ?? false,
+            }));
+            localSelectedTools = [...toolsOutsideCategory, ...newCategorySelections];
+        }
+        
+        // 同步到导出 prop
+        selectedTools = [...localSelectedTools];
+        // 通知父组件更新
+        dispatch('update', localSelectedTools);
+    }
 </script>
 
 <div class="tool-selector__overlay" on:click={close}></div>
@@ -187,7 +231,18 @@
 
         {#each Object.entries(categorizedTools) as [category, tools] (category)}
             <div class="tool-category">
-                <h4 class="tool-category__title">{t(`tools.category.${category}`)}</h4>
+                <div class="tool-category__header">
+                    <h4 class="tool-category__title">{t(`tools.category.${category}`)}</h4>
+                    <button
+                        class="b3-button b3-button--text tool-category__select-btn"
+                        class:tool-category__select-btn--partial={isCategoryPartiallySelected(tools)}
+                        on:click={() => toggleCategory(tools)}
+                    >
+                        {isCategoryFullySelected(tools)
+                            ? t('tools.selector.deselectAll')
+                            : t('tools.selector.selectAll')}
+                    </button>
+                </div>
                 <div class="tool-list">
                     {#each tools as tool (tool.function.name)}
                         {@const toolName = tool.function.name}
@@ -397,11 +452,31 @@
             margin-bottom: 0;
         }
 
+        &__header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
         &__title {
-            margin: 0 0 12px 0;
+            margin: 0;
             font-size: 14px;
             font-weight: 500;
             color: var(--b3-theme-primary);
+        }
+
+        &__select-btn {
+            font-size: 12px;
+            padding: 2px 8px;
+            min-width: unset;
+            height: auto;
+            line-height: 1.5;
+
+            &--partial {
+                color: var(--b3-theme-primary);
+                font-weight: 500;
+            }
         }
     }
 
