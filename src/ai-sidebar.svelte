@@ -13377,7 +13377,6 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
         gap: 8px;
         flex: 1;
         justify-content: flex-end;
-        min-width: 0;
     }
 
     .ai-sidebar__input-row {
