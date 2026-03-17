@@ -632,6 +632,9 @@
         "siyuan_get_doc_tree": {
             "name": "Get Document Tree"
         },
+        "run_js": {
+            "name": "Run JavaScript"
+        },
         "calling": "Calling Tool",
         "called": "Tool Called",
         "result": "Tool Result",

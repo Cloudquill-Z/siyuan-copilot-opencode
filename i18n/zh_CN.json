@@ -648,6 +648,9 @@
         "siyuan_get_current_time":{
             "name": "获取当前时间"
         },
+        "run_js": {
+            "name": "运行 JavaScript"
+        },
         "siyuan_create_child_document": {
             "name": "创建子文档"
         },

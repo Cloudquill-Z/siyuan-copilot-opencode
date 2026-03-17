@@ -101,6 +101,7 @@ export const TOOL_CATEGORIES: Record<string, { tools: string[] }> = {
         tools: [
             'web_fetch',
             'soul',
+            'run_js',
         ],
     },
 };
@@ -123,6 +124,7 @@ export const QA_TOOL_CATEGORIES: Record<string, { tools: string[] }> = {
         tools: [
             'web_fetch',
             'soul',
+            'run_js',
         ],
     },
 };
@@ -332,6 +334,7 @@ export const AVAILABLE_TOOLS: Tool[] = [
                             'siyuan_send_notification',
                             'siyuan_get_current_time',
                             'soul',
+                            'run_js',
                         ],
                     },
                 },
@@ -2066,6 +2069,74 @@ const timeString = date + "T14:30:00";  // "2026-03-12T14:30:00"
         }
     ),
 
+    // 运行 JavaScript 代码工具
+    createTool(
+        'run_js',
+        `在浏览器环境中运行 JavaScript 代码并返回执行结果。
+
+## 何时使用
+- 需要进行复杂的计算或数据处理
+- 需要处理文本、数字、日期等数据转换
+- 需要使用 JavaScript 内置函数（如 Math、Date、JSON 等）
+- 需要格式化或解析数据
+- 需要执行逻辑判断或循环操作
+
+## 可用 API
+代码在浏览器环境中运行，可以使用：
+- 所有 JavaScript 内置对象（Math, Date, JSON, Array, Object 等）
+- console.log() 用于调试（输出会包含在结果中）
+- 返回最终结果使用 return 语句
+
+## 注意事项
+- 代码必须使用 return 语句返回结果
+- 不能使用异步操作（async/await）
+- 不能访问 DOM 或浏览器特定 API
+- 不能访问思源笔记 API（请使用专用工具）
+- 代码在沙箱中运行，超时时间为 5 秒
+
+## 使用示例
+
+\`\`\`javascript
+// 计算数学表达式
+run_js({
+  code: "return Math.sqrt(16) + Math.pow(2, 3);"
+})
+
+// 处理文本
+run_js({
+  code: "const text = 'Hello World'; return text.toUpperCase().split(' ').join('-');"
+})
+
+// 日期计算
+run_js({
+  code: "const now = new Date(); const nextWeek = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); return nextWeek.toISOString().split('T')[0];"
+})
+
+// JSON 数据处理
+run_js({
+  code: "const data = {a: 1, b: 2, c: 3}; return Object.values(data).reduce((sum, v) => sum + v, 0);"
+})
+
+// 数组操作
+run_js({
+  code: "const arr = [3, 1, 4, 1, 5, 9, 2, 6]; return arr.filter(x => x > 3).sort((a, b) => a - b);"
+})
+\`\`
+
+## 返回值
+返回代码执行的结果（必须是 return 语句返回的值）`,
+        {
+            type: 'object',
+            properties: {
+                code: {
+                    type: 'string',
+                    description: '要执行的 JavaScript 代码，必须使用 return 语句返回结果',
+                },
+            },
+            required: ['code'],
+        }
+    ),
+
     // 系统通知工具
     createTool(
         'siyuan_send_notification',
@@ -3652,6 +3723,126 @@ export async function siyuan_get_current_time(
 }
 
 /**
+ * 运行 JavaScript 代码
+ * 在沙箱环境中执行 JS 代码并返回结果
+ * @param code 要执行的 JavaScript 代码
+ */
+export async function run_js(code: string): Promise<string> {
+    try {
+        if (!code || code.trim() === '') {
+            throw new Error('代码内容是必需的');
+        }
+
+        // 创建沙箱环境，限制可访问的全局对象
+        const sandbox = {
+            Math: Math,
+            Date: Date,
+            JSON: JSON,
+            Array: Array,
+            Object: Object,
+            String: String,
+            Number: Number,
+            Boolean: Boolean,
+            RegExp: RegExp,
+            Error: Error,
+            Map: Map,
+            Set: Set,
+            WeakMap: WeakMap,
+            WeakSet: WeakSet,
+            Promise: Promise,
+            console: {
+                log: (...args: any[]) => {
+                    consoleLogs.push(args.map(arg => 
+                        typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
+                    ).join(' '));
+                },
+                error: (...args: any[]) => {
+                    consoleLogs.push('[ERROR] ' + args.map(arg => 
+                        typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
+                    ).join(' '));
+                },
+            },
+            parseInt: parseInt,
+            parseFloat: parseFloat,
+            isNaN: isNaN,
+            isFinite: isFinite,
+            encodeURI: encodeURI,
+            encodeURIComponent: encodeURIComponent,
+            decodeURI: decodeURI,
+            decodeURIComponent: decodeURIComponent,
+            escape: escape,
+            unescape: unescape,
+            btoa: btoa,
+            atob: atob,
+            // 禁止访问的危险对象
+            window: undefined,
+            document: undefined,
+            globalThis: undefined,
+        };
+
+        const consoleLogs: string[] = [];
+
+        // 使用 Function 构造函数创建沙箱函数
+        // 将 sandbox 的键作为参数名，值作为参数传入
+        const sandboxKeys = Object.keys(sandbox);
+        const sandboxValues = sandboxKeys.map(key => sandbox[key as keyof typeof sandbox]);
+
+        // 包装用户代码，确保有 return 语句
+        let wrappedCode = code;
+        if (!code.includes('return')) {
+            wrappedCode = `return ${code}`;
+        }
+
+        // 创建函数并执行
+        const fn = new Function(...sandboxKeys, `"use strict";\n${wrappedCode}`);
+        
+        // 设置 5 秒超时
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('代码执行超时（超过 5 秒）')), 5000);
+        });
+
+        const executionPromise = Promise.resolve(fn(...sandboxValues));
+
+        const result = await Promise.race([executionPromise, timeoutPromise]);
+
+        // 构建返回结果
+        let output = '';
+        if (consoleLogs.length > 0) {
+            output += `[Console Output]:\n${consoleLogs.join('\n')}\n\n`;
+        }
+
+        // 处理返回结果
+        let resultStr: string;
+        if (result === undefined) {
+            resultStr = 'undefined';
+        } else if (result === null) {
+            resultStr = 'null';
+        } else if (typeof result === 'object') {
+            try {
+                resultStr = JSON.stringify(result, null, 2);
+            } catch (e) {
+                resultStr = '[Object with circular references]';
+            }
+        } else if (typeof result === 'function') {
+            resultStr = '[Function]';
+        } else if (typeof result === 'symbol') {
+            resultStr = result.toString();
+        } else if (typeof result === 'bigint') {
+            resultStr = result.toString() + 'n';
+        } else {
+            resultStr = String(result);
+        }
+
+        output += `[Return Value]:\n${resultStr}`;
+
+        return output;
+    } catch (error) {
+        console.error('Run JS error:', error);
+        throw new Error(`JavaScript 执行失败: ${(error as Error).message}`);
+    }
+}
+
+/**
  * 获取网页内容并转换为 Markdown
  * @param url 要获取的网页 URL
  * @param useWebView 是否使用 WebView 模式，默认为 false
@@ -4115,6 +4306,10 @@ export async function executeToolCall(toolCall: ToolCall): Promise<string> {
             case 'siyuan_get_current_time':
                 const timeResult = await siyuan_get_current_time(args.format);
                 return timeResult;
+
+            case 'run_js':
+                const jsResult = await run_js(args.code);
+                return jsResult;
 
             default:
                 throw new Error(`未知的工具: ${name}`);
