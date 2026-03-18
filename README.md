@@ -23,6 +23,7 @@
 - [思源笔记 Copilot 插件 v1.2.0：支持nanobanana生图和编辑图片](https://zhuanlan.zhihu.com/p/2000977023364011834)
 - [思源笔记 Copilot 插件如何使用Achuan-2 API](https://zhuanlan.zhihu.com/p/2002765436090093989)
 - [思源笔记 Copilot 插件 v1.6.0：新增网页小程序、快捷翻译对话框](https://zhuanlan.zhihu.com/p/2003514802849485761)
+- [思源笔记Copilot v2.0：Agent能力增强，获取网页内容、SOUL等更多工具上线 - 知乎](https://zhuanlan.zhihu.com/p/2015574496401190989)
 
 ## ✨主要功能介绍
 
