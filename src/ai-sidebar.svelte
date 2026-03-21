@@ -1149,6 +1149,14 @@
     let toolCallsInProgress: Set<string> = new Set(); // 正在执行的工具调用ID
     let toolCallsExpanded: Record<string, boolean> = {}; // 工具调用是否展开，默认折叠
     let toolCallResultsExpanded: Record<string, boolean> = {}; // 工具结果是否展开，默认折叠
+    type PendingDocDiff = {
+        docId: string;
+        docTitle: string;
+        oldContent: string;
+        newContent: string;
+        affectedBlockIds: Set<string>;
+    };
+    const pendingDocDiffsByMessage = new Map<number, Map<string, PendingDocDiff>>();
     let pendingToolCall: ToolCall | null = null; // 待批准的工具调用
     let isToolApprovalDialogOpen = false; // 工具批准对话框是否打开
     let isToolConfigLoaded = false; // 标记工具配置是否已加载
@@ -4430,7 +4438,17 @@
                                         toolCall.function.name === 'get_siyuan_skills';
                                     const autoApprove =
                                         isSystemTool || toolConfig?.autoApprove || false;
-                                    const toolEditOperation = await buildToolEditOperation(toolCall);
+                                    const toolChangeContext =
+                                        await resolveToolChangeContext(toolCall);
+                                    if (
+                                        firstToolCallMessageIndex !== null &&
+                                        toolChangeContext
+                                    ) {
+                                        await ensureDocDiffSnapshotBefore(
+                                            firstToolCallMessageIndex,
+                                            toolChangeContext
+                                        );
+                                    }
 
                                     try {
                                         let toolResult: string;
@@ -4452,11 +4470,11 @@
                                             messages = [...messages, toolResultMessage];
                                             if (
                                                 firstToolCallMessageIndex !== null &&
-                                                toolEditOperation
+                                                toolChangeContext
                                             ) {
-                                                appendEditOperationToMessage(
+                                                await refreshDocDiffSnapshotAfter(
                                                     firstToolCallMessageIndex,
-                                                    toolEditOperation
+                                                    toolChangeContext
                                                 );
                                             }
                                         } else {
@@ -4488,11 +4506,11 @@
                                                 messages = [...messages, toolResultMessage];
                                                 if (
                                                     firstToolCallMessageIndex !== null &&
-                                                    toolEditOperation
+                                                    toolChangeContext
                                                 ) {
-                                                    appendEditOperationToMessage(
+                                                    await refreshDocDiffSnapshotAfter(
                                                         firstToolCallMessageIndex,
-                                                        toolEditOperation
+                                                        toolChangeContext
                                                     );
                                                 }
                                             } else {
@@ -4613,6 +4631,9 @@
                                 // 如果已经中断，不再添加消息（避免重复）
                                 if (isAborted) {
                                     shouldContinue = false;
+                                    if (firstToolCallMessageIndex !== null) {
+                                        pendingDocDiffsByMessage.delete(firstToolCallMessageIndex);
+                                    }
                                     toolExecutionComplete?.();
                                     return;
                                 }
@@ -4668,6 +4689,9 @@
 
                                         messages = [...messages, assistantMessage];
                                     }
+                                    if (firstToolCallMessageIndex !== null) {
+                                        commitPendingDocDiffsToMessage(firstToolCallMessageIndex);
+                                    }
 
                                     streamingMessage = '';
                                     streamingThinking = '';
@@ -4687,6 +4711,9 @@
                             },
                             onError: (error: Error) => {
                                 shouldContinue = false;
+                                if (firstToolCallMessageIndex !== null) {
+                                    pendingDocDiffsByMessage.delete(firstToolCallMessageIndex);
+                                }
                                 if (error.message !== 'Request aborted') {
                                     const errorMessage: Message = {
                                         role: 'assistant',
@@ -8369,71 +8396,203 @@
         return content.replace(/\{:\s*id="[^"]+"\s*\}/g, '').trim();
     }
 
-    async function buildToolEditOperation(toolCall: ToolCall): Promise<EditOperation | null> {
+    type ToolChangeContext = {
+        operationType: 'update' | 'insert' | 'delete';
+        docId: string;
+        docTitle: string;
+        affectedBlockId: string;
+    };
+
+    function escapeSqlString(value: string) {
+        return value.replace(/'/g, "''");
+    }
+
+    async function getDocDisplayTitle(docId: string): Promise<string> {
+        try {
+            const hpath = await getHPathByID(docId);
+            if (typeof hpath === 'string' && hpath.trim() && hpath !== docId) {
+                return hpath;
+            }
+        } catch (error) {
+            console.warn('获取文档路径失败:', error);
+        }
+
+        try {
+            const docBlock = await getBlockByID(docId);
+            if (docBlock?.content) {
+                return docBlock.content;
+            }
+        } catch (error) {
+            console.warn('通过 getBlockByID 获取文档标题失败:', error);
+        }
+
+        try {
+            const safeDocId = escapeSqlString(docId);
+            const rows = await sql(
+                `SELECT content FROM blocks WHERE id = '${safeDocId}' LIMIT 1`
+            );
+            const title = rows?.[0]?.content;
+            if (typeof title === 'string' && title.trim()) {
+                return title;
+            }
+        } catch (error) {
+            console.warn('通过 SQL 获取文档标题失败:', error);
+        }
+
+        return `文档 ${docId}`;
+    }
+
+    async function resolveToolChangeContext(toolCall: ToolCall): Promise<ToolChangeContext | null> {
         const toolName = toolCall.function.name;
-        if (toolName !== 'siyuan_update_block' && toolName !== 'siyuan_insert_block') {
+        if (
+            toolName !== 'siyuan_update_block' &&
+            toolName !== 'siyuan_insert_block' &&
+            toolName !== 'siyuan_delete_block'
+        ) {
             return null;
         }
 
         try {
             const args = JSON.parse(toolCall.function.arguments || '{}');
+            let operationType: ToolChangeContext['operationType'];
+            let targetBlockId = '';
 
             if (toolName === 'siyuan_update_block') {
-                if (!args.id || args.data === undefined) {
-                    return null;
+                operationType = 'update';
+                targetBlockId = args.id || '';
+            } else if (toolName === 'siyuan_insert_block') {
+                operationType = 'insert';
+                targetBlockId =
+                    args.nextID || args.previousID || args.parentID || args.appendParentID || '';
+            } else {
+                operationType = 'delete';
+                targetBlockId = args.id || '';
+            }
+
+            if (!targetBlockId) {
+                return null;
+            }
+
+            let blockInfo = await getBlockByID(targetBlockId);
+            if (!blockInfo) {
+                try {
+                    const safeBlockId = escapeSqlString(targetBlockId);
+                    const rows = await sql(
+                        `SELECT id, root_id, type FROM blocks WHERE id = '${safeBlockId}' LIMIT 1`
+                    );
+                    blockInfo = rows?.[0] || null;
+                } catch (error) {
+                    console.warn('通过 SQL 获取块信息失败:', error);
                 }
-
-                const blockData = await getBlockKramdown(args.id);
-                const oldMdData = await exportMdContent(args.id, false, false, 2, 0, false);
-                const newContent = String(args.data ?? '');
-
-                return {
-                    operationType: 'update',
-                    blockId: args.id,
-                    newContent,
-                    oldContent: blockData?.kramdown || '',
-                    oldContentForDisplay: oldMdData?.content || '',
-                    newContentForDisplay: normalizeOperationContentForDiff(newContent),
-                    status: 'applied',
-                };
             }
+            const docId =
+                blockInfo?.type === 'd'
+                    ? blockInfo.id
+                    : blockInfo?.root_id || targetBlockId;
 
-            if (args.data === undefined) {
-                return null;
-            }
-
-            const newContent = String(args.data ?? '');
-            const blockId = args.nextID || args.previousID || args.parentID || args.appendParentID || '';
-            if (!blockId) {
-                return null;
-            }
+            const docTitle = await getDocDisplayTitle(docId);
 
             return {
-                operationType: 'insert',
-                blockId,
-                position: args.nextID ? 'before' : 'after',
-                newContent,
-                newContentForDisplay: normalizeOperationContentForDiff(newContent),
-                status: 'applied',
+                operationType,
+                docId,
+                docTitle,
+                affectedBlockId: targetBlockId,
             };
         } catch (error) {
-            console.warn('解析工具调用参数失败，无法生成差异记录:', error);
+            console.warn('解析工具调用参数失败，无法生成汇总差异记录:', error);
             return null;
         }
     }
 
-    function appendEditOperationToMessage(messageIndex: number, operation: EditOperation) {
-        const message = messages[messageIndex];
-        if (!message || message.role !== 'assistant') {
+    async function ensureDocDiffSnapshotBefore(
+        messageIndex: number,
+        changeContext: ToolChangeContext
+    ) {
+        if (messageIndex < 0) {
             return;
         }
 
-        if (!message.editOperations) {
-            message.editOperations = [];
+        let messageDiffMap = pendingDocDiffsByMessage.get(messageIndex);
+        if (!messageDiffMap) {
+            messageDiffMap = new Map<string, PendingDocDiff>();
+            pendingDocDiffsByMessage.set(messageIndex, messageDiffMap);
         }
-        message.editOperations = [...message.editOperations, operation];
+
+        let pendingDiff = messageDiffMap.get(changeContext.docId);
+        if (!pendingDiff) {
+            const oldMdData = await exportMdContent(changeContext.docId, false, false, 2, 0, false);
+            const oldContent = oldMdData?.content || '';
+
+            pendingDiff = {
+                docId: changeContext.docId,
+                docTitle: changeContext.docTitle,
+                oldContent,
+                newContent: oldContent,
+                affectedBlockIds: new Set<string>(),
+            };
+            messageDiffMap.set(changeContext.docId, pendingDiff);
+        }
+
+        pendingDiff.affectedBlockIds.add(changeContext.affectedBlockId);
+    }
+
+    async function refreshDocDiffSnapshotAfter(
+        messageIndex: number,
+        changeContext: ToolChangeContext
+    ) {
+        const messageDiffMap = pendingDocDiffsByMessage.get(messageIndex);
+        const pendingDiff = messageDiffMap?.get(changeContext.docId);
+        if (!pendingDiff) {
+            return;
+        }
+
+        const newMdData = await exportMdContent(changeContext.docId, false, false, 2, 0, false);
+        pendingDiff.newContent = newMdData?.content || '';
+        pendingDiff.affectedBlockIds.add(changeContext.affectedBlockId);
+    }
+
+    function commitPendingDocDiffsToMessage(messageIndex: number) {
+        const messageDiffMap = pendingDocDiffsByMessage.get(messageIndex);
+        if (!messageDiffMap || messageDiffMap.size === 0) {
+            pendingDocDiffsByMessage.delete(messageIndex);
+            return;
+        }
+
+        const message = messages[messageIndex];
+        if (!message || message.role !== 'assistant') {
+            pendingDocDiffsByMessage.delete(messageIndex);
+            return;
+        }
+
+        const summaryDiffs: EditOperation[] = [];
+        for (const pendingDiff of messageDiffMap.values()) {
+            if (pendingDiff.oldContent === pendingDiff.newContent) {
+                continue;
+            }
+
+            summaryDiffs.push({
+                operationType: 'update',
+                blockId: pendingDiff.docId,
+                docId: pendingDiff.docId,
+                docTitle: pendingDiff.docTitle,
+                affectedBlockIds: Array.from(pendingDiff.affectedBlockIds),
+                oldContent: pendingDiff.oldContent,
+                oldContentForDisplay: pendingDiff.oldContent,
+                newContent: pendingDiff.newContent,
+                newContentForDisplay: normalizeOperationContentForDiff(pendingDiff.newContent),
+                status: 'applied',
+            });
+        }
+
+        if (summaryDiffs.length === 0) {
+            pendingDocDiffsByMessage.delete(messageIndex);
+            return;
+        }
+
+        message.editOperations = [...(message.editOperations || []), ...summaryDiffs];
         messages = [...messages];
         hasUnsavedChanges = true;
+        pendingDocDiffsByMessage.delete(messageIndex);
     }
 
     // 查看差异
@@ -8494,6 +8653,28 @@
     function closeDiffDialog() {
         isDiffDialogOpen = false;
         currentDiffOperation = null;
+    }
+
+    function escapeDiffHtml(text: string) {
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function renderMarkdownForSplitDiff(markdown: string) {
+        const content = markdown || '';
+        try {
+            const lute = (window as any).Lute.New();
+            if (lute && typeof lute.Md2HTML === 'function') {
+                return lute.Md2HTML(content);
+            }
+        } catch (error) {
+            console.warn('使用 Lute 渲染差异内容失败:', error);
+        }
+        return `<pre>${escapeDiffHtml(content)}</pre>`;
     }
 
     // 简单的差异高亮（按行对比）
@@ -9376,7 +9557,17 @@
                                         toolCall.function.name === 'get_siyuan_skills';
                                     const autoApprove =
                                         isSystemTool || toolConfig?.autoApprove || false;
-                                    const toolEditOperation = await buildToolEditOperation(toolCall);
+                                    const toolChangeContext =
+                                        await resolveToolChangeContext(toolCall);
+                                    if (
+                                        firstToolCallMessageIndex !== null &&
+                                        toolChangeContext
+                                    ) {
+                                        await ensureDocDiffSnapshotBefore(
+                                            firstToolCallMessageIndex,
+                                            toolChangeContext
+                                        );
+                                    }
 
                                     try {
                                         let toolResult: string;
@@ -9398,11 +9589,11 @@
                                             messages = [...messages, toolResultMessage];
                                             if (
                                                 firstToolCallMessageIndex !== null &&
-                                                toolEditOperation
+                                                toolChangeContext
                                             ) {
-                                                appendEditOperationToMessage(
+                                                await refreshDocDiffSnapshotAfter(
                                                     firstToolCallMessageIndex,
-                                                    toolEditOperation
+                                                    toolChangeContext
                                                 );
                                             }
                                         } else {
@@ -9434,11 +9625,11 @@
                                                 messages = [...messages, toolResultMessage];
                                                 if (
                                                     firstToolCallMessageIndex !== null &&
-                                                    toolEditOperation
+                                                    toolChangeContext
                                                 ) {
-                                                    appendEditOperationToMessage(
+                                                    await refreshDocDiffSnapshotAfter(
                                                         firstToolCallMessageIndex,
-                                                        toolEditOperation
+                                                        toolChangeContext
                                                     );
                                                 }
                                             } else {
@@ -9559,6 +9750,9 @@
                                 // 如果已经中断，不再添加消息（避免重复）
                                 if (isAborted) {
                                     shouldContinue = false;
+                                    if (firstToolCallMessageIndex !== null) {
+                                        pendingDocDiffsByMessage.delete(firstToolCallMessageIndex);
+                                    }
                                     toolExecutionComplete?.();
                                     return;
                                 }
@@ -9614,6 +9808,9 @@
 
                                         messages = [...messages, assistantMessage];
                                     }
+                                    if (firstToolCallMessageIndex !== null) {
+                                        commitPendingDocDiffsToMessage(firstToolCallMessageIndex);
+                                    }
 
                                     streamingMessage = '';
                                     streamingThinking = '';
@@ -9633,6 +9830,9 @@
                             },
                             onError: (error: Error) => {
                                 shouldContinue = false;
+                                if (firstToolCallMessageIndex !== null) {
+                                    pendingDocDiffsByMessage.delete(firstToolCallMessageIndex);
+                                }
                                 if (error.message !== 'Request aborted') {
                                     const errorMessage: Message = {
                                         role: 'assistant',
@@ -11215,7 +11415,7 @@
                         {#if message.role === 'assistant' && message.editOperations && message.editOperations.length > 0}
                             <div class="ai-message__edit-operations">
                                 <div class="ai-message__edit-operations-title">
-                                    📝 {t('aiSidebar.edit.title')} ({message.editOperations.length})
+                                    📝 文档总差异 ({message.editOperations.length})
                                 </div>
                                 {#each message.editOperations as operation}
                                     <div
@@ -11227,15 +11427,7 @@
                                     >
                                         <div class="ai-message__edit-operation-header">
                                             <span class="ai-message__edit-operation-id">
-                                                {#if operation.operationType === 'insert'}
-                                                    {t('aiSidebar.edit.insertBlock')}:
-                                                    {operation.position === 'before'
-                                                        ? t('aiSidebar.edit.before')
-                                                        : t('aiSidebar.edit.after')}
-                                                    {operation.blockId}
-                                                {:else}
-                                                    {t('aiSidebar.edit.blockId')}: {operation.blockId}
-                                                {/if}
+                                                📄 {operation.docTitle || operation.docId || operation.blockId}
                                             </span>
                                             <span class="ai-message__edit-operation-status">
                                                 {#if operation.status === 'applied'}
@@ -11247,6 +11439,11 @@
                                                 {/if}
                                             </span>
                                         </div>
+                                        {#if operation.affectedBlockIds && operation.affectedBlockIds.length > 0}
+                                            <div class="ai-message__edit-operation-block-ids">
+                                                块ID: {operation.affectedBlockIds.join(', ')}
+                                            </div>
+                                        {/if}
                                         <div class="ai-message__edit-operation-actions">
                                             <!-- 查看差异按钮：所有状态都可以查看 -->
                                             <button
@@ -12686,7 +12883,20 @@
                 </div>
                 <div class="ai-sidebar__diff-dialog-body">
                     <div class="ai-sidebar__diff-info">
-                        {#if currentDiffOperation.operationType === 'insert'}
+                        {#if currentDiffOperation.docTitle}
+                            <strong>文档:</strong>
+                            {currentDiffOperation.docTitle}
+                            <br />
+                        {/if}
+                        {#if currentDiffOperation.affectedBlockIds && currentDiffOperation.affectedBlockIds.length > 0}
+                            <strong>块ID:</strong>
+                            {currentDiffOperation.affectedBlockIds.join(', ')}
+                            <br />
+                        {/if}
+                        {#if currentDiffOperation.docId}
+                            <strong>文档ID:</strong>
+                            {currentDiffOperation.docId}
+                        {:else if currentDiffOperation.operationType === 'insert'}
                             <strong>{t('aiSidebar.edit.insertBlock')}:</strong>
                             {currentDiffOperation.position === 'before'
                                 ? t('aiSidebar.edit.before')
@@ -12789,8 +12999,9 @@
                                             </svg>
                                         </button>
                                     </div>
-                                    <pre
-                                        class="ai-sidebar__diff-split-content">{currentDiffOperation.oldContent}</pre>
+                                    <div class="ai-sidebar__diff-split-content b3-typography">
+                                        {@html renderMarkdownForSplitDiff(currentDiffOperation.oldContent)}
+                                    </div>
                                 </div>
                                 <div class="ai-sidebar__diff-split-column">
                                     <div class="ai-sidebar__diff-split-header">
@@ -12808,8 +13019,9 @@
                                             </svg>
                                         </button>
                                     </div>
-                                    <pre
-                                        class="ai-sidebar__diff-split-content">{currentDiffOperation.newContent}</pre>
+                                    <div class="ai-sidebar__diff-split-content b3-typography">
+                                        {@html renderMarkdownForSplitDiff(currentDiffOperation.newContent)}
+                                    </div>
                                 </div>
                             </div>
                         {/if}
@@ -14935,6 +15147,13 @@
         }
     }
 
+    .ai-message__edit-operation-block-ids {
+        margin-bottom: 8px;
+        font-size: 12px;
+        color: var(--b3-theme-on-surface-light);
+        word-break: break-all;
+    }
+
     .ai-message__edit-operation-actions {
         display: flex;
         gap: 8px;
@@ -15110,11 +15329,8 @@
         margin: 0;
         padding: 12px;
         overflow: auto;
-        font-family: var(--b3-font-family-code);
         font-size: 13px;
         line-height: 1.6;
-        white-space: pre-wrap;
-        word-break: break-word;
         color: var(--b3-theme-on-surface);
     }
 

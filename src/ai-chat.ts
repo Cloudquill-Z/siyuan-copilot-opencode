@@ -35,6 +35,9 @@ export interface MessageContent {
 export interface EditOperation {
     operationType?: 'update' | 'insert'; // 操作类型：update=更新块，insert=插入块，默认为update
     blockId: string; // update时为要更新的块ID，insert时为参考块ID
+    docId?: string; // 汇总差异时对应文档ID
+    docTitle?: string; // 汇总差异时对应文档名/路径
+    affectedBlockIds?: string[]; // 本次回答中该文档涉及的块ID列表
     newContent: string;
     oldContent?: string; // kramdown格式的旧内容，用于实际应用编辑
     oldContentForDisplay?: string; // Markdown格式的旧内容，用于显示差异
