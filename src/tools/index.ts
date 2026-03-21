@@ -158,9 +158,7 @@ export interface ToolParameter {
     type: string;
     description: string;
     enum?: string[];
-    items?: {
-        type: string;
-    };
+    items?: ToolParameter;
     default?: any;
 }
 
@@ -1349,7 +1347,15 @@ siyuan_add_database_rows({
                 },
                 blocksValues: {
                     type: 'array',
-                    description: '二维数组，每个元素是一行的数据',
+                    description: '二维数组，每个元素是一行的数据，每行是一个数组，包含该行的单元格值对象',
+                    items: {
+                        type: 'array',
+                        description: '一行的数据数组',
+                        items: {
+                            type: 'object',
+                            description: '单元格值对象，根据列类型设置值，如 { "keyID": "列ID", "text": { "content": "文本内容" } }',
+                        },
+                    },
                 },
             },
             required: ['avID', 'blocksValues'],
@@ -1526,7 +1532,11 @@ siyuan_batch_set_database_cells({
                 },
                 values: {
                     type: 'array',
-                    description: '属性值数组',
+                    description: '属性值数组，每个元素包含 keyID、rowID 和 value',
+                    items: {
+                        type: 'object',
+                        description: '单元格值对象，如 { "keyID": "列ID", "rowID": "行ID", "value": { "text": { "content": "文本" } } }',
+                    },
                 },
             },
             required: ['avID', 'values'],
