@@ -179,6 +179,9 @@
         }
     },
     "aiSidebar": {
+        "webapp": {
+            "title": "Web App"
+        },
         "title": "Copilot",
         "unsaved": "Unsaved",
         "unsavedChanges": "Unsaved changes",

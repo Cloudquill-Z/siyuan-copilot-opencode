@@ -178,6 +178,9 @@
         }
     },
     "aiSidebar": {
+        "webapp": {
+            "title": "小程序"
+        },
         "title": "Copilot",
         "unsaved": "未保存",
         "unsavedChanges": "有未保存的更改",
