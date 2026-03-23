@@ -14,8 +14,9 @@
     export let isCustomProvider: boolean = false; // 是否为自定义平台
 
     // 内置平台列表（不需要自定义参数）
-    const builtInProviders = ['Achuan', 'gemini', 'deepseek', 'openai', 'moonshot', 'volcano'];
+    const builtInProviders = ['Achuan', 'gemini', 'deepseek', 'openai', 'moonshot', 'volcano', 'opencode'];
     $: isBuiltInProvider = builtInProviders.includes(providerId);
+    $: isOpenCodeProvider = providerId === 'opencode';
 
     const dispatch = createEventDispatcher();
 
@@ -145,17 +146,26 @@
 
     // 获取模型列表
     async function loadModels() {
-        if (!config.apiKey) {
-            pushErrMsg(t('aiSidebar.errors.noApiKey'));
-            return;
+        if (isOpenCodeProvider) {
+            // OpenCode: 使用 serverUrl
+            if (!config.serverUrl && !defaultApiUrl) {
+                pushErrMsg('请先设置 OpenCode Server 地址');
+                return;
+            }
+        } else {
+            // 其他平台: 需要 apiKey
+            if (!config.apiKey) {
+                pushErrMsg(t('aiSidebar.errors.noApiKey'));
+                return;
+            }
         }
 
         isLoadingModels = true;
         try {
             const models = await fetchModels(
                 providerId,
-                config.apiKey,
-                config.customApiUrl,
+                config.apiKey || '',
+                isOpenCodeProvider ? (config.serverUrl || defaultApiUrl || '') : config.customApiUrl,
                 config.advancedConfig
             );
             // 去重：使用 Map 以模型 ID 为键进行去重
@@ -182,9 +192,16 @@
 
     // 打开模型搜索弹窗
     function openModelSearchModal() {
-        if (!config.apiKey) {
-            pushErrMsg('请先设置 API Key');
-            return;
+        if (isOpenCodeProvider) {
+            if (!config.serverUrl && !defaultApiUrl) {
+                pushErrMsg('请先设置 OpenCode Server 地址');
+                return;
+            }
+        } else {
+            if (!config.apiKey) {
+                pushErrMsg('请先设置 API Key');
+                return;
+            }
         }
         loadModels();
     }
@@ -415,33 +432,54 @@
     </div>
 
     <div class="provider-config__section">
-        <div>
-            <div class="b3-label__text">
-                {t('platform.apiUrl')}
-            </div>
-            <input
-                class="b3-text-field fn__flex-1"
-                type="text"
-                style="width: 100%"
-                value={config.customApiUrl || defaultApiUrl || ''}
-                on:input={(e) => {
-                    config.customApiUrl = e.currentTarget.value;
-                    dispatch('change');
-                }}
-                placeholder={t('platform.apiUrlPlaceholder')}
-            />
-            {#if apiPreview}
-                <div class="api-preview">
-                    <div class="api-preview__url">{apiPreview}</div>
+        {#if isOpenCodeProvider}
+            <div>
+                <div class="b3-label__text">
+                    {t('platform.apiUrl')} (OpenCode Server)
                 </div>
-            {/if}
-            <div class="b3-label__text label-description">
-                {t('platform.apiUrlHint')}
+                <input
+                    class="b3-text-field fn__flex-1"
+                    type="text"
+                    style="width: 100%"
+                    value={config.serverUrl || defaultApiUrl || ''}
+                    on:input={(e) => {
+                        config.serverUrl = e.currentTarget.value;
+                        dispatch('change');
+                    }}
+                    placeholder="http://localhost:4096"
+                />
+                <div class="b3-label__text label-description">
+                    请确认 OpenCode MCP 服务已启动并运行
+                </div>
             </div>
-        </div>
+        {:else}
+            <div>
+                <div class="b3-label__text">
+                    {t('platform.apiUrl')}
+                </div>
+                <input
+                    class="b3-text-field fn__flex-1"
+                    type="text"
+                    style="width: 100%"
+                    value={config.customApiUrl || defaultApiUrl || ''}
+                    on:input={(e) => {
+                        config.customApiUrl = e.currentTarget.value;
+                        dispatch('change');
+                    }}
+                    placeholder={t('platform.apiUrlPlaceholder')}
+                />
+                {#if apiPreview}
+                    <div class="api-preview">
+                        <div class="api-preview__url">{apiPreview}</div>
+                    </div>
+                {/if}
+                <div class="b3-label__text label-description">
+                    {t('platform.apiUrlHint')}
+                </div>
+            </div>
 
-        <div>
-            <div class="b3-label__text">API Key</div>
+            <div>
+                <div class="b3-label__text">API Key</div>
             <div class="api-key-input-wrapper">
                 {#if showApiKey}
                     <input
@@ -470,6 +508,7 @@
                 </button>
             </div>
         </div>
+        {/if}
 
         {#if isCustomProvider}
             <div>
@@ -510,7 +549,7 @@
                 <button
                     class="b3-button b3-button--outline"
                     on:click={openModelSearchModal}
-                    disabled={isLoadingModels || !config.apiKey}
+                    disabled={isLoadingModels || (!isOpenCodeProvider && !config.apiKey)}
                 >
                     {isLoadingModels ? t('common.loading') : t('common.searchAndAdd')}
                 </button>

@@ -3,6 +3,7 @@
  * 支持多个AI平台的API调用和流式输出
  * 支持图片生成功能
  */
+import { chatOpenCode, fetchOpenCodeModels } from './providers/opencode-provider';
 
 export interface ToolCall {
     id: string;
@@ -143,7 +144,7 @@ export interface ModelInfo {
     provider: string;
 }
 
-export type AIProvider = 'gemini' | 'deepseek' | 'openai' | 'moonshot' | 'volcano' | 'Achuan' | 'custom';
+export type AIProvider = 'gemini' | 'deepseek' | 'openai' | 'moonshot' | 'volcano' | 'Achuan' | 'opencode' | 'custom';
 
 // 思考努力程度到比例的映射（用于计算 token 预算）
 export const EFFORT_RATIO: Record<ThinkingEffort, number> = {
@@ -333,6 +334,13 @@ const PROVIDER_CONFIGS: Record<AIProvider, ProviderConfig> = {
         apiKeyHeader: 'Authorization',
         websiteUrl: 'https://gpt.achuan-2.top/register?aff=ZndO'
     },
+    opencode: {
+        name: 'OpenCode',
+        baseUrl: 'http://localhost:4096',
+        modelsEndpoint: '/mcp',
+        chatEndpoint: '/mcp',
+        apiKeyHeader: 'Authorization'
+    },
     custom: {
         name: 'Custom',
         baseUrl: '',
@@ -397,6 +405,17 @@ export async function fetchModels(
     customApiUrl?: string,
     advancedConfig?: { customModelsUrl?: string; customChatUrl?: string }
 ): Promise<ModelInfo[]> {
+    if (provider === 'opencode') {
+        const models = await fetchOpenCodeModels({
+            serverUrl: (customApiUrl || '').trim() || 'http://localhost:4096'
+        });
+        return models.map(model => ({
+            id: model.id,
+            name: model.name,
+            provider: 'OpenCode'
+        }));
+    }
+
     const isBuiltIn = ['gemini', 'deepseek', 'openai', 'moonshot', 'volcano', 'Achuan'].includes(provider);
     const config = isBuiltIn ? PROVIDER_CONFIGS[provider as AIProvider] : PROVIDER_CONFIGS.custom;
 
@@ -563,26 +582,7 @@ async function chatOpenAIFormat(
 
         // 添加工具调用信息
         if (msg.tool_calls) {
-            const isGeminiLike = /gemini/i.test(options.model) || isSupportedThinkingGeminiModel(options.model);
-            formatted.tool_calls = msg.tool_calls.map((tc, index) => {
-                const functionCopied = { ...tc.function };
-                
-                // Google api requires thought_signature ONLY on the first parallel tool call
-                if (isGeminiLike && index === 0 && !functionCopied.thought_signature) {
-                    // 补充因历史错误或代理丢失造成的 thought_signature 缺失，避免 400/429 报错
-                    // 使用绕过验证的魔法值 skip_thought_signature_validator
-                    functionCopied.thought_signature = "skip_thought_signature_validator";
-                } else if (isGeminiLike && index > 0 && functionCopied.thought_signature) {
-                    // 并行调用的后续工具不能有签名，如果有则移除
-                    delete functionCopied.thought_signature;
-                }
-                
-                const tcPayload: any = { ...tc, function: functionCopied };
-                if (functionCopied.thought_signature) {
-                    tcPayload.extra_content = { google: { thought_signature: functionCopied.thought_signature } };
-                }
-                return tcPayload;
-            });
+            formatted.tool_calls = msg.tool_calls;
         }
 
         // 添加工具返回信息
@@ -607,18 +607,6 @@ async function chatOpenAIFormat(
     if (options.tools && options.tools.length > 0) {
         requestBody.tools = options.tools;
         requestBody.tool_choice = 'auto'; // 让模型自动决定是否调用工具
-    }
-
-    // OpenAI proxy 渠道转发 Gemini 的图片 modalities 设置
-    if (/(image|imagen)/i.test(options.model) && options.model.toLowerCase().includes('gemini')) {
-        if (!requestBody.extra_body) requestBody.extra_body = {};
-        if (!requestBody.extra_body.google) requestBody.extra_body.google = {};
-        requestBody.extra_body.google.responseModalities = ["TEXT", "IMAGE"]; // 默认图文并茂
-        
-        // 删除无用的外层参数
-        if (requestBody.generationConfig) {
-            delete requestBody.generationConfig;
-        }
     }
 
     // 检测是否是 Kimi K2.5 模型（通过模型ID判断）
@@ -783,96 +771,6 @@ async function chatOpenAIFormat(
 }
 
 /**
- * 转换消息格式 (Gemini 格式)
- */
-async function prepareGeminiContents(messages: Message[], isImageModel: boolean = false): Promise<any[]> {
-    const contents: any[] = [];
-    const msgs = messages.filter(msg => msg.role !== 'system');
-    
-    for (const msg of msgs) {
-        let role = msg.role === 'assistant' ? 'model' : 'user';
-        if (msg.role === 'tool') {
-            contents.push({
-                role: 'tool',
-                parts: [{
-                    functionResponse: {
-                        name: msg.name || '',
-                        response: { content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content) }
-                    }
-                }]
-            });
-            continue;
-        }
-
-        const parts: any[] = [];
-        const imagesToMoveToModel: any[] = [];
-
-        if (typeof msg.content === 'string') {
-            if (msg.content) parts.push({ text: msg.content });
-        } else {
-            for (const part of msg.content) {
-                if (part.type === 'text' && part.text) {
-                    parts.push({ text: part.text });
-                } else if (part.type === 'image_url' && part.image_url) {
-                    let base64Data = '';
-                    if (part.image_url.url.startsWith('data:')) {
-                        base64Data = part.image_url.url.replace(/^data:image\/\w+;base64,/, '');
-                    } else {
-                        base64Data = await imageUrlToBase64(part.image_url.url);
-                    }
-                    const mimeType = part.image_url.url.match(/^data:(image\/\w+);base64,/)?.[1] || 'image/jpeg';
-                    
-                    const imgPart = {
-                        inline_data: {
-                            mime_type: mimeType,
-                            data: base64Data,
-                        },
-                    };
-
-                    // 如果是在处理生图模型的追问生成，由于前端会把生图结果当做附件放在接下来的 user 问题里，
-                    // Gemini 生成图片接口不接受 user 发送图片作为输入，所以我们在组装时将它们移动合并到上一次的 model 语境下。
-                    if (isImageModel && role === 'user' && contents.length > 0 && contents[contents.length - 1].role === 'model') {
-                        imagesToMoveToModel.push(imgPart);
-                    } else {
-                        parts.push(imgPart);
-                    }
-                }
-            }
-        }
-
-        if (msg.tool_calls) {
-            for (const toolCall of msg.tool_calls) {
-                const thoughtSig = toolCall.function.thought_signature || '';
-                parts.push({ functionCall: {
-                    name: toolCall.function.name,
-                    args: JSON.parse(toolCall.function.arguments || '{}'),
-                    thought_signature: thoughtSig
-                }});
-            }
-        }
-
-        if (msg.role === 'assistant' && msg.generatedImages && msg.generatedImages.length > 0) {
-            msg.generatedImages.forEach(img => {
-                parts.push({ inline_data: { mime_type: img.mimeType, data: img.data } });
-            });
-        }
-
-        // Gemini 接口不允许 part 或 contents 数组为空对象结构，否则报错 "part must not be empty"
-        if (parts.length === 0) {
-            parts.push({ text: " " });
-        }
-
-        if (imagesToMoveToModel.length > 0 && role === 'user') {
-            contents[contents.length - 1].parts.push(...imagesToMoveToModel);
-        }
-
-        contents.push({ role, parts });
-    }
-    
-    return contents;
-}
-
-/**
  * 发送聊天请求 (Gemini 格式)
  */
 async function chatGeminiFormat(
@@ -884,8 +782,85 @@ async function chatGeminiFormat(
     const url = `${baseUrl}/v1beta/models/${model}:streamGenerateContent?key=${apiKey}&alt=sse`;
 
     // 转换消息格式
-    const contents = await prepareGeminiContents(options.messages);
+    const contents = await Promise.all(options.messages
+        .filter(msg => msg.role !== 'system')
+        .map(async msg => {
+            // 处理角色
+            let role = msg.role === 'assistant' ? 'model' : 'user';
+            if (msg.role === 'tool') {
+                role = 'tool'; // Gemini 原生支持 tool 角色
+            }
 
+            // 处理工具调用结果 (Gemini 格式: functionResponse)
+            if (msg.role === 'tool') {
+                return {
+                    role: 'tool',
+                    parts: [{
+                        functionResponse: {
+                            name: msg.name || '',
+                            response: {
+                                content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
+                            }
+                        }
+                    }]
+                };
+            }
+
+            // 处理多模态内容或工具调用信息
+            const parts: any[] = [];
+            if (typeof msg.content === 'string') {
+                if (msg.content) {
+                    parts.push({ text: msg.content });
+                }
+            } else {
+                for (const part of msg.content) {
+                    if (part.type === 'text' && part.text) {
+                        parts.push({ text: part.text });
+                    } else if (part.type === 'image_url' && part.image_url) {
+                        let base64Data = '';
+                        if (part.image_url.url.startsWith('data:')) {
+                            base64Data = part.image_url.url.replace(/^data:image\/\w+;base64,/, '');
+                        } else {
+                            base64Data = await imageUrlToBase64(part.image_url.url);
+                        }
+                        const mimeType = part.image_url.url.match(/^data:(image\/\w+);base64,/)?.[1] || 'image/jpeg';
+                        parts.push({
+                            inline_data: {
+                                mime_type: mimeType,
+                                data: base64Data,
+                            },
+                        });
+                    }
+                }
+            }
+
+            // 添加工具调用信息 (Gemini 格式: functionCall)
+            if (msg.tool_calls) {
+                for (const toolCall of msg.tool_calls) {
+                    parts.push({
+                        functionCall: {
+                            name: toolCall.function.name,
+                            args: JSON.parse(toolCall.function.arguments || '{}'),
+                            thought_signature: toolCall.function.thought_signature
+                        }
+                    });
+                }
+            }
+
+            // 如果是Assistant消息且有生成的图片，添加inline_data
+            if (msg.role === 'assistant' && msg.generatedImages && msg.generatedImages.length > 0) {
+                msg.generatedImages.forEach(img => {
+                    parts.push({
+                        inline_data: {
+                            mime_type: img.mimeType,
+                            data: img.data
+                        }
+                    });
+                });
+            }
+
+            return { role, parts };
+        }));
 
     const systemInstruction = options.messages.find(msg => msg.role === 'system');
 
@@ -1105,14 +1080,13 @@ async function handleStreamResponse(
                                 const currentCall = toolCalls.find(tc => (tc as any)._index === index && (!toolCallDelta.id || tc.id === toolCallDelta.id));
                                 
                                 if (!currentCall || (toolCallDelta.id && toolCallDelta.id !== currentCall.id)) {
-                                    const thoughtSig = toolCallDelta.function?.thought_signature || toolCallDelta.function?.thoughtSignature || (toolCallDelta as any).extra_content?.google?.thought_signature || '';
                                     const newCall: ToolCall = {
                                         id: toolCallDelta.id || `call_${Math.random().toString(36).substring(2, 9)}`,
                                         type: 'function',
                                         function: {
                                             name: toolCallDelta.function?.name || '',
                                             arguments: toolCallDelta.function?.arguments || '',
-                                            thought_signature: thoughtSig
+                                            thought_signature: toolCallDelta.function?.thought_signature
                                         }
                                     };
                                     (newCall as any)._index = index;
@@ -1128,9 +1102,8 @@ async function handleStreamResponse(
                                     if (toolCallDelta.function?.arguments) {
                                         currentCall.function.arguments += toolCallDelta.function.arguments;
                                     }
-                                    const incSig = toolCallDelta.function?.thought_signature || toolCallDelta.function?.thoughtSignature || (toolCallDelta as any).extra_content?.google?.thought_signature;
-                                    if (incSig !== undefined) {
-                                        currentCall.function.thought_signature = (currentCall.function.thought_signature || '') + incSig;
+                                    if (toolCallDelta.function?.thought_signature) {
+                                        currentCall.function.thought_signature = toolCallDelta.function.thought_signature;
                                     }
                                 }
                             }
@@ -1267,7 +1240,6 @@ async function handleGeminiStreamResponse(
 
                             // 处理工具调用
                             if (part.functionCall) {
-                                const thoughtSig = part.functionCall.thought_signature || part.functionCall.thoughtSignature || '';
                                 toolCalls.push({
                                     id: `call_${Math.random().toString(36).substring(2, 9)}`,
                                     type: 'function',
@@ -1276,7 +1248,7 @@ async function handleGeminiStreamResponse(
                                         arguments: typeof part.functionCall.args === 'string'
                                             ? part.functionCall.args
                                             : JSON.stringify(part.functionCall.args || {}),
-                                        thought_signature: thoughtSig
+                                        thought_signature: part.functionCall.thought_signature
                                     }
                                 });
                             }
@@ -1717,8 +1689,55 @@ export async function chat(
     provider: string,
     options: ChatOptions,
     customApiUrl?: string,
-    advancedConfig?: { customModelsUrl?: string; customChatUrl?: string }
+    advancedConfig?: { customModelsUrl?: string; customChatUrl?: string },
+    openCodeServerUrl?: string // OpenCode 专用：直接传入 serverUrl，避免依赖 customApiUrl
 ): Promise<void> {
+    if (provider === 'opencode') {
+        const userMessage = [...options.messages].reverse().find(msg => msg.role === 'user');
+        let prompt = '';
+        if (userMessage) {
+            if (typeof userMessage.content === 'string') {
+                prompt = userMessage.content;
+            } else {
+                prompt = userMessage.content
+                    .filter(part => part.type === 'text' && !!part.text)
+                    .map(part => part.text || '')
+                    .join('\n');
+            }
+        }
+
+        let modelInfo: { providerID: string; modelID: string } | undefined;
+        if (options.model.includes('/')) {
+            const parts = options.model.split('/');
+            const modelID = parts.pop() || '';
+            const providerID = parts.join('/');
+            if (providerID && modelID) {
+                modelInfo = { providerID, modelID };
+            }
+        }
+
+        const sessionIdFromBody = typeof options.customBody?.sessionId === 'string'
+            ? options.customBody.sessionId
+            : undefined;
+
+        await chatOpenCode(
+            {
+                prompt,
+                sessionId: sessionIdFromBody,
+                model: modelInfo,
+                onChunk: options.onChunk,
+                onComplete: options.onComplete,
+                onError: options.onError,
+                signal: options.signal
+            },
+            {
+                // 优先使用 openCodeServerUrl，否则 fallback 到 customApiUrl，最后 fallback 到默认
+                serverUrl: (openCodeServerUrl || customApiUrl || '').trim() || 'http://localhost:4096'
+            }
+        );
+        return;
+    }
+
     const isBuiltIn = ['gemini', 'deepseek', 'openai', 'moonshot', 'volcano', 'Achuan'].includes(provider);
     const config = isBuiltIn ? PROVIDER_CONFIGS[provider as AIProvider] : PROVIDER_CONFIGS.custom;
 
@@ -1745,94 +1764,12 @@ export async function chat(
         baseUrlForClaude = config.baseUrl;
     }
 
-    // 检测是否是 Gemini 图片生成模型
-    const isGeminiImageModel = options.model.toLowerCase().includes('gemini') && 
-        (options.model.includes('image-preview') || options.model.includes('image') || options.model.includes('imagen'));
-
-    // 如果是 Claude 模型，使用原生 API
+    // 检测是否是 Claude 模型，使用原生 API
     if (isClaudeModel(options.model)) {
         await chatClaudeFormat(baseUrlForClaude, options.apiKey, options);
-    } else if (isGeminiImageModel && provider === 'gemini') {
-        // 强制使用 Gemini 原生图片生成接口（支持多轮）
-        let customModalities = ["TEXT", "IMAGE"]; // 默认图文并茂
-
-        const imageUrl = `${baseUrlForGemini}/v1beta/models/${options.model}:generateContent`;
-        
-        let contents = [];
-        try {
-            contents = await prepareGeminiContents(options.messages, true);
-        } catch (e) {
-            console.error("Failed to prepare gemini contents", e);
-            const lastUserMessage = options.messages.filter(m => m.role === 'user').pop();
-            const prompt = lastUserMessage ? (typeof lastUserMessage.content === 'string' ? lastUserMessage.content : lastUserMessage.content.find(c => c.type === 'text')?.text || 'Draw an image') : 'Draw an image';
-            contents = [{ role: "user", parts: [{ text: prompt }] }];
-        }
-
-        const requestBody = {
-            contents,
-            generationConfig: {
-                responseModalities: customModalities
-            }
-        };
-
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${options.apiKey}`
-        };
-
-        try {
-            const response = await fetch(imageUrl, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify(requestBody),
-                signal: options.signal
-            });
-
-            if (!response.ok) {
-                throw new Error(`Gemini Image API failed: ${response.status} ${response.statusText}`);
-            }
-
-            const data = await response.json();
-            const generatedImages: GeneratedImageData[] = [];
-            let generatedText = '';
-
-            if (data.candidates && data.candidates[0]?.content?.parts) {
-                for (const part of data.candidates[0].content.parts) {
-                    if (part.text) {
-                        generatedText += part.text;
-                        options.onChunk?.(part.text);
-                    }
-                    const inlineData = part.inline_data || part.inlineData;
-                    if (inlineData) {
-                        generatedImages.push({
-                            mimeType: inlineData.mime_type || inlineData.mimeType || 'image/jpeg',
-                            data: inlineData.data
-                        });
-                    }
-                }
-            }
-
-            if (generatedImages.length > 0 && options.onImageGenerated) {
-                await options.onImageGenerated(generatedImages);
-            }
-            
-            // 发送完成信号，如果有文本则使用生出的文本，否则使用默认提示
-            await options.onComplete?.(generatedText || (customModalities.includes('TEXT') ? '' : '✨ Image generated successfully.'));
-        } catch (error) {
-            if ((error as Error).name === 'AbortError') {
-                options.onError?.(new Error('Request aborted'));
-            } else {
-                options.onError?.(error as Error);
-            }
-            throw error;
-        }
-    } else if (provider === 'gemini' || options.model.toLowerCase().includes('gemini')) {
-        // 对于所有其它名含 gemini 的模型（比如配在 Achean 下），为了保持原生特性，尽量走 gemini format
-        if (provider === 'gemini') {
-            await chatGeminiFormat(baseUrlForGemini, options.apiKey, options.model, options);
-        } else {
-            await chatOpenAIFormat(url, options.apiKey, options);
-        }
+    } else
+    if (provider === 'gemini') {
+        await chatGeminiFormat(baseUrlForGemini, options.apiKey, options.model, options);
     } else {
         await chatOpenAIFormat(url, options.apiKey, options);
     }
@@ -1898,7 +1835,7 @@ export interface ImageGenerationResult {
 
 /**
  * 图片生成 API 接口
- * 使用 /v1/image/generations 或原生接口
+ * 使用 /v1/image/generations 接口
  */
 export async function generateImage(
     provider: string,
@@ -1908,15 +1845,10 @@ export async function generateImage(
     const isBuiltIn = ['gemini', 'deepseek', 'openai', 'moonshot', 'volcano', 'Achuan'].includes(provider);
     const config = isBuiltIn ? PROVIDER_CONFIGS[provider as AIProvider] : PROVIDER_CONFIGS.custom;
 
-    const isGeminiPreview = provider === 'gemini' && (options.model.includes('image-preview') || options.model.includes('image'));
-
     // 构建图片生成 API 的 URL
     let baseUrl: string;
     if (customApiUrl) {
-        const { baseUrl: url } = getBaseUrlAndEndpoint(
-            customApiUrl, 
-            isGeminiPreview ? `/v1beta/models/${options.model}:generateContent` : '/v1/image/generations'
-        );
+        const { baseUrl: url } = getBaseUrlAndEndpoint(customApiUrl, '/v1/image/generations');
         baseUrl = url;
     } else {
         if (!isBuiltIn) {
@@ -1925,62 +1857,31 @@ export async function generateImage(
         baseUrl = config.baseUrl;
     }
 
-    let url: string;
-    let requestBody: any;
+    const url = `${baseUrl}/v1/image/generations`;
+
+    const requestBody: any = {
+        model: options.model,
+        prompt: options.prompt,
+        n: options.n || 1,
+        size: options.size || '1024x1024',
+    };
+
+    // 添加可选参数
+    if (options.quality) {
+        requestBody.quality = options.quality;
+    }
+    if (options.style) {
+        requestBody.style = options.style;
+    }
+    if (options.negativePrompt) {
+        // 某些平台支持 negative_prompt
+        requestBody.negative_prompt = options.negativePrompt;
+    }
+
     const headers: Record<string, string> = {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${options.apiKey}`
     };
-
-    if (isGeminiPreview) {
-        url = `${baseUrl}/v1beta/models/${options.model}:generateContent?key=${options.apiKey}`;
-        requestBody = {
-            contents: [
-                {
-                    role: "user",
-                    parts: [
-                        { text: options.prompt }
-                    ]
-                }
-            ],
-            generationConfig: {
-                responseModalities: ["IMAGE"]
-            }
-        };
-
-        // 处理图像配置
-        if (options.size) {
-            requestBody.generationConfig.imageConfig = {};
-            if (options.size.includes('512') || options.size === '0.5K') {
-                requestBody.generationConfig.imageConfig.imageSize = '512';
-            } else if (options.size === '2K' || options.size === '4K') {
-                requestBody.generationConfig.imageConfig.imageSize = options.size;
-            } else if (options.size.includes('1024')) {
-                requestBody.generationConfig.imageConfig.imageSize = '1K';
-            }
-            // aspectRatio 可以通过其它自定义字段扩展
-        }
-    } else {
-        url = `${baseUrl}/v1/image/generations`;
-        requestBody = {
-            model: options.model,
-            prompt: options.prompt,
-            n: options.n || 1,
-            size: options.size || '1024x1024',
-        };
-
-        if (options.quality) {
-            requestBody.quality = options.quality;
-        }
-        if (options.style) {
-            requestBody.style = options.style;
-        }
-        if (options.negativePrompt) {
-            requestBody.negative_prompt = options.negativePrompt;
-        }
-
-        headers['Authorization'] = `Bearer ${options.apiKey}`;
-    }
 
     try {
         const response = await fetch(url, {
@@ -2010,43 +1911,32 @@ export async function generateImage(
         }
 
         const data = await response.json();
+
+        // 处理响应数据
+        // OpenAI 格式: { data: [{ url: string, b64_json: string, revised_prompt: string }] }
+        // 某些平台可能返回不同格式
         let images: GeneratedImage[] = [];
 
-        if (isGeminiPreview) {
-            // 解析 Gemini 原生接口返回的图片
-            if (data.candidates && data.candidates[0]?.content?.parts) {
-                const parts = data.candidates[0].content.parts;
-                for (const part of parts) {
-                    const inlineData = part.inline_data || part.inlineData;
-                    if (inlineData) {
-                        images.push({
-                            b64_json: inlineData.data,
-                            revised_prompt: options.prompt
-                        });
-                    }
-                }
-            }
-        } else {
-            // 解析 OpenAI 格式
-            if (data.data && Array.isArray(data.data)) {
-                images = data.data.map((item: any) => ({
-                    url: item.url,
-                    b64_json: item.b64_json,
-                    revised_prompt: item.revised_prompt
-                }));
-            } else if (Array.isArray(data)) {
-                images = data.map((item: any) => ({
-                    url: item.url,
-                    b64_json: item.b64_json,
-                    revised_prompt: item.revised_prompt
-                }));
-            } else if (data.url || data.b64_json) {
-                images = [{
-                    url: data.url,
-                    b64_json: data.b64_json,
-                    revised_prompt: data.revised_prompt
-                }];
-            }
+        if (data.data && Array.isArray(data.data)) {
+            images = data.data.map((item: any) => ({
+                url: item.url,
+                b64_json: item.b64_json,
+                revised_prompt: item.revised_prompt
+            }));
+        } else if (Array.isArray(data)) {
+            // 某些平台可能直接返回数组
+            images = data.map((item: any) => ({
+                url: item.url,
+                b64_json: item.b64_json,
+                revised_prompt: item.revised_prompt
+            }));
+        } else if (data.url || data.b64_json) {
+            // 单个图片对象
+            images = [{
+                url: data.url,
+                b64_json: data.b64_json,
+                revised_prompt: data.revised_prompt
+            }];
         }
 
         return {
@@ -2081,11 +1971,7 @@ export function isImageGenerationSupported(_provider: string, modelId: string): 
         'kling',
         'cogview',
         'wanx',
-        'image-generation',
-        'image-preview',
-        'flash-image',
-        'pro-image',
-        'imagen'
+        'image-generation'
     ];
 
     const lowerModelId = modelId.toLowerCase();

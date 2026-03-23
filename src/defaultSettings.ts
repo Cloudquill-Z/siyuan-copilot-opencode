@@ -23,6 +23,7 @@ export interface ModelConfig {
 export interface ProviderConfig {
     apiKey: string;
     customApiUrl: string;
+    serverUrl?: string; // OpenCode 专用：MCP 服务器地址
     models: ModelConfig[];
     customWebsiteUrl?: string; // 自定义官网链接
     advancedConfig?: {
@@ -68,6 +69,13 @@ export const getDefaultSettings = () => ({
             apiKey: '',
             customApiUrl: '',
             models: []
+        },
+        opencode: {
+            serverUrl: 'http://localhost:4096',
+            models: [],
+        } as {
+            serverUrl: string;
+            models: ModelConfig[];
         },
         customProviders: [] as CustomProviderConfig[],
         disabledBuiltInProviders: [] as string[],

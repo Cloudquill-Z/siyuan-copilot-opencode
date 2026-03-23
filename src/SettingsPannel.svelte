@@ -35,6 +35,7 @@
         deepseek: t('platform.builtIn.deepseek'),
         moonshot: t('platform.builtIn.moonshot'),
         volcano: t('platform.builtIn.volcano'),
+        opencode: t('platform.builtIn.opencode'),
     };
 
     // 内置平台的默认 API 地址
@@ -45,6 +46,7 @@
         moonshot: 'https://api.moonshot.cn',
         openai: 'https://api.openai.com',
         volcano: 'https://ark.cn-beijing.volces.com',
+        opencode: 'http://localhost:4096',
     };
 
     // 内置平台的官网链接
@@ -55,6 +57,7 @@
         moonshot: 'https://platform.moonshot.cn/',
         openai: 'https://platform.openai.com/',
         volcano: 'https://console.volcengine.com/ark',
+        opencode: 'https://opencode.ai',
     };
 
     // 当前选中的平台ID
@@ -618,6 +621,7 @@
             'openai',
             'moonshot',
             'volcano',
+            'opencode',
         ];
         const disabledBuiltIn = settings.aiProviders.disabledBuiltInProviders || [];
         for (const platformId of builtInPlatformIds) {

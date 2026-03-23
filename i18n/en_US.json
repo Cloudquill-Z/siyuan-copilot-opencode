@@ -179,9 +179,6 @@
         }
     },
     "aiSidebar": {
-        "webapp": {
-            "title": "Web App"
-        },
         "title": "Copilot",
         "unsaved": "Unsaved",
         "unsavedChanges": "Unsaved changes",
@@ -252,8 +249,7 @@
             "rejectEdit": "Reject",
             "viewDiff": "View Diff",
             "applied": "Applied",
-            "rejected": "Rejected",
-            "openWindow": "Open in New Window"
+            "rejected": "Rejected"
         },
         "translate": {
             "title": "Translation",
@@ -487,7 +483,9 @@
             "openai": "OpenAI",
             "volcano": "Volcano Engine",
             "Achuan": "A API",
-            "v3Description": "Providing stable and reliable API direct connection relay services for OpenAI ChatGPT, Gemini, Claude, Deepseek, Grok, etc."
+            "v3Description": "Providing stable and reliable API direct connection relay services for OpenAI ChatGPT, Gemini, Claude, Deepseek, Grok, etc.",
+            "opencode": "OpenCode",
+            "opencodeDescription": "OpenCode local MCP server that aggregates multiple AI providers and models, no API Key required."
         },
         "select": "Please select platform",
         "selectHint": "Please select a platform to view or edit its configuration",
