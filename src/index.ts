@@ -30,10 +30,18 @@ import ChatDialog from "./components/ChatDialog.svelte";
 import { updateSettings, getSettings } from "./stores/settings";
 import { getModelCapabilities } from "./utils/modelCapabilities";
 import { matchHotKey, getCustomHotKey } from "./utils/hotkey";
+import {
+    WEBAPP_ICON_DIR,
+    LEGACY_WEBAPP_ICON_DIR,
+    getPluginDataPath,
+    getLegacyPluginDataPath,
+    getPluginFileBlob,
+    getSessionPath,
+    getWebAppIconPath
+} from "./pluginPaths";
 
 export const SETTINGS_FILE = "settings.json";
 const WEBVIEW_HISTORY_FILE = "webview-history.json";
-const WEBAPP_ICON_DIR = "/data/storage/petal/siyuan-plugin-copilot/webappIcon";
 const MAX_HISTORY_COUNT = 200;
 
 const AI_SIDEBAR_TYPE = "ai-chat-sidebar";
@@ -58,6 +66,67 @@ export default class PluginSample extends Plugin {
     private clickEditorTitleIconBindThis = this.clickEditorTitleIcon.bind(this);
     private openMenuLinkBindThis = this.openMenuLink.bind(this);
     private domainIconMap: Map<string, string> = new Map(); // 缓存域名与图标文件名的映射
+
+    private async copyLegacyFileIfNeeded(fileName: string) {
+        const targetPath = getPluginDataPath(fileName);
+        const existing = await getFileBlob(targetPath);
+        if (existing) return;
+
+        const legacyPath = getLegacyPluginDataPath(fileName);
+        const legacyBlob = await getFileBlob(legacyPath);
+        if (!legacyBlob) return;
+
+        await putFile(targetPath, false, legacyBlob);
+    }
+
+    private async migrateLegacyWebAppIcons() {
+        const legacyFiles = await readDir(LEGACY_WEBAPP_ICON_DIR);
+        if (!legacyFiles || !Array.isArray(legacyFiles) || legacyFiles.length === 0) return;
+
+        try {
+            await putFile(WEBAPP_ICON_DIR, true, new Blob([]));
+        } catch (e) {
+            // ignore
+        }
+
+        for (const file of legacyFiles) {
+            if (file.isDir) continue;
+
+            const newPath = `${WEBAPP_ICON_DIR}/${file.name}`;
+            const exists = await getFileBlob(newPath);
+            if (exists) continue;
+
+            const legacyBlob = await getFileBlob(`${LEGACY_WEBAPP_ICON_DIR}/${file.name}`);
+            if (!legacyBlob) continue;
+
+            await putFile(newPath, false, legacyBlob);
+        }
+    }
+
+    private async migrateLegacyPluginStorage() {
+        const dataFiles = [
+            SETTINGS_FILE,
+            WEBVIEW_HISTORY_FILE,
+            'chat-sessions.json',
+            'prompts.json',
+            'agent-tools-config.json',
+            'translate-history.json'
+        ];
+
+        for (const fileName of dataFiles) {
+            try {
+                await this.copyLegacyFileIfNeeded(fileName);
+            } catch (e) {
+                console.warn(`Failed to migrate legacy file ${fileName}:`, e);
+            }
+        }
+
+        try {
+            await this.migrateLegacyWebAppIcons();
+        } catch (e) {
+            console.warn('Failed to migrate legacy webapp icons:', e);
+        }
+    }
 
     /**
      * 加载 WebView 历史记录
@@ -328,9 +397,9 @@ export default class PluginSample extends Plugin {
                     // 但为了性能，我们假设 index.ts 加载后文件内容不变。
 
                     if (!this.domainIconMap.has(domain) || this.domainIconMap.get(domain) !== iconFilename) {
-                        const iconPath = `${WEBAPP_ICON_DIR}/${iconFilename}`;
+                        const iconPath = getWebAppIconPath(iconFilename);
                         try {
-                            const blob = await getFileBlob(iconPath);
+                            const blob = await getPluginFileBlob(iconPath);
                             if (blob) {
                                 // 检查是否是旧格式 (.icon 文本文件)
                                 if (iconFilename.endsWith('.icon')) {
@@ -421,6 +490,7 @@ export default class PluginSample extends Plugin {
         this.eventBus.on("click-editortitleicon", this.clickEditorTitleIconBindThis);
         // 注册链接右键菜单
         this.eventBus.on("open-menu-link", this.openMenuLinkBindThis);
+        await this.migrateLegacyPluginStorage();
 
 
 
@@ -1667,7 +1737,9 @@ export default class PluginSample extends Plugin {
             this.domainIconMap.clear();
             try {
                 // 读取 webappIcon 目录下的所有图标
-                const files = await readDir(WEBAPP_ICON_DIR);
+                const files =
+                    (await readDir(WEBAPP_ICON_DIR)) ||
+                    (await readDir(LEGACY_WEBAPP_ICON_DIR));
                 if (files && Array.isArray(files)) {
                     for (const file of files) {
                         if (file.isDir) continue;
@@ -1682,7 +1754,7 @@ export default class PluginSample extends Plugin {
                             this.domainIconMap.set(domain, file.name);
 
                             // 异步加载并注册，不阻塞主流程
-                            getFileBlob(`${WEBAPP_ICON_DIR}/${file.name}`).then(async (blob) => {
+                            getPluginFileBlob(getWebAppIconPath(file.name)).then(async (blob) => {
                                 if (blob) {
                                     // 对于图片文件，转换为 dataURL
                                     try {
@@ -2284,7 +2356,7 @@ export default class PluginSample extends Plugin {
                     );
 
                     // 保存完整内容到 individual 文件
-                    const path = `/data/storage/petal/siyuan-plugin-copilot/sessions/${session.id}.json`;
+                    const path = getSessionPath(session.id);
                     const content = JSON.stringify({ messages: processedMessages }, null, 2);
                     const blob = new Blob([content], { type: 'application/json' });
                     await putFile(path, false, blob);

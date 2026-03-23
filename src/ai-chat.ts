@@ -410,7 +410,7 @@ export async function fetchModels(
             serverUrl: (customApiUrl || '').trim() || 'http://localhost:4096'
         });
         return models.map(model => ({
-            id: model.id,
+            id: model.providerID ? `${model.providerID}/${model.id}` : model.id,
             name: model.name,
             provider: 'OpenCode'
         }));

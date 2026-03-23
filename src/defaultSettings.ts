@@ -198,7 +198,7 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
         id: string;
         name: string;
         url: string;
-        icon?: string; // icon 文件名（存储在 data/storage/petal/siyuan-plugin-copilot/webappIcon/ 下）
+        icon?: string; // icon 文件名（存储在 data/storage/petal/siyuan-copilot-opencode/webappIcon/ 下）
         createdAt: number;
         updatedAt: number;
     }>,

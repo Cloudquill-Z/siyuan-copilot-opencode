@@ -1,10 +1,10 @@
 {
-  "name": "plugin-sample-vite-svelte",
+  "name": "siyuan-copilot-opencode",
   "version": "0.3.6",
   "type": "module",
-  "description": "This is a sample plugin based on vite and svelte for Siyuan (https://b3log.org/siyuan)",
-  "repository": "",
-  "homepage": "",
+  "description": "SiYuan Copilot OpenCode plugin fork that adds OpenCode as an AI provider for SiYuan",
+  "repository": "https://github.com/zzl793780096-creator/siyuan-copilot-opencode",
+  "homepage": "https://github.com/zzl793780096-creator/siyuan-copilot-opencode",
   "author": "frostime",
   "license": "MIT",
   "scripts": {

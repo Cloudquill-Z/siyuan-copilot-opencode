@@ -1,6 +1,5 @@
 import { putFile, getFileBlob } from "../api";
-
-const ASSET_PATH = "/data/storage/petal/siyuan-plugin-copilot/assets";
+import { ASSET_DIR } from "../pluginPaths";
 
 /**
  * 计算数据的 SHA-256 哈希值
@@ -39,7 +38,7 @@ export async function saveAsset(data: Blob | ArrayBuffer, fileName: string): Pro
     // 如果还是没后缀，默认 png
     if (!ext || ext === 'image') ext = 'png';
 
-    const filePath = `${ASSET_PATH}/${hash}.${ext}`;
+    const filePath = `${ASSET_DIR}/${hash}.${ext}`;
 
     try {
         // 尝试检查文件是否已存在 (现在的 getFileBlob 更可靠，JSON 报错会返回 null)

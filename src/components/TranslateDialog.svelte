@@ -2,7 +2,8 @@
     import { createEventDispatcher } from 'svelte';
     import { platformUtils } from 'siyuan';
     import { chat, type Message } from '../ai-chat';
-    import { pushMsg, pushErrMsg, getFileBlob, putFile } from '../api';
+    import { pushMsg, pushErrMsg, putFile } from '../api';
+    import { TRANSLATE_DIR, getPluginFileBlob, getTranslatePath } from '../pluginPaths';
     import { t } from '../utils/i18n';
     import MultiModelSelector from './MultiModelSelector.svelte';
 
@@ -139,12 +140,12 @@
     async function saveTranslateItem(id: string, inputText: string, outputText: string) {
         try {
             try {
-                await putFile('/data/storage/petal/siyuan-plugin-copilot/translate', true, null);
+                await putFile(TRANSLATE_DIR, true, null);
             } catch (e) {
                 // 目录可能已存在
             }
 
-            const translatePath = `/data/storage/petal/siyuan-plugin-copilot/translate/${id}.json`;
+            const translatePath = getTranslatePath(id);
             const content = JSON.stringify({ inputText, outputText }, null, 2);
             const blob = new Blob([content], { type: 'application/json' });
             await putFile(translatePath, false, blob);
@@ -159,8 +160,8 @@
         id: string
     ): Promise<{ inputText: string; outputText: string } | null> {
         try {
-            const translatePath = `/data/storage/petal/siyuan-plugin-copilot/translate/${id}.json`;
-            const blob = await getFileBlob(translatePath);
+            const translatePath = getTranslatePath(id);
+            const blob = await getPluginFileBlob(translatePath);
             const text = await blob.text();
             return JSON.parse(text);
         } catch (error) {

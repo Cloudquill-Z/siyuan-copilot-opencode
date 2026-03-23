@@ -1,4 +1,6 @@
-SiYuan Notes AI Assistant Plugin, which enables rich functionalities such as Q&A and editing based on the content of SiYuan Notes.
+# SiYuan Copilot OpenCode
+
+SiYuan Copilot extension plugin that adds OpenCode as an AI provider for note-aware chat and editing in SiYuan.
 
 **Note**: Using this plugin requires you to prepare your own API keys from AI platforms. The plugin itself does not provide AI services. Please comply with the terms of use and privacy policies of each platform.
 

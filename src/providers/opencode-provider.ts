@@ -93,8 +93,9 @@ export async function fetchOpenCodeModels(config: OpenCodeProviderConfig): Promi
         const seen = new Set<string>();
 
         const addModel = (modelId: string, modelInfo: any, providerID: string) => {
-            if (!modelId || seen.has(modelId)) return;
-            seen.add(modelId);
+            const uniqueId = providerID ? `${providerID}/${modelId}` : modelId;
+            if (!modelId || seen.has(uniqueId)) return;
+            seen.add(uniqueId);
             models.push({
                 id: modelId,
                 name: modelInfo?.name || modelInfo?.displayName || modelId,

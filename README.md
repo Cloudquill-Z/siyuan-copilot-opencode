@@ -4,7 +4,7 @@
 
 > 思源笔记 Copilot 插件扩展，支持将 **OpenCode** 作为 AI Provider 调用
 
-[![GitHub](https://img.shields.io/badge/GitHub-zzl793780096--creator/siyuan--copilot--opencode-green.svg)](https://github.com/zzl793780096-creator/siyyuan-copilot-opencode)
+[![GitHub](https://img.shields.io/badge/GitHub-zzl793780096--creator/siyuan--copilot--opencode-green.svg)](https://github.com/zzl793780096-creator/siyuan-copilot-opencode)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ---
@@ -86,7 +86,7 @@ npm run build
 
 ## ⚙️ 配置
 
-1. 在思源笔记中打开 **集市 → 插件**，启用 **SiYuan Copilot**
+1. 在思源笔记中打开 **集市 → 插件**，启用 **SiYuan Copilot OpenCode**
 2. 打开 Copilot 设置 → 选择 Provider → **OpenCode**
 3. 确认 Server 地址为 `http://localhost:4096`（默认）
 4. 保存后即可开始使用

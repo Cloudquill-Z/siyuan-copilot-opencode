@@ -1,7 +1,7 @@
 {
-  "name": "siyuan-plugin-copilot",
+  "name": "siyuan-copilot-opencode",
   "author": "Achuan-2",
-  "url": "https://github.com/Achuan-2/siyuan-plugin-copilot",
+  "url": "https://github.com/zzl793780096-creator/siyuan-copilot-opencode",
   "version": "2.3.5",
   "minAppVersion": "3.6.0",
   "backends": [
@@ -12,12 +12,12 @@
   ],
   "disabledInPublish": true,
   "displayName": {
-    "default": "SiYuan Copilot",
-    "zh_CN": "SiYuan Copilot"
+    "default": "SiYuan Copilot OpenCode",
+    "zh_CN": "SiYuan Copilot OpenCode"
   },
   "description": {
-    "default": "SiYuan AI Assistant, supports dragging blocks and tabs to get note context, enabling Q&A and editing based on SiYuan note content",
-    "zh_CN": "思源笔记 AI 助手,支持拖动块、页签获取笔记上下文，实现基于思源笔记内容进行问答和编辑"
+    "default": "SiYuan Copilot extension that adds OpenCode as an AI provider for note-aware chat and editing",
+    "zh_CN": "为 SiYuan Copilot 增加 OpenCode Provider 的扩展插件，支持基于笔记上下文进行对话与编辑"
   },
   "readme": {
     "default": "README_en_US.md",

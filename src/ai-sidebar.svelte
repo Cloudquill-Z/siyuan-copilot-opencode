@@ -34,6 +34,14 @@
     } from './api';
     import { saveAsset, loadAsset, base64ToBlob, readAssetAsText } from './utils/assets';
     import {
+        getPluginFileBlob,
+        getSessionPath,
+        getTranslatePath,
+        getWebAppIconPath,
+        isPluginAssetPath,
+        getLegacySessionPath,
+    } from './pluginPaths';
+    import {
         parseMultipleWebPages,
         fetchWithWebView,
         parseWebPageToMarkdown,
@@ -269,7 +277,7 @@
         const textContent = typeof content === 'string' ? content : getMessageText(content);
 
         // 检查是否包含 assets 路径
-        if (!textContent.includes('/data/storage/petal/siyuan-plugin-copilot/assets/')) {
+        if (!isPluginAssetPath(textContent)) {
             return formatMessage(textContent);
         }
 
@@ -430,8 +438,8 @@
         id: string
     ): Promise<{ inputText: string; outputText: string } | null> {
         try {
-            const translatePath = `/data/storage/petal/siyuan-plugin-copilot/translate/${id}.json`;
-            const blob = await getFileBlob(translatePath);
+            const translatePath = getTranslatePath(id);
+            const blob = await getPluginFileBlob(translatePath);
             const text = await blob.text();
             return JSON.parse(text);
         } catch (error) {
@@ -540,7 +548,7 @@
             return icon;
         }
         // 兼容旧的文件名格式
-        return `/data/storage/petal/siyuan-plugin-copilot/webappIcon/${icon}`;
+        return getWebAppIconPath(icon);
     }
 
     // 直接打开小程序
@@ -647,7 +655,7 @@
         }
 
         const { providerConfig, modelConfig } = config;
-        if (!providerConfig || !providerConfig.apiKey) {
+        if (!providerConfig || (providerRequiresApiKey(response.provider) && !providerConfig.apiKey)) {
             pushErrMsg(t('aiSidebar.errors.noApiKey'));
             return;
         }
@@ -988,7 +996,7 @@
         }
 
         const { providerConfig, modelConfig } = config;
-        if (!providerConfig || !providerConfig.apiKey) {
+        if (!providerConfig || (providerRequiresApiKey(response.provider) && !providerConfig.apiKey)) {
             pushErrMsg(t('aiSidebar.errors.noApiKey'));
             return;
         }
@@ -2502,6 +2510,10 @@
         return { providerConfig, modelConfig };
     }
 
+    function providerRequiresApiKey(provider: string) {
+        return provider !== 'opencode';
+    }
+
     // 多模型发送消息
     async function sendMultiModelMessage() {
         // 保存用户输入和附件
@@ -2670,7 +2682,7 @@
             if (!config) return;
 
             const { providerConfig, modelConfig } = config;
-            if (!providerConfig.apiKey) return;
+            if (providerRequiresApiKey(model.provider) && !providerConfig.apiKey) return;
 
             // 解析自定义参数
             let customBody = {};
@@ -3287,7 +3299,7 @@
                             const url = match[1];
                             // 处理 assets 路径的图片
                             if (
-                                url.startsWith('/data/storage/petal/siyuan-plugin-copilot/assets/')
+                                isPluginAssetPath(url)
                             ) {
                                 try {
                                     const blobUrl = await loadAsset(url);
@@ -3667,7 +3679,7 @@
         }
 
         const { providerConfig, modelConfig } = config;
-        if (!providerConfig.apiKey) {
+        if (providerRequiresApiKey(settings.autoRenameProvider) && !providerConfig.apiKey) {
             console.log('Auto-rename model API key not configured');
             return;
         }
@@ -3767,7 +3779,7 @@
             return;
         }
 
-        if (!providerConfig.apiKey) {
+        if (providerRequiresApiKey(currentProvider) && !providerConfig.apiKey) {
             pushErrMsg(t('aiSidebar.errors.noApiKey'));
             return;
         }
@@ -4119,7 +4131,7 @@
                             const url = match[1];
                             // 处理 assets 路径的图片
                             if (
-                                url.startsWith('/data/storage/petal/siyuan-plugin-copilot/assets/')
+                                isPluginAssetPath(url)
                             ) {
                                 try {
                                     const blobUrl = await loadAsset(url);
@@ -5346,7 +5358,7 @@
     async function replaceAssetPathsWithBlob(content: string): Promise<string> {
         // 匹配 Markdown 图片语法中的 assets 路径
         const assetImageRegex =
-            /!\[([^\]]*)\]\((\/data\/storage\/petal\/siyuan-plugin-copilot\/assets\/[^)]+)\)/g;
+            /!\[([^\]]*)\]\((\/data\/storage\/petal\/(?:siyuan-copilot-opencode|siyuan-plugin-copilot)\/assets\/[^)]+)\)/g;
         const matches = Array.from(content.matchAll(assetImageRegex));
 
         if (matches.length === 0) {
@@ -7248,7 +7260,7 @@
                     }));
 
                     // 3. 保存完整内容到独立文件
-                    const sessionPath = `/data/storage/petal/siyuan-plugin-copilot/sessions/${currentSessionId}.json`;
+                    const sessionPath = getSessionPath(currentSessionId);
                     const sessionContent = JSON.stringify({ messages: messagesToSave }, null, 2);
                     const sessionBlob = new Blob([sessionContent], { type: 'application/json' });
                     await putFile(sessionPath, false, sessionBlob);
@@ -7280,7 +7292,7 @@
                             data: '',
                         })),
                     }));
-                    const sessionPath = `/data/storage/petal/siyuan-plugin-copilot/sessions/${currentSessionId}.json`;
+                    const sessionPath = getSessionPath(currentSessionId);
                     const sessionContent = JSON.stringify({ messages: messagesToSave }, null, 2);
                     const sessionBlob = new Blob([sessionContent], { type: 'application/json' });
                     await putFile(sessionPath, false, sessionBlob);
@@ -7314,7 +7326,7 @@
                         data: '',
                     })),
                 }));
-                const sessionPath = `/data/storage/petal/siyuan-plugin-copilot/sessions/${newSession.id}.json`;
+                const sessionPath = getSessionPath(newSession.id);
                 const sessionContent = JSON.stringify({ messages: messagesToSave }, null, 2);
                 const sessionBlob = new Blob([sessionContent], { type: 'application/json' });
                 await putFile(sessionPath, false, sessionBlob);
@@ -7401,8 +7413,8 @@
                 // 加载完整内容 (使用 getFileBlob 因为 saveData 路径不一致，或者由于前缀问题)
                 // 或者继续使用 loadData 但它是相对的。
                 // 如果我们用 putFile 存了，我们也应该用对应的 read 方式。
-                const path = `/data/storage/petal/siyuan-plugin-copilot/sessions/${sessionId}.json`;
-                const blob = await getFileBlob(path);
+                const path = getSessionPath(sessionId);
+                const blob = await getPluginFileBlob(path);
                 if (!blob) throw new Error('File not found');
                 const text = await blob.text();
                 const sessionData = JSON.parse(text);
@@ -7725,9 +7737,8 @@
 
                 // 删除独立会话文件 (SiYuan removeFile 路径相对于 workspace root)
                 try {
-                    await removeFile(
-                        `/data/storage/petal/siyuan-plugin-copilot/sessions/${sessionId}.json`
-                    );
+                    await removeFile(getSessionPath(sessionId));
+                    await removeFile(getLegacySessionPath(sessionId));
                 } catch (e) {
                     // 忽略错误
                 }
@@ -7760,9 +7771,8 @@
                 // 批量删除独立会话文件
                 for (const id of sessionIds) {
                     try {
-                        await removeFile(
-                            `/data/storage/petal/siyuan-plugin-copilot/sessions/${id}.json`
-                        );
+                        await removeFile(getSessionPath(id));
+                        await removeFile(getLegacySessionPath(id));
                     } catch (e) {
                         // 忽略错误
                     }
@@ -7782,8 +7792,8 @@
     async function handleSaveSessionToNote(sessionId: string) {
         try {
             // 加载会话消息
-            const path = `/data/storage/petal/siyuan-plugin-copilot/sessions/${sessionId}.json`;
-            const blob = await getFileBlob(path);
+            const path = getSessionPath(sessionId);
+            const blob = await getPluginFileBlob(path);
             if (!blob) {
                 pushErrMsg('会话文件不存在');
                 return;
@@ -9419,7 +9429,7 @@
                             const url = match[1];
                             // 处理 assets 路径的图片
                             if (
-                                url.startsWith('/data/storage/petal/siyuan-plugin-copilot/assets/')
+                                isPluginAssetPath(url)
                             ) {
                                 try {
                                     const blobUrl = await loadAsset(url);

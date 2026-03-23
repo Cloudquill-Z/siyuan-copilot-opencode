@@ -7,6 +7,7 @@
     import { confirm } from 'siyuan';
     import ProviderConfigPanel from './components/ProviderConfigPanel.svelte';
     import type { CustomProviderConfig } from './defaultSettings';
+    import { PLUGIN_ID } from './pluginPaths';
     export let plugin;
 
     // 使用动态默认设置
@@ -558,7 +559,7 @@
                         <p style="margin-top:12px;">累积赞赏50元的朋友如果想加我微信和进粉丝交流群，可以在赞赏的时候备注微信号，或者发邮件到<a href="mailto:achuan-2@outlook.com">achuan-2@outlook.com</a>来进行好友申请</p>
                         
                         <div style="margin-top:12px;">
-                        <img src="plugins/siyuan-plugin-copilot/assets/donate.png" alt="donate" style="max-width:260px; height:auto; border:1px solid var(--b3-border-color);"/>
+                        <img src={"plugins/" + PLUGIN_ID + "/assets/donate.png"} alt="donate" style="max-width:260px; height:auto; border:1px solid var(--b3-border-color);"/>
                         </div>
                         <p style="margin-top:12px;">也欢迎大家使用我的<a href="https://gpt.achuan-2.top/register?aff=ZndO">AI API中转站</a>，提供Openai ChatGPT、Gemini、Claude、Deepseek、Grok等API直连中转服务，只要用户注册我就有收益</p>
                     `,
