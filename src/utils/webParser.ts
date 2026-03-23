@@ -4,6 +4,7 @@
  */
 
 import { Readability } from '@mozilla/readability';
+import { WEBVIEW_FETCH_PARTITION } from "../pluginNamespace";
 
 /**
  * 清理 Markdown 中的多余空白行
@@ -528,7 +529,7 @@ export async function parseMultipleWebPages(
  */
 export async function fetchWithWebView(url: string): Promise<{ success: boolean; title?: string; markdown?: string; error?: string }> {
     return new Promise((resolve) => {
-        const partitionName = 'get_siyuan_skillst:siyuan-copilot-webapp-shared';
+        const partitionName = WEBVIEW_FETCH_PARTITION;
         // 创建 webview 元素，使用 any 类型绕过类型检查
         const webview = document.createElement('webview') as any;
         

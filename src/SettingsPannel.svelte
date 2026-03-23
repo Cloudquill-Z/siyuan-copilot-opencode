@@ -3,6 +3,7 @@
     import SettingPanel from '@/libs/components/setting-panel.svelte';
     import { t } from './utils/i18n';
     import { getDefaultSettings } from './defaultSettings';
+    import { normalizeSettings } from './settingsSchema';
     import { pushMsg, pushErrMsg, lsNotebooks, getBlockByID } from './api';
     import { confirm } from 'siyuan';
     import ProviderConfigPanel from './components/ProviderConfigPanel.svelte';
@@ -596,7 +597,7 @@
 
     async function runload() {
         const loadedSettings = await plugin.loadSettings();
-        settings = { ...loadedSettings };
+        settings = normalizeSettings(loadedSettings);
 
         // 确保 aiProviders 存在
         if (!settings.aiProviders) {
@@ -607,6 +608,7 @@
                 moonshot: { apiKey: '', customApiUrl: '', models: [] },
                 volcano: { apiKey: '', customApiUrl: '', models: [] },
                 Achuan: { apiKey: '', customApiUrl: '', models: [] },
+                opencode: { serverUrl: 'http://localhost:4096', models: [] },
                 customProviders: [],
                 disabledBuiltInProviders: [],
                 providerOrder: [],
@@ -627,7 +629,10 @@
         const disabledBuiltIn = settings.aiProviders.disabledBuiltInProviders || [];
         for (const platformId of builtInPlatformIds) {
             if (!settings.aiProviders[platformId] && !disabledBuiltIn.includes(platformId)) {
-                settings.aiProviders[platformId] = { apiKey: '', customApiUrl: '', models: [] };
+                settings.aiProviders[platformId] =
+                    platformId === 'opencode'
+                        ? { serverUrl: 'http://localhost:4096', models: [] }
+                        : { apiKey: '', customApiUrl: '', models: [] };
             }
         }
 

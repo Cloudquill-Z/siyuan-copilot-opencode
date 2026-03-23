@@ -44,6 +44,7 @@ import { getActiveEditor } from 'siyuan';
 import { parseWebPageToMarkdown, fetchWithWebView } from '../utils/webParser';
 import { settingsStore } from '../stores/settings';
 import { get } from 'svelte/store';
+import { TEMP_DIR_NAME } from '../pluginNamespace';
 
 /**
  * 获取当前激活的编辑器 Protyle 实例
@@ -4175,7 +4176,7 @@ export async function run_python(code: string, pythonPath?: string): Promise<str
         const pythonCmd = pythonPath && pythonPath.trim() ? pythonPath.trim() : 'python';
 
         // 创建临时目录
-        const tempDir = path.join(os.tmpdir(), 'siyuan_copilot');
+        const tempDir = path.join(os.tmpdir(), TEMP_DIR_NAME);
         if (!fs.existsSync(tempDir)) {
             fs.mkdirSync(tempDir, { recursive: true });
         }

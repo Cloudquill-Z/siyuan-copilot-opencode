@@ -1,6 +1,6 @@
-# SiYuan Copilot OpenCode
+# SiYuan OpenCode
 
-SiYuan Copilot extension plugin that adds OpenCode as an AI provider for note-aware chat and editing in SiYuan.
+Independent SiYuan OpenCode plugin for note-aware chat, tools, and local OpenCode workflows.
 
 **Note**: Using this plugin requires you to prepare your own API keys from AI platforms. The plugin itself does not provide AI services. Please comply with the terms of use and privacy policies of each platform.
 

@@ -24,6 +24,7 @@ import "@/index.scss";
 
 import SettingPanel from "./SettingsPannel.svelte";
 import { getDefaultSettings } from "./defaultSettings";
+import { normalizeSettings } from "./settingsSchema";
 import { setPluginInstance, t, getCurrentLanguage } from "./utils/i18n";
 import AISidebar from "./ai-sidebar.svelte";
 import ChatDialog from "./components/ChatDialog.svelte";
@@ -32,21 +33,29 @@ import { getModelCapabilities } from "./utils/modelCapabilities";
 import { matchHotKey, getCustomHotKey } from "./utils/hotkey";
 import {
     WEBAPP_ICON_DIR,
-    LEGACY_WEBAPP_ICON_DIR,
-    getPluginDataPath,
-    getLegacyPluginDataPath,
-    getPluginFileBlob,
     getSessionPath,
     getWebAppIconPath
 } from "./pluginPaths";
+import {
+    AI_SIDEBAR_TYPE,
+    AI_TAB_TYPE,
+    MAIN_ICON_ID,
+    OPENCODE_SESSION_TITLE,
+    PLUGIN_BRAND_NAME,
+    PLUGIN_DISPLAY_NAME,
+    SUMMARY_EVENT,
+    WEBAPP_ICON_ID,
+    WEBAPP_TAB_TYPE,
+    WEBVIEW_HOTKEY_PREFIX,
+    WEBVIEW_INJECTED_FLAG,
+    WEBVIEW_LINK_PREFIX,
+    WEBVIEW_PARTITION,
+    getWebAppIconSymbolId,
+} from "./pluginNamespace";
 
 export const SETTINGS_FILE = "settings.json";
 const WEBVIEW_HISTORY_FILE = "webview-history.json";
 const MAX_HISTORY_COUNT = 200;
-
-const AI_SIDEBAR_TYPE = "ai-chat-sidebar";
-export const AI_TAB_TYPE = "ai-chat-tab";
-export const WEBAPP_TAB_TYPE = "copilot-webapp";
 
 interface WebViewHistory {
     url: string;
@@ -66,67 +75,6 @@ export default class PluginSample extends Plugin {
     private clickEditorTitleIconBindThis = this.clickEditorTitleIcon.bind(this);
     private openMenuLinkBindThis = this.openMenuLink.bind(this);
     private domainIconMap: Map<string, string> = new Map(); // 缓存域名与图标文件名的映射
-
-    private async copyLegacyFileIfNeeded(fileName: string) {
-        const targetPath = getPluginDataPath(fileName);
-        const existing = await getFileBlob(targetPath);
-        if (existing) return;
-
-        const legacyPath = getLegacyPluginDataPath(fileName);
-        const legacyBlob = await getFileBlob(legacyPath);
-        if (!legacyBlob) return;
-
-        await putFile(targetPath, false, legacyBlob);
-    }
-
-    private async migrateLegacyWebAppIcons() {
-        const legacyFiles = await readDir(LEGACY_WEBAPP_ICON_DIR);
-        if (!legacyFiles || !Array.isArray(legacyFiles) || legacyFiles.length === 0) return;
-
-        try {
-            await putFile(WEBAPP_ICON_DIR, true, new Blob([]));
-        } catch (e) {
-            // ignore
-        }
-
-        for (const file of legacyFiles) {
-            if (file.isDir) continue;
-
-            const newPath = `${WEBAPP_ICON_DIR}/${file.name}`;
-            const exists = await getFileBlob(newPath);
-            if (exists) continue;
-
-            const legacyBlob = await getFileBlob(`${LEGACY_WEBAPP_ICON_DIR}/${file.name}`);
-            if (!legacyBlob) continue;
-
-            await putFile(newPath, false, legacyBlob);
-        }
-    }
-
-    private async migrateLegacyPluginStorage() {
-        const dataFiles = [
-            SETTINGS_FILE,
-            WEBVIEW_HISTORY_FILE,
-            'chat-sessions.json',
-            'prompts.json',
-            'agent-tools-config.json',
-            'translate-history.json'
-        ];
-
-        for (const fileName of dataFiles) {
-            try {
-                await this.copyLegacyFileIfNeeded(fileName);
-            } catch (e) {
-                console.warn(`Failed to migrate legacy file ${fileName}:`, e);
-            }
-        }
-
-        try {
-            await this.migrateLegacyWebAppIcons();
-        } catch (e) {
-            console.warn('Failed to migrate legacy webapp icons:', e);
-        }
-    }
 
     /**
      * 加载 WebView 历史记录
@@ -229,7 +177,7 @@ export default class PluginSample extends Plugin {
                 return;
             }
 
-            const iconId = `iconWebApp_${appId}`;
+            const iconId = getWebAppIconSymbolId(appId);
 
             // 从base64中提取图片数据
             const base64Data = iconBase64;
@@ -251,7 +199,7 @@ export default class PluginSample extends Plugin {
      * 获取小程序的图标ID
      */
     getWebAppIconId(appId: string): string {
-        return `iconWebApp_${appId}`;
+        return getWebAppIconSymbolId(appId);
     }
 
     // 将 Blob 转为 data URL
@@ -379,7 +327,7 @@ export default class PluginSample extends Plugin {
     private async getOrCreateIconForDomain(url: string): Promise<string> {
         try {
             const domain = this.getDomainFromUrl(url);
-            if (!domain) return 'iconCopilotWebApp';
+            if (!domain) return WEBAPP_ICON_ID;
 
             // 优先检查是否有已配置的 WebApp 使用此域名
             // 这样用户自定义的图标优先级最高
@@ -399,7 +347,7 @@ export default class PluginSample extends Plugin {
                     if (!this.domainIconMap.has(domain) || this.domainIconMap.get(domain) !== iconFilename) {
                         const iconPath = getWebAppIconPath(iconFilename);
                         try {
-                            const blob = await getPluginFileBlob(iconPath);
+                            const blob = await getFileBlob(iconPath);
                             if (blob) {
                                 // 检查是否是旧格式 (.icon 文本文件)
                                 if (iconFilename.endsWith('.icon')) {
@@ -476,7 +424,7 @@ export default class PluginSample extends Plugin {
             console.warn('getOrCreateIconForDomain 出错:', e);
         }
 
-        return 'iconCopilotWebApp';
+        return WEBAPP_ICON_ID;
     }
 
     async onload() {
@@ -490,7 +438,6 @@ export default class PluginSample extends Plugin {
         this.eventBus.on("click-editortitleicon", this.clickEditorTitleIconBindThis);
         // 注册链接右键菜单
         this.eventBus.on("open-menu-link", this.openMenuLinkBindThis);
-        await this.migrateLegacyPluginStorage();
 
 
 
@@ -500,7 +447,7 @@ export default class PluginSample extends Plugin {
         // 加载设置
         await this.loadSettings();
         this.addIcons(`
-    <symbol id="iconCopilot" viewBox="0 0 1024 1024">
+    <symbol id="${MAIN_ICON_ID}" viewBox="0 0 1024 1024">
     <path d="M369.579 617.984a42.71 42.71 0 1 1 85.461 0v85.205a42.71 42.71 0 1 1-85.461 0v-85.205z m284.8 0a42.71 42.71 0 1 0-85.462 0v85.205a42.71 42.71 0 1 0 85.462 0v-85.205zM511.957 171.861c-36.053-52.01-110.848-55.893-168.32-50.688-65.834 6.571-121.301 29.227-152.49 62.464-54.102 59.136-56.576 183.083-30.507 251.307-2.603 11.69-5.12 23.51-6.912 36.053C105.515 483.67 56.32 551.98 56.32 600.832v92.245c0 25.6 11.947 48.982 33.067 64.939 120.49 89.515 270.677 158.89 422.613 158.89 151.893 0 302.08-69.375 422.57-158.89a80.64 80.64 0 0 0 33.067-64.896v-92.288c0-48.853-49.194-117.163-97.408-129.835-1.792-12.544-4.266-24.32-6.912-36.01 26.07-68.267 23.552-192.214-30.506-251.307-31.19-33.28-86.614-55.893-152.491-62.507-57.472-5.162-132.267-1.28-168.363 50.688z m284.8 574.294c-65.493 36.437-174.293 85.333-284.8 85.333S292.693 782.592 227.2 746.155V498.73c105.685 40.96 227.285 19.84 284.715-75.008H512c57.43 94.848 179.03 115.925 284.715 75.008v247.381z m-341.76-454.827c0 67.67-20.48 141.312-113.92 141.312s-111.189-22.357-111.189-85.205c0-99.67 15.19-142.336 141.483-142.336 72.96 0 83.626 23.466 83.626 86.272z m113.92 0c0-62.805 10.667-86.187 83.67-86.187 126.293 0 141.482 42.667 141.482 142.294 0 62.848-17.792 85.205-111.232 85.205s-113.92-73.643-113.92-141.27z" p-id="5384"></path>
     </symbol>
     `);
@@ -515,7 +462,7 @@ export default class PluginSample extends Plugin {
     </symbol>
     `);
         this.addIcons(`
-    <symbol id="iconCopilotWebApp" viewBox="0 0 1024 1024">
+    <symbol id="${WEBAPP_ICON_ID}" viewBox="0 0 1024 1024">
 <path d="M878.159424 565.40635l-327.396585 0c-11.307533 0-20.466124 9.168824-20.466124 20.466124l0 327.396585c0 11.307533 9.15859 20.466124 20.466124 20.466124l327.396585 0c11.2973 0 20.466124-9.15859 20.466124-20.466124l0-327.396585C898.625548 574.575174 889.456724 565.40635 878.159424 565.40635zM857.6933 892.802936l-286.464337 0 0-286.464337 286.464337 0L857.6933 892.802936z" p-id="7151"></path><path d="M430.606225 565.40635l-327.396585 0c-11.2973 0-20.466124 9.168824-20.466124 20.466124l0 327.396585c0 11.307533 9.168824 20.466124 20.466124 20.466124l327.396585 0c11.307533 0 20.466124-9.15859 20.466124-20.466124l0-327.396585C451.072349 574.575174 441.913758 565.40635 430.606225 565.40635zM410.140101 892.802936l-286.464337 0 0-286.464337 286.464337 0L410.140101 892.802936z" p-id="7152"></path><path d="M430.606225 115.601878l-327.396585 0c-11.2973 0-20.466124 9.15859-20.466124 20.466124l0 327.386352c0 11.307533 9.168824 20.466124 20.466124 20.466124l327.396585 0c11.307533 0 20.466124-9.15859 20.466124-20.466124l0-327.386352C451.072349 124.760468 441.913758 115.601878 430.606225 115.601878zM410.140101 442.98823l-286.464337 0 0-286.454104 286.464337 0L410.140101 442.98823z" p-id="7153"></path><path d="M965.529307 277.744745l-214.433814-214.433814c-3.837398-3.837398-9.046027-5.996574-14.46955-5.996574-5.433756 0-10.632151 2.159176-14.479783 5.996574l-214.433814 214.433814c-7.992021 7.992021-7.992021 20.957311 0 28.949332l214.433814 214.433814c4.001127 3.990894 9.240455 5.996574 14.479783 5.996574 5.229095 0 10.468422-2.00568 14.46955-5.996574l214.433814-214.433814c3.837398-3.837398 5.996574-9.046027 5.996574-14.46955C971.525881 286.790772 969.366705 281.582143 965.529307 277.744745zM736.625944 477.709009l-185.494715-185.484482 185.494715-185.494715 185.484482 185.494715L736.625944 477.709009z" p-id="7154"></path>
     </symbol>
     `);
@@ -1104,7 +1051,7 @@ export default class PluginSample extends Plugin {
 
                     // 所有 webapp 使用同一个 partition，这样可以在不同标签页和跨域导航时共享登录状态
                     // 这解决了在一个标签页登录后，新标签页或跨域跳转时需要重新登录的问题
-                    const partitionName = 'persist:siyuan-copilot-webapp-shared';
+                    const partitionName = WEBVIEW_PARTITION;
                     webview.setAttribute('partition', partitionName);
 
                     // 设置清理后的 User-Agent，移除 Electron 标识以避免被网站检测和限制
@@ -1197,7 +1144,7 @@ export default class PluginSample extends Plugin {
                             const tabPromise = openTab({
                                 app: pluginInstance.app,
                                 custom: {
-                                    icon: "iconCopilotWebApp",
+                                    icon: WEBAPP_ICON_ID,
                                     title: initialTitle,
                                     data: {
                                         app: {
@@ -1229,7 +1176,7 @@ export default class PluginSample extends Plugin {
                             openTab({
                                 app: pluginInstance.app,
                                 custom: {
-                                    icon: "iconCopilotWebApp",
+                                    icon: WEBAPP_ICON_ID,
                                     title: initialTitle,
                                     data: {
                                         app: {
@@ -1492,7 +1439,7 @@ export default class PluginSample extends Plugin {
                         }
 
                         // 使用当前 Tab 的 icon，如果没有则使用默认 icon
-                        const currentIcon = this.tab?.icon || "iconCopilotWebApp";
+                        const currentIcon = this.tab?.icon || WEBAPP_ICON_ID;
 
                         openTab({
                             app: pluginInstance.app,
@@ -1516,8 +1463,8 @@ export default class PluginSample extends Plugin {
                         const msg = e.message || '';
 
                         // 处理快捷键消息
-                        if (msg.startsWith('__SIYUAN_COPILOT_HOTKEY__:')) {
-                            const key = msg.substring('__SIYUAN_COPILOT_HOTKEY__:'.length);
+                        if (msg.startsWith(WEBVIEW_HOTKEY_PREFIX)) {
+                            const key = msg.substring(WEBVIEW_HOTKEY_PREFIX.length);
 
                             if (key === 'alt-left') {
                                 // Alt+← 后退
@@ -1557,8 +1504,8 @@ export default class PluginSample extends Plugin {
                         }
 
                         // 处理链接打开消息
-                        if (msg.startsWith('__SIYUAN_COPILOT_LINK__:')) {
-                            const url = msg.substring('__SIYUAN_COPILOT_LINK__:'.length);
+                        if (msg.startsWith(WEBVIEW_LINK_PREFIX)) {
+                            const url = msg.substring(WEBVIEW_LINK_PREFIX.length);
                             if (url) {
                                 openUrlInNewTab(url);
                             }
@@ -1571,8 +1518,8 @@ export default class PluginSample extends Plugin {
                             const script = `
                                 (function() {
                                     // 注入一次即可，防止重复 (使用新标记 v3 避免缓存问题)
-                                    if (window.__siyuan_copilot_injected_v3) return;
-                                    window.__siyuan_copilot_injected_v3 = true;
+                                    if (window.${WEBVIEW_INJECTED_FLAG}) return;
+                                    window.${WEBVIEW_INJECTED_FLAG} = true;
 
                                     // 键盘事件监听
                                     document.addEventListener('keydown', function(e) {
@@ -1580,35 +1527,35 @@ export default class PluginSample extends Plugin {
                                         if (e.altKey && e.key === 'ArrowLeft') {
                                             e.preventDefault();
                                             e.stopPropagation();
-                                            console.log('__SIYUAN_COPILOT_HOTKEY__:alt-left');
+                                            console.log('${WEBVIEW_HOTKEY_PREFIX}alt-left');
                                             return false;
                                         }
                                         // Alt+→ 前进
                                         if (e.altKey && e.key === 'ArrowRight') {
                                             e.preventDefault();
                                             e.stopPropagation();
-                                            console.log('__SIYUAN_COPILOT_HOTKEY__:alt-right');
+                                            console.log('${WEBVIEW_HOTKEY_PREFIX}alt-right');
                                             return false;
                                         }
                                         // Alt+Y 全屏
                                         if (e.altKey && (e.key === 'y' || e.key === 'Y')) {
                                             e.preventDefault();
                                             e.stopPropagation();
-                                            console.log('__SIYUAN_COPILOT_HOTKEY__:alt-y');
+                                            console.log('${WEBVIEW_HOTKEY_PREFIX}alt-y');
                                             return false;
                                         }
                                         // Esc 退出全屏 或 关闭搜索
                                         if (e.key === 'Escape') {
                                             e.preventDefault();
                                             e.stopPropagation();
-                                            console.log('__SIYUAN_COPILOT_HOTKEY__:escape');
+                                            console.log('${WEBVIEW_HOTKEY_PREFIX}escape');
                                             return false;
                                         }
                                         // Ctrl+F OR Cmd+F 搜索
                                         if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
                                             e.preventDefault();
                                             e.stopPropagation();
-                                            console.log('__SIYUAN_COPILOT_HOTKEY__:ctrl-f');
+                                            console.log('${WEBVIEW_HOTKEY_PREFIX}ctrl-f');
                                             return false;
                                         }
                                     }, true);
@@ -1641,7 +1588,7 @@ export default class PluginSample extends Plugin {
                                                 e.stopImmediatePropagation();
                                                 
                                                 // 使用 console.log 传递消息
-                                                console.log('__SIYUAN_COPILOT_LINK__:' + target.href);
+                                                console.log('${WEBVIEW_LINK_PREFIX}' + target.href);
                                                 return false;
                                             }
                                         }
@@ -1699,11 +1646,11 @@ export default class PluginSample extends Plugin {
             config: {
                 position: "RightBottom",
                 size: { width: 400, height: 0 },
-                icon: "iconCopilot",
-                title: "Copilot",
+                icon: MAIN_ICON_ID,
+                title: PLUGIN_DISPLAY_NAME,
             },
             data: {
-                text: "Copilot"
+                text: PLUGIN_BRAND_NAME
             },
             type: AI_SIDEBAR_TYPE,
             init: (dock) => {
@@ -1737,9 +1684,7 @@ export default class PluginSample extends Plugin {
             this.domainIconMap.clear();
             try {
                 // 读取 webappIcon 目录下的所有图标
-                const files =
-                    (await readDir(WEBAPP_ICON_DIR)) ||
-                    (await readDir(LEGACY_WEBAPP_ICON_DIR));
+                const files = await readDir(WEBAPP_ICON_DIR);
                 if (files && Array.isArray(files)) {
                     for (const file of files) {
                         if (file.isDir) continue;
@@ -1754,7 +1699,7 @@ export default class PluginSample extends Plugin {
                             this.domainIconMap.set(domain, file.name);
 
                             // 异步加载并注册，不阻塞主流程
-                            getPluginFileBlob(getWebAppIconPath(file.name)).then(async (blob) => {
+                            getFileBlob(getWebAppIconPath(file.name)).then(async (blob) => {
                                 if (blob) {
                                     // 对于图片文件，转换为 dataURL
                                     try {
@@ -1840,7 +1785,7 @@ export default class PluginSample extends Plugin {
                         const tabPromise = openTab({
                             app: this.app,
                             custom: {
-                                icon: "iconCopilotWebApp",
+                                icon: WEBAPP_ICON_ID,
                                 title: appData.name,
                                 data: {
                                     app: appData
@@ -1879,7 +1824,7 @@ export default class PluginSample extends Plugin {
         toolbar.push("|");
         toolbar.push({
             name: "ai-chat-with-selection",
-            icon: "iconCopilot",
+            icon: MAIN_ICON_ID,
             hotkey: "⌥⌘C",
             tipPosition: "n",
             tip: "AI 问答",
@@ -1974,7 +1919,7 @@ export default class PluginSample extends Plugin {
         this.eventBus.off("open-menu-doctree", this.openMenuDoctreeBindThis);
         this.eventBus.off("click-editortitleicon", this.clickEditorTitleIconBindThis);
         this.eventBus.off("open-menu-link", this.openMenuLinkBindThis);
-        console.log("Copilot onunload");
+        console.log(`${PLUGIN_BRAND_NAME} onunload`);
     }
 
     private openMenuDoctree({ detail }: any) {
@@ -1987,7 +1932,7 @@ export default class PluginSample extends Plugin {
         if (!docId) return;
 
         menu.addItem({
-            icon: "iconCopilot",
+            icon: MAIN_ICON_ID,
             label: t('menu.summarizeDoc'),
             click: () => {
                 this.summarizeDocInSidebar(docId);
@@ -2002,7 +1947,7 @@ export default class PluginSample extends Plugin {
         if (!docId) return;
 
         menu.addItem({
-            icon: "iconCopilot",
+            icon: MAIN_ICON_ID,
             label: t('menu.summarizeDoc'),
             click: () => {
                 this.summarizeDocInSidebar(docId);
@@ -2019,7 +1964,7 @@ export default class PluginSample extends Plugin {
         if (!href || !href.startsWith('https://')) return;
 
         menu.addItem({
-            icon: "iconCopilotWebApp",
+            icon: WEBAPP_ICON_ID,
             label: t('menu.openLinkInTab'),
             click: () => {
                 const linkTitle = element.textContent?.trim() || href;
@@ -2035,7 +1980,7 @@ export default class PluginSample extends Plugin {
                 openTab({
                     app: this.app,
                     custom: {
-                        icon: "iconCopilotWebApp",
+                        icon: WEBAPP_ICON_ID,
                         title: appData.name,
                         data: { app: appData },
                         id: this.name + WEBAPP_TAB_TYPE
@@ -2046,7 +1991,7 @@ export default class PluginSample extends Plugin {
                 (async () => {
                     try {
                         const iconId = await this.getOrCreateIconForDomain(href);
-                        if (iconId && iconId !== 'iconCopilotWebApp') {
+                        if (iconId && iconId !== WEBAPP_ICON_ID) {
                             this.registerWebAppIcon(this.getDomainFromUrl(href), iconId);
                         }
                     } catch (e) {
@@ -2065,7 +2010,7 @@ export default class PluginSample extends Plugin {
             dockBtn.click();
         }
         setTimeout(() => {
-            window.dispatchEvent(new CustomEvent('copilot-summarize-doc', {
+            window.dispatchEvent(new CustomEvent(SUMMARY_EVENT, {
                 detail: { docId }
             }));
         }, 300);
@@ -2073,7 +2018,7 @@ export default class PluginSample extends Plugin {
 
     async uninstall() {
         //当插件被卸载的时候，会自动调用这个函数
-        console.log("Copilot uninstall");
+        console.log(`${PLUGIN_BRAND_NAME} uninstall`);
         // 删除配置文件
         await this.removeData(SETTINGS_FILE);
         await this.removeData(WEBVIEW_HISTORY_FILE);
@@ -2107,7 +2052,9 @@ export default class PluginSample extends Plugin {
      * 加载设置
      */
     async loadSettings() {
-        const settings = (await this.loadData(SETTINGS_FILE)) || {};
+        const rawSettings = (await this.loadData(SETTINGS_FILE)) || {};
+        const settings = normalizeSettings(rawSettings);
+        let shouldPersist = JSON.stringify(settings) !== JSON.stringify(rawSettings);
 
         // 迁移：如果存在旧的 aiProviders.v3 配置，迁移为自定义平台（customProviders）
         try {
@@ -2142,8 +2089,7 @@ export default class PluginSample extends Plugin {
                 // 如果存在老的单个平台字段，也一并清理（兼容旧版本）
                 if (settings.aiProvider === 'v3') delete settings.aiProvider;
 
-                // 持久化迁移结果
-                await this.saveData(SETTINGS_FILE, settings);
+                shouldPersist = true;
                 pushMsg('检测到旧的 V3 配置，已迁移为自定义平台');
             }
         } catch (e) {
@@ -2152,12 +2098,7 @@ export default class PluginSample extends Plugin {
 
         // 迁移：自动为已有模型设置能力
         try {
-            // 检查是否已经执行过迁移
-            if (!settings.dataTransfer) {
-                settings.dataTransfer = {};
-            }
-
-            if (settings.dataTransfer.autoSetModelCapabilities) {
+            if (settings.pluginData.modelCapabilitiesInitialized) {
                 // 已执行过，跳过
             } else if (settings.aiProviders) {
                 // 检查是否真正有配置了模型的用户（排除首次安装的默认空配置）
@@ -2215,12 +2156,13 @@ export default class PluginSample extends Plugin {
                         }
                     }
 
-                    settings.dataTransfer.autoSetModelCapabilities = true;
-                    await this.saveData(SETTINGS_FILE, settings);
+                    settings.pluginData.modelCapabilitiesInitialized = true;
+                    shouldPersist = true;
                     pushMsg('已自动为现有模型设置能力');
                 } else {
                     // 首次安装或没有实际模型的用户，直接标记为已完成，不显示消息
-                    settings.dataTransfer.autoSetModelCapabilities = true;
+                    settings.pluginData.modelCapabilitiesInitialized = true;
+                    shouldPersist = true;
                 }
             }
         } catch (e) {
@@ -2228,16 +2170,13 @@ export default class PluginSample extends Plugin {
         }
 
         const defaultSettings = getDefaultSettings();
-        const mergedSettings = { ...defaultSettings, ...settings };
+        const mergedSettings = normalizeSettings(settings);
 
         // 检测是否需要保存设置
-        let needsSave = false;
+        let needsSave = shouldPersist;
 
-        // 如果是首次安装（settings.json 不存在或为空，或只有 dataTransfer 字段），不需要保存
-        // 注意：dataTransfer 是迁移标志，不计入用户实际配置
-        const settingsKeys = Object.keys(settings);
-        const isFirstInstall = !settings || settingsKeys.length === 0 || 
-            (settingsKeys.length === 1 && settingsKeys[0] === 'dataTransfer');
+        const settingsKeys = Object.keys(rawSettings || {});
+        const isFirstInstall = !rawSettings || settingsKeys.length === 0;
 
         // 只有非首次安装且 webApps 为空时，才需要补充内置 webApps
         if (!isFirstInstall && settings && (!settings.webApps || !Array.isArray(settings.webApps) || settings.webApps.length === 0)) {
@@ -2248,13 +2187,11 @@ export default class PluginSample extends Plugin {
             }
         }
 
-        // 保存合并后的设置，确保内置 webApps 能在 onLayoutReady 中正确注册
+        await this.migrateSessions(mergedSettings);
+
         if (needsSave) {
             await this.saveData(SETTINGS_FILE, mergedSettings);
         }
-
-        // 迁移旧会话数据（如果存在）
-        await this.migrateSessions(mergedSettings);
 
         // 更新 store
         updateSettings(mergedSettings);
@@ -2265,9 +2202,10 @@ export default class PluginSample extends Plugin {
      * 保存设置
      */
     async saveSettings(settings: any) {
-        await this.saveData(SETTINGS_FILE, settings);
+        const normalizedSettings = normalizeSettings(settings);
+        await this.saveData(SETTINGS_FILE, normalizedSettings);
         // 更新 store，通知所有订阅者
-        updateSettings(settings);
+        updateSettings(normalizedSettings);
     }
 
     /**
@@ -2280,7 +2218,7 @@ export default class PluginSample extends Plugin {
         const sessions = data?.sessions || [];
 
         // 如果没有会话数据或已迁移过，直接返回
-        if (sessions.length === 0 || settings.dataTransfer?.sessionData) {
+        if (sessions.length === 0 || settings.pluginData?.sessionStorageMigrated) {
             return;
         }
 
@@ -2387,10 +2325,10 @@ export default class PluginSample extends Plugin {
             console.log(`Successfully migrated ${migratedCount} sessions.`);
 
             // 更新配置中的迁移标志
-            if (!settings.dataTransfer) {
-                settings.dataTransfer = { sessionData: true };
+            if (!settings.pluginData) {
+                settings.pluginData = { sessionStorageMigrated: true };
             } else {
-                settings.dataTransfer.sessionData = true;
+                settings.pluginData.sessionStorageMigrated = true;
             }
             await this.saveSettings(settings);
         }
@@ -2404,8 +2342,8 @@ export default class PluginSample extends Plugin {
         openTab({
             app: this.app,
             custom: {
-                title: 'Siyuan Copilot',
-                icon: 'iconCopilot',
+                title: PLUGIN_DISPLAY_NAME,
+                icon: MAIN_ICON_ID,
                 id: tabId,
                 data: {
                     time: Date.now()
@@ -2422,8 +2360,8 @@ export default class PluginSample extends Plugin {
         const tab = openTab({
             app: this.app,
             custom: {
-                title: 'Siyuan Copilot',
-                icon: 'iconCopilot',
+                title: PLUGIN_DISPLAY_NAME,
+                icon: MAIN_ICON_ID,
                 id: tabId,
             }
         });

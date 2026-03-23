@@ -1,8 +1,8 @@
 <img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118224558-e1kdo6x.png" />
 
-# SiYuan Copilot OpenCode
+# SiYuan OpenCode
 
-> 思源笔记 Copilot 插件扩展，支持将 **OpenCode** 作为 AI Provider 调用
+> 独立的思源 OpenCode 插件，支持笔记上下文对话、工具调用与 OpenCode 工作流
 
 [![GitHub](https://img.shields.io/badge/GitHub-zzl793780096--creator/siyuan--copilot--opencode-green.svg)](https://github.com/zzl793780096-creator/siyuan-copilot-opencode)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -11,9 +11,9 @@
 
 ## 📝 这是什么
 
-本仓库是基于 [siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot) 的扩展 fork，在原插件基础上**新增 OpenCode Provider**，让用户可以在 Copilot 的 Provider 选择器中直接选用 OpenCode 作为 AI 后端。
+本仓库最初基于 [siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot) 演进而来，但当前目标是作为**独立插件**运行，而不是与原插件共享运行时、存储目录或设置结构。
 
-OpenCode 是 [OpenCode MCP Server](https://github.com/Traves-Theberge/opencode-mcp) 驱动的本地 AI Coding Agent，支持多模型、热插拔工具调用。本扩展让 Copilot 用户无需改变现有使用习惯，即可享受 OpenCode 的推理和代码能力。
+OpenCode 是 [OpenCode MCP Server](https://github.com/Traves-Theberge/opencode-mcp) 驱动的本地 AI Coding Agent，支持多模型与工具调用。当前插件会把 OpenCode 作为一等能力维护，并与旧版 `siyuan-plugin-copilot` 进行运行时隔离。
 
 ---
 

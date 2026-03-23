@@ -1,3 +1,5 @@
+import { OPENCODE_SESSION_TITLE } from "../pluginNamespace";
+
 export interface OpenCodeProviderConfig {
     serverUrl: string;
 }
@@ -146,7 +148,7 @@ export async function chatOpenCode(
                 '/session',
                 {
                     method: 'POST',
-                    body: JSON.stringify({ title: 'copilot-session' })
+                    body: JSON.stringify({ title: OPENCODE_SESSION_TITLE })
                 },
                 options.signal
             );

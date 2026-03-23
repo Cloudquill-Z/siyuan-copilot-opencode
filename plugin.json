@@ -12,11 +12,11 @@
   ],
   "disabledInPublish": true,
   "displayName": {
-    "default": "SiYuan Copilot OpenCode",
-    "zh_CN": "SiYuan Copilot OpenCode"
+    "default": "SiYuan OpenCode",
+    "zh_CN": "思源 OpenCode"
   },
   "description": {
-    "default": "SiYuan Copilot extension that adds OpenCode as an AI provider for note-aware chat and editing",
+    "default": "Independent SiYuan OpenCode plugin for note-aware chat, web tools, and local OpenCode workflows",
     "zh_CN": "为 SiYuan Copilot 增加 OpenCode Provider 的扩展插件，支持基于笔记上下文进行对话与编辑"
   },
   "readme": {
@@ -28,5 +28,10 @@
       "https://fastly.jsdelivr.net/gh/Achuan-2/PicBed/assets/20241128221208-2024-11-28.png"
     ]
   },
-  "keywords": []
+  "keywords": [
+    "opencode",
+    "siyuan",
+    "ai",
+    "assistant"
+  ]
 }

@@ -14,7 +14,6 @@
     } from './ai-chat';
     import type { MessageContent } from './ai-chat';
     import { getActiveEditor, openTab } from 'siyuan';
-    import { WEBAPP_TAB_TYPE } from './index';
     import {
         pushMsg,
         pushErrMsg,
@@ -34,13 +33,11 @@
     } from './api';
     import { saveAsset, loadAsset, base64ToBlob, readAssetAsText } from './utils/assets';
     import {
-        getPluginFileBlob,
         getSessionPath,
         getTranslatePath,
-        getWebAppIconPath,
         isPluginAssetPath,
-        getLegacySessionPath,
     } from './pluginPaths';
+    import { SUMMARY_EVENT, WEBAPP_ICON_ID, WEBAPP_TAB_TYPE } from './pluginNamespace';
     import {
         parseMultipleWebPages,
         fetchWithWebView,
@@ -439,7 +436,10 @@
     ): Promise<{ inputText: string; outputText: string } | null> {
         try {
             const translatePath = getTranslatePath(id);
-            const blob = await getPluginFileBlob(translatePath);
+            const blob = await getFileBlob(translatePath);
+            if (!blob) {
+                return null;
+            }
             const text = await blob.text();
             return JSON.parse(text);
         } catch (error) {
@@ -560,7 +560,7 @@
         const iconId =
             app.icon && app.icon.startsWith('data:image')
                 ? plugin.getWebAppIconId(app.id)
-                : 'iconCopilotWebApp';
+                : WEBAPP_ICON_ID;
 
         // 使用 openTab API 打开小程序
         openTab({
@@ -1391,7 +1391,7 @@
         // 添加全局复制事件监听器
         document.addEventListener('copy', handleCopyEvent);
         // 监听文档总结事件
-        window.addEventListener('copilot-summarize-doc', handleSummarizeDoc as EventListener);
+        window.addEventListener(SUMMARY_EVENT, handleSummarizeDoc as EventListener);
 
         isInitialLoading = false;
     });
@@ -1409,7 +1409,7 @@
         // 移除全局复制事件监听器
         document.removeEventListener('copy', handleCopyEvent);
         // 移除文档总结事件监听器
-        window.removeEventListener('copilot-summarize-doc', handleSummarizeDoc as EventListener);
+        window.removeEventListener(SUMMARY_EVENT, handleSummarizeDoc as EventListener);
 
         // 保存工具配置
         if (isToolConfigLoaded) {
@@ -1432,6 +1432,7 @@
                     deepseek: { apiKey: '', customApiUrl: '', models: [] },
                     openai: { apiKey: '', customApiUrl: '', models: [] },
                     volcano: { apiKey: '', customApiUrl: '', models: [] },
+                    opencode: { serverUrl: 'http://localhost:4096', models: [] },
                     customProviders: [],
                     disabledBuiltInProviders: [],
                     providerOrder: [],
@@ -5358,7 +5359,7 @@
     async function replaceAssetPathsWithBlob(content: string): Promise<string> {
         // 匹配 Markdown 图片语法中的 assets 路径
         const assetImageRegex =
-            /!\[([^\]]*)\]\((\/data\/storage\/petal\/(?:siyuan-copilot-opencode|siyuan-plugin-copilot)\/assets\/[^)]+)\)/g;
+            /!\[([^\]]*)\]\((\/data\/storage\/petal\/siyuan-copilot-opencode\/assets\/[^)]+)\)/g;
         const matches = Array.from(content.matchAll(assetImageRegex));
 
         if (matches.length === 0) {
@@ -7414,7 +7415,7 @@
                 // 或者继续使用 loadData 但它是相对的。
                 // 如果我们用 putFile 存了，我们也应该用对应的 read 方式。
                 const path = getSessionPath(sessionId);
-                const blob = await getPluginFileBlob(path);
+                const blob = await getFileBlob(path);
                 if (!blob) throw new Error('File not found');
                 const text = await blob.text();
                 const sessionData = JSON.parse(text);
@@ -7738,7 +7739,6 @@
                 // 删除独立会话文件 (SiYuan removeFile 路径相对于 workspace root)
                 try {
                     await removeFile(getSessionPath(sessionId));
-                    await removeFile(getLegacySessionPath(sessionId));
                 } catch (e) {
                     // 忽略错误
                 }
@@ -7772,7 +7772,6 @@
                 for (const id of sessionIds) {
                     try {
                         await removeFile(getSessionPath(id));
-                        await removeFile(getLegacySessionPath(id));
                     } catch (e) {
                         // 忽略错误
                     }
@@ -7793,7 +7792,7 @@
         try {
             // 加载会话消息
             const path = getSessionPath(sessionId);
-            const blob = await getPluginFileBlob(path);
+            const blob = await getFileBlob(path);
             if (!blob) {
                 pushErrMsg('会话文件不存在');
                 return;
@@ -10323,7 +10322,7 @@
                     on:click={toggleWebAppMenu}
                     title={t('aiSidebar.webapp.title') || '小程序'}
                 >
-                    <svg class="b3-button__icon"><use xlink:href="#iconCopilotWebApp"></use></svg>
+                    <svg class="b3-button__icon"><use xlink:href={`#${WEBAPP_ICON_ID}`}></use></svg>
                 </button>
             </div>
             {#if hasUnsavedChanges}

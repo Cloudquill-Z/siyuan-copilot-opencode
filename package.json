@@ -2,7 +2,7 @@
   "name": "siyuan-copilot-opencode",
   "version": "0.3.6",
   "type": "module",
-  "description": "SiYuan Copilot OpenCode plugin fork that adds OpenCode as an AI provider for SiYuan",
+  "description": "Independent SiYuan OpenCode plugin for note-aware chat, tools, and local OpenCode workflows",
   "repository": "https://github.com/zzl793780096-creator/siyuan-copilot-opencode",
   "homepage": "https://github.com/zzl793780096-creator/siyuan-copilot-opencode",
   "author": "frostime",

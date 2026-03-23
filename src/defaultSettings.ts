@@ -38,6 +38,9 @@ export interface CustomProviderConfig extends ProviderConfig {
 }
 
 export const getDefaultSettings = () => ({
+    settingsVersion: 2,
+    migrationVersion: 1,
+
     // AI 设置 - 新的多平台多模型结构
     aiProviders: {
         Achuan: {
@@ -79,7 +82,7 @@ export const getDefaultSettings = () => ({
         },
         customProviders: [] as CustomProviderConfig[],
         disabledBuiltInProviders: [] as string[],
-        providerOrder: [] as string[]
+        providerOrder: ['Achuan', 'gemini', 'deepseek', 'openai', 'moonshot', 'volcano', 'opencode'] as string[]
     } as Record<string, any>,
     selectedProviderId: 'openai' as string,  // 设置面板中选中的平台
     currentProvider: 'openai' as string,      // 对话中当前使用的平台
@@ -212,10 +215,10 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
     // SOUL 文档设置
     soulDocId: '' as string,  // SOUL 数据存储的文档ID
 
-    // 数据迁移标志
-    dataTransfer: {
-        sessionData: false,
-        autoSetModelCapabilities: false, // 是否已自动设置模型能力
+    pluginData: {
+        sessionStorageMigrated: false,
+        modelCapabilitiesInitialized: false,
+        legacyImportCompleted: false,
     },
 
     // 保留旧设置以便兼容升级

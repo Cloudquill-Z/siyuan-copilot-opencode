@@ -2,8 +2,8 @@
     import { createEventDispatcher } from 'svelte';
     import { platformUtils } from 'siyuan';
     import { chat, type Message } from '../ai-chat';
-    import { pushMsg, pushErrMsg, putFile } from '../api';
-    import { TRANSLATE_DIR, getPluginFileBlob, getTranslatePath } from '../pluginPaths';
+    import { pushMsg, pushErrMsg, putFile, getFileBlob } from '../api';
+    import { TRANSLATE_DIR, getTranslatePath } from '../pluginPaths';
     import { t } from '../utils/i18n';
     import MultiModelSelector from './MultiModelSelector.svelte';
 
@@ -161,7 +161,10 @@
     ): Promise<{ inputText: string; outputText: string } | null> {
         try {
             const translatePath = getTranslatePath(id);
-            const blob = await getPluginFileBlob(translatePath);
+            const blob = await getFileBlob(translatePath);
+            if (!blob) {
+                return null;
+            }
             const text = await blob.text();
             return JSON.parse(text);
         } catch (error) {
