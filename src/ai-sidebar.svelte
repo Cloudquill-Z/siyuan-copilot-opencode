@@ -33,6 +33,7 @@
     } from './api';
     import { saveAsset, loadAsset, base64ToBlob, readAssetAsText } from './utils/assets';
     import {
+        getPluginFileBlob,
         getSessionPath,
         getTranslatePath,
         isPluginAssetPath,
@@ -436,7 +437,7 @@
     ): Promise<{ inputText: string; outputText: string } | null> {
         try {
             const translatePath = getTranslatePath(id);
-            const blob = await getFileBlob(translatePath);
+            const blob = await getPluginFileBlob(translatePath);
             if (!blob) {
                 return null;
             }
@@ -524,7 +525,7 @@
     async function saveWebApps(event: CustomEvent<{ webApps: any[] }>) {
         webApps = event.detail.webApps;
         settings.webApps = webApps;
-        await plugin.saveData('settings.json', settings);
+        await plugin.saveSettings(settings);
 
         // 为每个小程序注册图标
         for (const app of webApps) {
@@ -5359,7 +5360,7 @@
     async function replaceAssetPathsWithBlob(content: string): Promise<string> {
         // 匹配 Markdown 图片语法中的 assets 路径
         const assetImageRegex =
-            /!\[([^\]]*)\]\((\/data\/storage\/petal\/siyuan-copilot-opencode\/assets\/[^)]+)\)/g;
+            /!\[([^\]]*)\]\((\/data\/storage\/petal\/(?:siyuan-copilot-opencode|siyuan-plugin-copilot)\/assets\/[^)]+)\)/g;
         const matches = Array.from(content.matchAll(assetImageRegex));
 
         if (matches.length === 0) {
@@ -7415,7 +7416,7 @@
                 // 或者继续使用 loadData 但它是相对的。
                 // 如果我们用 putFile 存了，我们也应该用对应的 read 方式。
                 const path = getSessionPath(sessionId);
-                const blob = await getFileBlob(path);
+                const blob = await getPluginFileBlob(path);
                 if (!blob) throw new Error('File not found');
                 const text = await blob.text();
                 const sessionData = JSON.parse(text);
@@ -7792,7 +7793,7 @@
         try {
             // 加载会话消息
             const path = getSessionPath(sessionId);
-            const blob = await getFileBlob(path);
+            const blob = await getPluginFileBlob(path);
             if (!blob) {
                 pushErrMsg('会话文件不存在');
                 return;

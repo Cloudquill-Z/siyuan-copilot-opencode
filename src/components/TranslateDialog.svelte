@@ -2,8 +2,8 @@
     import { createEventDispatcher } from 'svelte';
     import { platformUtils } from 'siyuan';
     import { chat, type Message } from '../ai-chat';
-    import { pushMsg, pushErrMsg, putFile, getFileBlob } from '../api';
-    import { TRANSLATE_DIR, getTranslatePath } from '../pluginPaths';
+    import { pushMsg, pushErrMsg, putFile } from '../api';
+    import { TRANSLATE_DIR, getPluginFileBlob, getTranslatePath } from '../pluginPaths';
     import { t } from '../utils/i18n';
     import MultiModelSelector from './MultiModelSelector.svelte';
 
@@ -161,7 +161,7 @@
     ): Promise<{ inputText: string; outputText: string } | null> {
         try {
             const translatePath = getTranslatePath(id);
-            const blob = await getFileBlob(translatePath);
+            const blob = await getPluginFileBlob(translatePath);
             if (!blob) {
                 return null;
             }
@@ -200,7 +200,7 @@
     async function saveTranslateLanguageSettings() {
         settings.translateInputLanguage = translateInputLanguage;
         settings.translateOutputLanguage = translateOutputLanguage;
-        await plugin.saveData('settings.json', settings);
+        await plugin.saveSettings(settings);
     }
 
     // 交换语言（仅交换语言，不交换文本）
@@ -236,7 +236,7 @@
 
         settings.translateProvider = translateProvider;
         settings.translateModelId = translateModelId;
-        await plugin.saveData('settings.json', settings);
+        await plugin.saveSettings(settings);
     }
 
     // 加载历史项

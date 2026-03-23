@@ -1,3 +1,5 @@
+import { getFileBlob } from "./api";
+
 export const PLUGIN_ID = "siyuan-copilot-opencode";
 export const LEGACY_PLUGIN_ID = "siyuan-plugin-copilot";
 
@@ -49,5 +51,25 @@ export function getLegacyWebAppIconPath(icon: string): string {
 }
 
 export function isPluginAssetPath(path: string): boolean {
-    return path.includes(ASSET_DIR);
+    return path.includes(ASSET_DIR) || path.includes(LEGACY_ASSET_DIR);
+}
+
+export function getPluginPathCandidates(path: string): string[] {
+    if (path.includes(`/${PLUGIN_ID}/`)) {
+        return [path, path.replace(`/${PLUGIN_ID}/`, `/${LEGACY_PLUGIN_ID}/`)];
+    }
+    if (path.includes(`/${LEGACY_PLUGIN_ID}/`)) {
+        return [path, path.replace(`/${LEGACY_PLUGIN_ID}/`, `/${PLUGIN_ID}/`)];
+    }
+    return [path];
+}
+
+export async function getPluginFileBlob(path: string): Promise<Blob | null> {
+    for (const candidate of getPluginPathCandidates(path)) {
+        const blob = await getFileBlob(candidate);
+        if (blob) {
+            return blob;
+        }
+    }
+    return null;
 }

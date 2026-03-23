@@ -24,7 +24,7 @@ import "@/index.scss";
 
 import SettingPanel from "./SettingsPannel.svelte";
 import { getDefaultSettings } from "./defaultSettings";
-import { normalizeSettings } from "./settingsSchema";
+import { mergeSettings, normalizeSettings } from "./settingsSchema";
 import { setPluginInstance, t, getCurrentLanguage } from "./utils/i18n";
 import AISidebar from "./ai-sidebar.svelte";
 import ChatDialog from "./components/ChatDialog.svelte";
@@ -32,7 +32,19 @@ import { updateSettings, getSettings } from "./stores/settings";
 import { getModelCapabilities } from "./utils/modelCapabilities";
 import { matchHotKey, getCustomHotKey } from "./utils/hotkey";
 import {
+    ASSET_DIR,
+    LEGACY_ASSET_DIR,
+    LEGACY_PETAL_DIR,
+    LEGACY_SESSION_DIR,
+    LEGACY_TRANSLATE_DIR,
+    LEGACY_WEBAPP_ICON_DIR,
     WEBAPP_ICON_DIR,
+    getLegacyPluginDataPath,
+    getLegacySessionPath,
+    getLegacyTranslatePath,
+    getLegacyWebAppIconPath,
+    getPluginDataPath,
+    getPluginFileBlob,
     getSessionPath,
     getWebAppIconPath
 } from "./pluginPaths";
@@ -75,6 +87,196 @@ export default class PluginSample extends Plugin {
     private clickEditorTitleIconBindThis = this.clickEditorTitleIcon.bind(this);
     private openMenuLinkBindThis = this.openMenuLink.bind(this);
     private domainIconMap: Map<string, string> = new Map(); // 缓存域名与图标文件名的映射
+
+    private async confirmAsync(title: string, text: string): Promise<boolean> {
+        return new Promise((resolve) => {
+            confirm(
+                title,
+                text,
+                () => resolve(true),
+                () => resolve(false)
+            );
+        });
+    }
+
+    private async ensureDir(path: string) {
+        try {
+            await putFile(path, true, new Blob([]));
+        } catch (error) {
+            // ignore
+        }
+    }
+
+    private isMeaningfulSettings(rawSettings: any): boolean {
+        if (!rawSettings || typeof rawSettings !== "object") {
+            return false;
+        }
+
+        const ignoredKeys = new Set(["settingsVersion", "migrationVersion", "pluginData"]);
+        return Object.keys(rawSettings).some((key) => !ignoredKeys.has(key));
+    }
+
+    private rewriteLegacyPluginPaths(content: string): string {
+        return content
+            .replaceAll(LEGACY_PETAL_DIR, `/data/storage/petal/${this.name}`)
+            .replaceAll(LEGACY_ASSET_DIR, ASSET_DIR);
+    }
+
+    private async copyLegacyFileIfMissing(fileName: string) {
+        const targetPath = getPluginDataPath(fileName);
+        if (await getFileBlob(targetPath)) {
+            return false;
+        }
+
+        const legacyBlob = await getFileBlob(getLegacyPluginDataPath(fileName));
+        if (!legacyBlob) {
+            return false;
+        }
+
+        await putFile(targetPath, false, legacyBlob);
+        return true;
+    }
+
+    private async copyLegacyDirectoryFiles(
+        legacyDir: string,
+        targetDir: string,
+        mapTargetPath: (fileName: string) => string,
+        transform?: (fileName: string, text: string) => string
+    ) {
+        const files = await readDir(legacyDir);
+        if (!Array.isArray(files) || files.length === 0) {
+            return 0;
+        }
+
+        await this.ensureDir(targetDir);
+        let copiedCount = 0;
+
+        for (const file of files) {
+            if (file.isDir) {
+                continue;
+            }
+
+            const targetPath = mapTargetPath(file.name);
+            if (await getFileBlob(targetPath)) {
+                continue;
+            }
+
+            const legacyBlob = await getFileBlob(`${legacyDir}/${file.name}`);
+            if (!legacyBlob) {
+                continue;
+            }
+
+            let blobToWrite = legacyBlob;
+            if (transform) {
+                const rewritten = transform(file.name, await legacyBlob.text());
+                blobToWrite = new Blob([rewritten], { type: legacyBlob.type || "application/json" });
+            }
+
+            await putFile(targetPath, false, blobToWrite);
+            copiedCount++;
+        }
+
+        return copiedCount;
+    }
+
+    private async hasLegacyImportableData() {
+        for (const fileName of [
+            SETTINGS_FILE,
+            WEBVIEW_HISTORY_FILE,
+            "chat-sessions.json",
+            "prompts.json",
+            "agent-tools-config.json",
+            "translate-history.json",
+        ]) {
+            if (await getFileBlob(getLegacyPluginDataPath(fileName))) {
+                return true;
+            }
+        }
+
+        for (const dir of [LEGACY_ASSET_DIR, LEGACY_SESSION_DIR, LEGACY_TRANSLATE_DIR, LEGACY_WEBAPP_ICON_DIR]) {
+            const files = await readDir(dir);
+            if (Array.isArray(files) && files.length > 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async importLegacyData() {
+        const currentRawSettings = (await this.loadData(SETTINGS_FILE)) || {};
+        const legacySettingsBlob = await getFileBlob(getLegacyPluginDataPath(SETTINGS_FILE));
+        const legacyRawSettings = legacySettingsBlob ? JSON.parse(await legacySettingsBlob.text()) : {};
+
+        const mergedRawSettings = this.isMeaningfulSettings(currentRawSettings)
+            ? mergeSettings(legacyRawSettings, currentRawSettings)
+            : mergeSettings(currentRawSettings, legacyRawSettings);
+        const mergedSettings = normalizeSettings(mergedRawSettings);
+
+        let copiedFiles = 0;
+        for (const fileName of [
+            WEBVIEW_HISTORY_FILE,
+            "chat-sessions.json",
+            "prompts.json",
+            "agent-tools-config.json",
+            "translate-history.json",
+        ]) {
+            if (await this.copyLegacyFileIfMissing(fileName)) {
+                copiedFiles++;
+            }
+        }
+
+        copiedFiles += await this.copyLegacyDirectoryFiles(
+            LEGACY_ASSET_DIR,
+            ASSET_DIR,
+            (fileName) => `${ASSET_DIR}/${fileName}`
+        );
+        copiedFiles += await this.copyLegacyDirectoryFiles(
+            LEGACY_TRANSLATE_DIR,
+            LEGACY_TRANSLATE_DIR.replace(LEGACY_PETAL_DIR, `/data/storage/petal/${this.name}`),
+            (fileName) => getLegacyTranslatePath(fileName.replace(/\.json$/i, "")).replace(LEGACY_PETAL_DIR, `/data/storage/petal/${this.name}`)
+        );
+        copiedFiles += await this.copyLegacyDirectoryFiles(
+            LEGACY_WEBAPP_ICON_DIR,
+            WEBAPP_ICON_DIR,
+            (fileName) => getWebAppIconPath(fileName)
+        );
+        copiedFiles += await this.copyLegacyDirectoryFiles(
+            LEGACY_SESSION_DIR,
+            LEGACY_SESSION_DIR.replace(LEGACY_PETAL_DIR, `/data/storage/petal/${this.name}`),
+            (fileName) => getLegacySessionPath(fileName.replace(/\.json$/i, "")).replace(LEGACY_PETAL_DIR, `/data/storage/petal/${this.name}`),
+            (_fileName, text) => this.rewriteLegacyPluginPaths(text)
+        );
+
+        mergedSettings.pluginData.legacyImportCompleted = true;
+        await this.saveSettings(mergedSettings);
+        return copiedFiles;
+    }
+
+    private async maybeImportLegacyData() {
+        const currentRawSettings = (await this.loadData(SETTINGS_FILE)) || {};
+        const normalizedCurrentSettings = normalizeSettings(currentRawSettings);
+        if (normalizedCurrentSettings.pluginData?.legacyImportCompleted) {
+            return false;
+        }
+
+        if (!(await this.hasLegacyImportableData())) {
+            return false;
+        }
+
+        const shouldImport = await this.confirmAsync(
+            "导入旧版插件数据",
+            "检测到 siyuan-plugin-copilot 的历史数据。是否导入到当前插件中？导入只会复制旧数据，不会删除旧插件文件。"
+        );
+
+        if (!shouldImport) {
+            return false;
+        }
+
+        const copiedFiles = await this.importLegacyData();
+        pushMsg(`已导入旧版插件数据，共处理 ${copiedFiles} 个文件或资源`);
+        return true;
+    }
 
     /**
      * 加载 WebView 历史记录
@@ -438,6 +640,7 @@ export default class PluginSample extends Plugin {
         this.eventBus.on("click-editortitleicon", this.clickEditorTitleIconBindThis);
         // 注册链接右键菜单
         this.eventBus.on("open-menu-link", this.openMenuLinkBindThis);
+        await this.maybeImportLegacyData();
 
 
 

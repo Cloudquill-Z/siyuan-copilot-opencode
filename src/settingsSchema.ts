@@ -34,6 +34,10 @@ function deepMerge<T>(base: T, override: any): T {
     return output as T;
 }
 
+export function mergeSettings<T>(base: T, override: any): T {
+    return deepMerge(base, override);
+}
+
 function getBuiltInProviderIds(): string[] {
     return ["Achuan", "gemini", "deepseek", "openai", "moonshot", "volcano", "opencode"];
 }
