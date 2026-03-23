@@ -1,63 +1,64 @@
 <img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118224558-e1kdo6x.png" />
 
-# SiYuan OpenCode
+# SiYuan Copilot OpenCode
 
-> 独立的思源 OpenCode 插件，支持笔记上下文对话、工具调用与 OpenCode 工作流
+> SiYuan Note Copilot plugin extension - use **OpenCode** as an AI Provider
 
 [![GitHub](https://img.shields.io/badge/GitHub-zzl793780096--creator/siyuan--copilot--opencode-green.svg)](https://github.com/zzl793780096-creator/siyuan-copilot-opencode)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ---
 
-## 📝 这是什么
+## What is this
 
-本仓库最初基于 [siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot) 演进而来，但当前目标是作为**独立插件**运行，而不是与原插件共享运行时、存储目录或设置结构。
+This repository is a fork of [siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot) with a new **OpenCode Provider** added. Users can select OpenCode as the AI backend directly from the Copilot Provider dropdown without changing their existing workflow.
 
-OpenCode 是 [OpenCode MCP Server](https://github.com/Traves-Theberge/opencode-mcp) 驱动的本地 AI Coding Agent，支持多模型与工具调用。当前插件会把 OpenCode 作为一等能力维护，并与旧版 `siyuan-plugin-copilot` 进行运行时隔离。
-
----
-
-## ✨ 核心功能
-
-- **OpenCode Provider**：在 Copilot 的 Provider 下拉中直接选择 OpenCode，无需额外部署
-- **多模型支持**：自动拉取 OpenCode 所有可用模型（通过 `/provider` API）
-- **流式响应**：完整支持 SSE 流式输出，聊天界面实时显示回复
-- **Session 管理**：自动管理 OpenCode 会话，支持多轮对话上下文
-- **原生 UI 体验**：复用 Copilot 已有界面，Provider 切换无感知
+OpenCode is a local AI Coding Agent powered by the [OpenCode MCP Server](https://github.com/Traves-Theberge/opencode-mcp), supporting multiple models and hot-swappable tool calls. This extension brings OpenCode's reasoning and coding capabilities to the SiYuan Copilot sidebar.
 
 ---
 
-## 🔧 工作原理
+## Features
 
+- **OpenCode Provider**: Select OpenCode directly from Copilot's Provider dropdown without extra deployment
+- **Multi-Model Support**: Auto-fetches all available OpenCode models via the `/provider` API
+- **Streaming Responses**: Full SSE streaming support with real-time replies
+- **Session Management**: Auto-manages OpenCode sessions for multi-turn conversations
+- **Native UI**: Reuses Copilot's existing interface for seamless provider switching
+
+---
+
+## How it works
+
+```text
+User input (Copilot sidebar)
+    |
+    v
+ai-chat.ts (Provider router)
+    |
+    v
+opencode-provider.ts (OpenCode Provider implementation)
+    |
+    +-- chatOpenCode() -> POST /session/{id}/message
+    +-- fetchOpenCodeModels() -> GET /provider
+    |
+    v
+OpenCode local service (localhost:4096)
+    |
+    v
+SSE streaming -> onChunk -> Copilot chat UI
 ```
-用户输入（Copilot 侧边栏）
-    │
-    ▼
-ai-chat.ts（Provider 路由）
-    │
-    ▼
-opencode-provider.ts（OpenCode Provider 实现）
-    │
-    ├── chatOpenCode() → POST /session/{id}/message
-    └── fetchOpenCodeModels() → GET /provider
-    │
-    ▼
-OpenCode 本地服务（localhost:4096）
-    │
-    ▼
-SSE 流式响应 → onChunk → Copilot 聊天界面
-```
 
-OpenCode Provider 不走 MCP tools 接口，而是直接调用 OpenCode REST API：
-- `GET /provider` — 获取模型列表
-- `POST /session` — 创建会话
-- `POST /session/{id}/message` — 发送消息，获取流式响应
+The OpenCode Provider does not use MCP tools. It calls the OpenCode REST API directly:
+
+- `GET /provider` to fetch model list
+- `POST /session` to create a session
+- `POST /session/{id}/message` to send a message and receive a streaming response
 
 ---
 
-## 📦 安装
+## Installation
 
-### 方式一：从源码构建
+### Build from source
 
 ```bash
 git clone https://github.com/zzl793780096-creator/siyuan-copilot-opencode.git
@@ -66,60 +67,61 @@ npm install
 npm run build
 ```
 
-将构建产物（`dist/`、`plugin.json`、`icon.png`、`i18n/` 等）放入思源笔记插件目录：
-- **Linux**：`~/.config/siyuan/data/plugins/siyuan-copilot-opencode/`
-- **Windows**：`%APPDATA%\siyuan\data\plugins\siyuan-copilot-opencode\`
-- **macOS**：`~/Library/Application Support/siyuan/data/plugins/siyuan-copilot-opencode/`
+Copy the build output (`dist/`, `plugin.json`, `icon.png`, `i18n/` and related files) into the SiYuan plugin directory:
 
-### 方式二：下载 Release 包
+- **Linux**: `~/.config/siyuan/data/plugins/siyuan-copilot-opencode/`
+- **Windows**: `%APPDATA%\siyuan\data\plugins\siyuan-copilot-opencode\`
+- **macOS**: `~/Library/Application Support/siyuan/data/plugins/siyuan-copilot-opencode/`
 
-前往 [Releases](https://github.com/zzl793780096-creator/siyuan-copilot-opencode/releases) 下载最新版本，解压后放入插件目录。
+### Download release
 
----
-
-## 🚀 前置要求
-
-1. **OpenCode 运行中**：确保 OpenCode 服务在 `http://localhost:4096` 运行
-2. **思源笔记**：桌面版（Docker 和移动版不支持插件）
+Get the latest release from [Releases](https://github.com/zzl793780096-creator/siyuan-copilot-opencode/releases).
 
 ---
 
-## ⚙️ 配置
+## Prerequisites
 
-1. 在思源笔记中打开 **集市 → 插件**，启用 **SiYuan Copilot OpenCode**
-2. 打开 Copilot 设置 → 选择 Provider → **OpenCode**
-3. 确认 Server 地址为 `http://localhost:4096`（默认）
-4. 保存后即可开始使用
+1. **OpenCode running**: Make sure OpenCode is serving at `http://localhost:4096`
+2. **SiYuan Note**: Desktop version only. Docker and mobile do not support plugins
 
 ---
 
-## 🐛 已知限制
+## Setup
 
-- ❌ **不支持图片上传**：OpenCode Provider 不支持图片附件
-- ❌ **不支持思考模式（Thinking）**
-- ❌ **不支持 Agent 工具调用**：工具调用走 Copilot 原生工具链
-- ⚠️ **Session 每次新建**：当前版本每次对话创建新 Session，不做 Session 复用
-
----
-
-## 🔗 参考项目
-
-本扩展站在以下开源项目的肩膀上：
-
-| 项目 | 仓库 | 说明 |
-|------|------|------|
-| **原插件** | [Achuan-2/siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot) | 思源笔记 Copilot 插件，提供了完整的 Provider 架构 |
-| **OpenCode MCP Server** | [Traves-Theberge/opencode-mcp](https://github.com/Traves-Theberge/opencode-mcp) | OpenCode 的 MCP Server，提供 REST API 接口 |
-| **OpenCode 官方** | [opencode.ai](https://opencode.ai) | OpenCode 官方网站 |
+1. Open **Marketplace -> Plugins** in SiYuan Note and enable **SiYuan Copilot OpenCode**
+2. Open plugin settings and select **OpenCode** as the provider
+3. Confirm the server URL is `http://localhost:4096` by default
+4. Save and start chatting
 
 ---
 
-## 📝 更新日志
+## Known limitations
 
-详见 [CHANGELOG.md](./CHANGELOG.md)
+- **No image upload**: OpenCode Provider does not support image attachments
+- **Thinking mode not supported**
+- **Agent tool calling not supported**: Tool calling still uses Copilot's native toolchain
+- **Session not reused**: Each conversation creates a new session
 
 ---
 
-## 📄 License
+## Related projects
 
-MIT License，继承自 [Achuan-2/siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot)
+This extension stands on the shoulders of these open-source projects:
+
+| Project | Repository | Description |
+|---------|-----------|-------------|
+| **Original Plugin** | [Achuan-2/siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot) | SiYuan Copilot plugin with the base provider architecture |
+| **OpenCode MCP Server** | [Traves-Theberge/opencode-mcp](https://github.com/Traves-Theberge/opencode-mcp) | OpenCode's MCP Server with REST API endpoints |
+| **OpenCode** | [opencode.ai](https://opencode.ai) | Official OpenCode website |
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md)
+
+---
+
+## License
+
+MIT License inherited from [Achuan-2/siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot)
