@@ -1,151 +1,125 @@
 <img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118224558-e1kdo6x.png" />
 
-插件GitHub地址：[https://github.com/Achuan-2/siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot)
+# SiYuan Copilot OpenCode
 
-## 📝开发背景
+> 思源笔记 Copilot 插件扩展，支持将 **OpenCode** 作为 AI Provider 调用
 
-思源笔记自带的AI功能比较弱，我经常需要向AI咨询各种问题，每次需要用AI根据我的笔记内容做出解答，总是要复制粘贴到其他AI软件，并且一个AI的回答往往不能令我满意，所以我经常会把同一个问题复制粘贴去询问不同AI模型，非常麻烦。
+[![GitHub](https://img.shields.io/badge/GitHub-zzl793780096--creator/siyuan--copilot--opencode-green.svg)](https://github.com/zzl793780096-creator/siyyuan-copilot-opencode)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-于是我自己在思源笔记里开发了一个AI插件
+---
 
-- 支持直接拖动笔记内容询问AI，还支持多模型同时问答功能，省去繁琐的复制粘贴操作。
-- 支持保存不同预设，针对不同场景（写论文、写博客、写代码）切换模型和prompt
-- 支持agent模式，支持让AI对笔记内容进行查询和修改
+## 📝 这是什么
 
-## 📝更新日志
+本仓库是基于 [siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot) 的扩展 fork，在原插件基础上**新增 OpenCode Provider**，让用户可以在 Copilot 的 Provider 选择器中直接选用 OpenCode 作为 AI 后端。
 
-见[CHANGELOG.md](https://cdn.jsdelivr.net/gh/Achuan-2/siyuan-plugin-copilot@main/CHANGELOG.md)
+OpenCode 是 [OpenCode MCP Server](https://github.com/Traves-Theberge/opencode-mcp) 驱动的本地 AI Coding Agent，支持多模型、热插拔工具调用。本扩展让 Copilot 用户无需改变现有使用习惯，即可享受 OpenCode 的推理和代码能力。
 
-博客
-- [思源笔记 Copilot 插件用法分享：多模型同时回答](https://zhuanlan.zhihu.com/p/1972794055470633397)
-- [思源笔记 Copilot 插件 v0.7.0：支持会话重命名标题，AI 自动生成标题](https://zhuanlan.zhihu.com/p/1983095685197873937)
-- [思源笔记 Copilot 插件 v0.8.0：预设支持选择模型，支持根据场景快速切换模型](https://zhuanlan.zhihu.com/p/1983121374013842503)
-- [思源笔记 Copilot 插件 v1.2.0：支持nanobanana生图和编辑图片](https://zhuanlan.zhihu.com/p/2000977023364011834)
-- [思源笔记 Copilot 插件如何使用Achuan-2 API](https://zhuanlan.zhihu.com/p/2002765436090093989)
-- [思源笔记 Copilot 插件 v1.6.0：新增网页小程序、快捷翻译对话框](https://zhuanlan.zhihu.com/p/2003514802849485761)
-- [思源笔记Copilot v2.0：Agent能力增强，获取网页内容、SOUL等更多工具上线 - 知乎](https://zhuanlan.zhihu.com/p/2015574496401190989)
+---
 
-## ✨主要功能介绍
+## ✨ 核心功能
 
-### AI模型添加
+- **OpenCode Provider**：在 Copilot 的 Provider 下拉中直接选择 OpenCode，无需额外部署
+- **多模型支持**：自动拉取 OpenCode 所有可用模型（通过 `/provider` API）
+- **流式响应**：完整支持 SSE 流式输出，聊天界面实时显示回复
+- **Session 管理**：自动管理 OpenCode 会话，支持多轮对话上下文
+- **原生 UI 体验**：复用 Copilot 已有界面，Provider 切换无感知
 
-多平台AI支持
+---
 
-- 插件内置常见平台（OpenAI、Google Gemini、DeepSeek、火山引擎）
-- 也支持添加任意兼容 OpenAI API 的平台，灵活切换聊天模型
+## 🔧 工作原理
 
-模型设置
-
-- 支持独立配置每个模型的参数（温度、最大 tokens）
-- 标识模型特殊能力（思考模式、视觉支持）
-
-<img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260204180535-27ex0wd.png" />
-
-
-<img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118225029-2f5k1mt.png" />
-
-
-### 多模态支持
-
-- 思源笔记内容：可通过拖拽块、拖拽页签、拖拽文档树的文档实现笔记内容一键发送给AI。拖动标题有特殊优化，是把标题下的所有内容发送给AI
-- 图片上传：支持粘贴、上传图片，还支持拖动图片块直接上传
-- 文件上传（支持 Markdown、文本文件等）
-
-### 聊天模式切换：ask、agent
-
-- ask 模式：日常问答，支持选择多个模型同时回复，选择满意回答
-
-  直接拖拽笔记内容进行多模型问答
-
-  <img alt="拖拽标题询问" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/拖拽标题询问-20260118231116-9olhf3h.gif" />
-
-  多模型回答结果
-
-  <img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118231241-74cd19k.png" />
-
-- agent 模式：提供工具，让AI实现自助查询笔记内容、编辑笔记、创建文档等功能
-
-  agent模式可以选择AI可以使用的工具
-
-  <img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118231449-4pdqcll.png" style="width: 498px;" />
-
-  比如之前在[用Kimi K2 Thinking写了一个钙成像配准软件](https://mp.weixin.qq.com/s/R8GBAdzL5p3QnTVfud_GtQ)，就用这个插件，帮我这里整合关于钙成像配准的零散笔记，成功写一个python钙成像配准模块出来
-
-  <img alt="PixPin_2025-11-08_19-45-58" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/PixPin_2025-11-08_19-45-58-20251108194601-4mks3of.png" style="width: 388px;" />
-
-### 会话管理
-
-- 支持保存对话历史，支持对历史记录进行置顶和删除
-- 支持复制对话为Markdown
-- 支持保存对话为文档
-
-<img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118231854-tf2zh9n.png" />
-
-### 预设管理
-
-- 预设支持
-
-  - 设置上下文消息数
-  - Temperature
-  - 临时系统提示词
-  - 指定聊天模式
-  - 选择特点模型
-
-  <img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118232101-zf7zy42.png" />
-- 支持保存预设，快速切换预设
-
-  <img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118232042-1g4kam2.png" style="width: 396px;" />
-
-  <img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118232314-3qj0h1p.png" style="width: 366px;" />
-
-### 提示词管理
-
-支持把常用提示词进行保存
-
-<img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118232429-ymzcjdg.png" />
-
-<img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118232510-3e5duhz.png" />
-
-## **注意事项**
-
-使用本插件需要自备 AI 平台的 API 密钥，插件本身不提供 AI 服务。请遵守各平台的使用条款和隐私政策，以及法律法规。
-
-
-## 🔧 开发相关
-
-如何打包插件
-
-```bash
-pnpm install
-pnpm run dev
+```
+用户输入（Copilot 侧边栏）
+    │
+    ▼
+ai-chat.ts（Provider 路由）
+    │
+    ▼
+opencode-provider.ts（OpenCode Provider 实现）
+    │
+    ├── chatOpenCode() → POST /session/{id}/message
+    └── fetchOpenCodeModels() → GET /provider
+    │
+    ▼
+OpenCode 本地服务（localhost:4096）
+    │
+    ▼
+SSE 流式响应 → onChunk → Copilot 聊天界面
 ```
 
-## 📄 许可证
+OpenCode Provider 不走 MCP tools 接口，而是直接调用 OpenCode REST API：
+- `GET /provider` — 获取模型列表
+- `POST /session` — 创建会话
+- `POST /session/{id}/message` — 发送消息，获取流式响应
 
-GPL3 License
+---
 
-## 🙏 致谢
+## 📦 安装
 
-- 基于 [plugin-sample-vite-svelte](https://github.com/siyuan-note/plugin-sample-vite-svelte/) 模板开发
-- 参考了[sy-f-misc](https://github.com/frostime/sy-f-misc)的GPT对话功能实现
-- 参考了[cherry studio](https://github.com/CherryHQ/cherry-studio)的功能设计和交互设计
+### 方式一：从源码构建
 
-## ❤️项目贡献者
+```bash
+git clone https://github.com/zzl793780096-creator/siyuan-copilot-opencode.git
+cd siyuan-copilot-opencode
+npm install
+npm run build
+```
 
-<a href="https://github.com/Achuan-2/siyuan-plugin-copilot/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=Achuan-2/siyuan-plugin-copilot" />
-</a>
+将构建产物（`dist/`、`plugin.json`、`icon.png`、`i18n/` 等）放入思源笔记插件目录：
+- **Linux**：`~/.config/siyuan/data/plugins/siyuan-copilot-opencode/`
+- **Windows**：`%APPDATA%\siyuan\data\plugins\siyuan-copilot-opencode\`
+- **macOS**：`~/Library/Application Support/siyuan/data/plugins/siyuan-copilot-opencode/`
 
-Made with [contrib.rocks](https://contrib.rocks).
+### 方式二：下载 Release 包
 
-## ❤️用爱发电
+前往 [Releases](https://github.com/zzl793780096-creator/siyuan-copilot-opencode/releases) 下载最新版本，解压后放入插件目录。
 
-如果喜欢我的插件，欢迎给GitHub仓库点star和微信赞赏，这会激励我继续完善此插件和开发新插件。
+---
 
-维护插件费时费力，个人时间和精力有限，开源只是分享，不等于我要浪费我的时间免费帮用户实现ta需要的功能，
+## 🚀 前置要求
 
-我需要的功能我会慢慢改进（打赏可以催更），有些我觉得可以改进、但是现阶段不必要的功能需要打赏才改进（会标注打赏标签和需要打赏金额），而不需要的功能、实现很麻烦的功能会直接关闭issue不考虑实现
+1. **OpenCode 运行中**：确保 OpenCode 服务在 `http://localhost:4096` 运行
+2. **思源笔记**：桌面版（Docker 和移动版不支持插件）
 
-累积赞赏50元的朋友如果想加我微信和进粉丝交流群，可以在赞赏的时候备注微信号，或者发邮件到achuan-2@outlook.com来进行好友申请
+---
 
-<img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/network-asset-image-20250614123558-fuhir5v.png" />
+## ⚙️ 配置
+
+1. 在思源笔记中打开 **集市 → 插件**，启用 **SiYuan Copilot**
+2. 打开 Copilot 设置 → 选择 Provider → **OpenCode**
+3. 确认 Server 地址为 `http://localhost:4096`（默认）
+4. 保存后即可开始使用
+
+---
+
+## 🐛 已知限制
+
+- ❌ **不支持图片上传**：OpenCode Provider 不支持图片附件
+- ❌ **不支持思考模式（Thinking）**
+- ❌ **不支持 Agent 工具调用**：工具调用走 Copilot 原生工具链
+- ⚠️ **Session 每次新建**：当前版本每次对话创建新 Session，不做 Session 复用
+
+---
+
+## 🔗 参考项目
+
+本扩展站在以下开源项目的肩膀上：
+
+| 项目 | 仓库 | 说明 |
+|------|------|------|
+| **原插件** | [Achuan-2/siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot) | 思源笔记 Copilot 插件，提供了完整的 Provider 架构 |
+| **OpenCode MCP Server** | [Traves-Theberge/opencode-mcp](https://github.com/Traves-Theberge/opencode-mcp) | OpenCode 的 MCP Server，提供 REST API 接口 |
+| **OpenCode 官方** | [opencode.ai](https://opencode.ai) | OpenCode 官方网站 |
+
+---
+
+## 📝 更新日志
+
+详见 [CHANGELOG.md](./CHANGELOG.md)
+
+---
+
+## 📄 License
+
+MIT License，继承自 [Achuan-2/siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot)
