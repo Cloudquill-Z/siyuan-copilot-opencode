@@ -548,7 +548,7 @@
         "aiChatDialog": "AI 助手"
     },
     "models": {
-        "remove":"移除",
+        "remove": "移除",
         "fetchSuccess": "成功获取 {count} 个模型",
         "fetchFailed": "获取模型失败",
         "addSuccess": "模型已添加",
@@ -651,10 +651,10 @@
         "siyuan_delete_block": {
             "name": "删除块"
         },
-        "siyuan_send_notification":{
+        "siyuan_send_notification": {
             "name": "发送系统通知"
         },
-        "siyuan_get_current_time":{
+        "siyuan_get_current_time": {
             "name": "获取当前时间"
         },
         "run_js": {
