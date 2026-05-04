@@ -7,11 +7,9 @@
         type EditOperation,
         type ToolCall,
         type ContextDocument,
-        type ThinkingEffort,
-        isSupportedThinkingGeminiModel,
-        isSupportedThinkingClaudeModel,
-        isGemini3Model,
-    } from './ai-chat';
+    type ThinkingEffort,
+    fetchModels,
+} from './ai-chat';
     import type { MessageContent } from './ai-chat';
     import { getActiveEditor, openTab } from 'siyuan';
     import {
@@ -35,7 +33,6 @@
     import {
         getPluginFileBlob,
         getSessionPath,
-        getTranslatePath,
         isPluginAssetPath,
     } from './pluginPaths';
     import { SUMMARY_EVENT, WEBAPP_ICON_ID, WEBAPP_TAB_TYPE } from './pluginNamespace';
@@ -46,35 +43,24 @@
     } from './utils/webParser';
     import MultiModelSelector from './components/MultiModelSelector.svelte';
     import SessionManager from './components/SessionManager.svelte';
-    import ToolSelector, { type ToolConfig } from './components/ToolSelector.svelte';
-    import ModelPresetButton from './components/ModelPreset.svelte';
-    import TranslateDialog from './components/TranslateDialog.svelte';
+        import ModelPresetButton from './components/ModelPreset.svelte';
     import WebAppManager from './components/WebAppManager.svelte';
     import type { ProviderConfig } from './defaultSettings';
-    import { settingsStore } from './stores/settings';
+    import { settingsStore, updateSettings } from './stores/settings';
     import { confirm, Constants, platformUtils } from 'siyuan';
     import { t } from './utils/i18n';
-    import {
-        AVAILABLE_TOOLS,
-        createGetSiyuanSkillsTool,
-        executeToolCall,
-        TOOL_CATEGORIES,
-        QA_TOOL_CATEGORIES,
-        soul,
-    } from './tools';
-
     // Agent 模式工具使用强制规则（统一常量）
-    const AGENT_TOOL_USAGE_INSTRUCTION = `=== 工具使用强制规则 ===
-如果启用了SOUL工具，系统会自动将SOUL文档内容添加到系统提示词中。当用户说记住、下达风格更改要求等情况时，你需要调用soul工具来记录用户要求。
-**绝对禁止：在未调用 get_siyuan_skills 获取文档的情况下。**
-**必须遵守的使用流程：**
-1. 分析用户需求，确定需要使用的工具
-2. **必须**先调用 get_siyuan_skills(toolName="目标工具名称") 获取完整文档
-3. 仔细阅读返回的文档（包含参数说明、使用示例、注意事项）
-4. 根据文档正确构造参数，调用目标工具
-5. 根据工具返回结果继续后续操作
-**为什么要这样做？**
-- 每个工具都有复杂的参数和特定的使用场景，直接使用而不看文档极有可能导致错误操作`;
+    // STUBS: ./tools deleted, safe no-op replacements
+    const AVAILABLE_TOOLS: any[] = [];
+    const TOOL_CATEGORIES: any[] = [];
+    const QA_TOOL_CATEGORIES: any[] = [];
+    type ToolConfig = { name: string; autoApprove: boolean; };
+    function createGetSiyuanSkillsTool(_names: string[]) { return null; }
+    function executeToolCall(_tc: any): Promise<string> { return Promise.resolve('tools disabled'); }
+    function soul(_op: any): Promise<{ success: boolean; content: string }> { return Promise.resolve({ success: false, content: '' }); }
+    function isSupportedThinkingGeminiModel(_id: string) { return false; }
+    function isSupportedThinkingClaudeModel(_id: string) { return false; }
+    function isGemini3Model(_id: string) { return false; }
 
     export let plugin: any;
     export let initialMessage: string = ''; // 初始消息
@@ -201,11 +187,11 @@
             thinkingEffort?: ThinkingEffort;
         }>,
         enableMultiModel: false,
-        chatMode: 'ask' as 'ask' | 'agent',
+        chatMode: 'ask' as 'ask' | 'edit',
     };
 
     // 对话模式
-    type ChatMode = 'ask' | 'agent';
+    type ChatMode = 'ask' | 'edit';
     let chatMode: ChatMode = 'ask';
     let isDiffDialogOpen = false;
     let currentDiffOperation: EditOperation | null = null;
@@ -217,28 +203,6 @@
     let isImageViewerFullscreen = false;
     let currentImageSrc = '';
     let currentImageName = '';
-
-    // 翻译功能
-    let isTranslateDialogOpen = false;
-    let translateInputLanguage = 'auto'; // 自动检测
-    let translateOutputLanguage = 'zh-CN'; // 简体中文
-    let translateInputText = '';
-    let translateOutputText = '';
-    let isTranslating = false;
-    let translateProvider = '';
-    let translateModelId = '';
-    let translateHistory: Array<{
-        id: string;
-        inputLanguage: string;
-        outputLanguage: string;
-        timestamp: number;
-        provider: string;
-        modelId: string;
-        preview: string; // 输入文本的预览（前100字符）
-    }> = [];
-    let showTranslateHistory = false;
-    let translateAbortController: AbortController | null = null;
-    let currentTranslateId: string | null = null; // 当前查看的翻译ID
 
     // 小程序功能
     let isWebAppManagerOpen = false;
@@ -394,61 +358,6 @@
         }
     }
 
-    // 翻译功能相关函数
-    // 打开翻译对话框
-    function openTranslateDialog() {
-        isTranslateDialogOpen = true;
-        showTranslateHistory = false;
-
-        // 如果还没有选择翻译模型，使用当前对话的模型作为默认值
-        if (!translateProvider && currentProvider) {
-            translateProvider = currentProvider;
-            translateModelId = currentModelId;
-        }
-    }
-
-    // 关闭翻译对话框
-    function closeTranslateDialog() {
-        isTranslateDialogOpen = false;
-        showTranslateHistory = false;
-    }
-
-    // 清空翻译对话框
-    function clearTranslateDialog() {
-        translateInputText = '';
-        translateOutputText = '';
-        currentTranslateId = null;
-    }
-
-    // 加载翻译历史列表
-    async function loadTranslateHistoryList() {
-        try {
-            const data = await plugin.loadData('translate-history.json');
-            translateHistory = data?.history || [];
-        } catch (error) {
-            console.error('Load translate history error:', error);
-            translateHistory = [];
-        }
-    }
-
-    // 从独立文件加载单个翻译项
-    async function loadTranslateItem(
-        id: string
-    ): Promise<{ inputText: string; outputText: string } | null> {
-        try {
-            const translatePath = getTranslatePath(id);
-            const blob = await getPluginFileBlob(translatePath);
-            if (!blob) {
-                return null;
-            }
-            const text = await blob.text();
-            return JSON.parse(text);
-        } catch (error) {
-            console.error('Load translate item error:', error);
-            return null;
-        }
-    }
-
     // 小程序功能相关函数
     // 切换小程序菜单
     async function toggleWebAppMenu(event: MouseEvent) {
@@ -595,7 +504,7 @@
                 if (doc.type === 'webpage') {
                     // 网页类型：保持原内容不变（已经获取到内容）
                     content = doc.content;
-                } else if ((chatMode === 'agent' || chatMode === 'ask') && userToolCount > 0) {
+                } else if (chatMode === 'ask' && userToolCount > 0) {
                     // agent模式或启用工具的问答模式：文档只保留ID，块获取kramdown
                     if (doc.type === 'doc') {
                         content = ''; // 文档不保存内容，只保留ID
@@ -687,7 +596,7 @@
         for (const doc of userContextDocs) {
             try {
                 let content: string;
-                if ((chatMode === 'agent' || chatMode === 'ask') && userToolCount > 0) {
+                if (chatMode === 'ask' && userToolCount > 0) {
                     if (doc.type === 'doc') {
                         content = '';
                     } else {
@@ -756,7 +665,7 @@
         try {
             // 准备 Agent/Ask 模式的工具列表
             let toolsForAgent: any[] | undefined = undefined;
-            if ((chatMode === 'agent' || chatMode === 'ask') && userToolCount > 0) {
+            if (chatMode === 'ask' && userToolCount > 0) {
                 const currentSelectedTools = chatMode === 'ask' ? selectedToolsAsk : selectedTools;
                 const selectedToolDefs = AVAILABLE_TOOLS.filter(tool =>
                     currentSelectedTools.some(t => t.name === tool.function.name)
@@ -1161,10 +1070,7 @@
     let selectedToolsAsk: ToolConfig[] = []; // 问答模式选中的工具配置列表
     let toolAutoApproveSettings: Record<string, boolean> = {}; // 所有工具的 autoApprove 配置（包括未选中的）
     let toolAutoApproveSettingsAsk: Record<string, boolean> = {}; // 问答模式所有工具的 autoApprove 配置
-    // 用户选择的工具数量（排除系统工具 get_siyuan_skills）
-    $: userToolCount = (chatMode === 'ask' ? selectedToolsAsk || [] : selectedTools || []).filter(
-        t => t.name !== 'get_siyuan_skills'
-    ).length;
+    $: userToolCount = 0;
 
     // 记忆当前选择的模式
     $: if (chatMode && settings && !isInitialLoading) {
@@ -1270,7 +1176,7 @@
 
         // 初始化模式
         if (!settings.selectedModelPresetId && settings.lastUsedChatMode) {
-            chatMode = settings.lastUsedChatMode === 'agent' ? 'agent' : 'ask';
+            chatMode = settings.lastUsedChatMode === 'edit' ? 'edit' : 'ask';
         }
 
         // 初始化多模型选择，过滤掉无效的模型
@@ -1297,16 +1203,6 @@
 
         // 加载提示词
         await loadPrompts();
-
-        // 加载 Agent 模式的工具配置
-        await loadToolsConfig();
-
-        // 加载翻译历史和设置
-        await loadTranslateHistoryList();
-        translateProvider = settings.translateProvider || currentProvider || '';
-        translateModelId = settings.translateModelId || currentModelId || '';
-        translateInputLanguage = settings.translateInputLanguage || 'auto';
-        translateOutputLanguage = settings.translateOutputLanguage || 'zh-CN';
 
         // 加载小程序设置
         webApps = settings.webApps || [];
@@ -1394,6 +1290,31 @@
         // 监听文档总结事件
         window.addEventListener(SUMMARY_EVENT, handleSummarizeDoc as EventListener);
 
+        // Auto-fetch OpenCode models on startup
+        if (settings.aiProviders?.opencode && (!settings.aiProviders.opencode.models || settings.aiProviders.opencode.models.length === 0)) {
+            try {
+                const providerConfig = settings.aiProviders.opencode;
+                const models = await fetchModels('opencode', '', providerConfig?.serverUrl || 'http://localhost:4096');
+                if (models && models.length > 0) {
+                    const modelConfigs = models.map(m => ({
+                        id: m.id,
+                        name: m.name,
+                        temperature: 0.7,
+                        maxTokens: 4096
+                    }));
+                    settings.aiProviders.opencode.models = modelConfigs;
+                    // Auto-select first model if none selected
+                    if (!settings.currentModelId || !modelConfigs.find(m => m.id === settings.currentModelId)) {
+                        settings.currentModelId = modelConfigs[0].id;
+                    }
+                    await plugin.saveData('settings.json', settings);
+                    updateSettings(settings);
+                }
+            } catch (e) {
+                console.warn('Auto-fetch OpenCode models failed:', e);
+            }
+        }
+
         isInitialLoading = false;
     });
 
@@ -1411,11 +1332,6 @@
         document.removeEventListener('copy', handleCopyEvent);
         // 移除文档总结事件监听器
         window.removeEventListener(SUMMARY_EVENT, handleSummarizeDoc as EventListener);
-
-        // 保存工具配置
-        if (isToolConfigLoaded) {
-            await saveToolsConfig();
-        }
 
         // 如果有未保存的更改，自动保存当前会话
         if (hasUnsavedChanges && messages.filter(m => m.role !== 'system').length > 0) {
@@ -1961,7 +1877,7 @@
                 thinkingEffort?: ThinkingEffort;
             }>;
             enableMultiModel?: boolean;
-            chatMode?: 'ask' | 'agent';
+            chatMode?: 'ask' | 'edit';
         }>
     ) {
         const newSettings = event.detail;
@@ -2528,7 +2444,7 @@
             for (const doc of userContextDocuments) {
                 try {
                     let content: string;
-                    if ((chatMode === 'agent' || chatMode === 'ask') && userToolCount > 0) {
+                    if (chatMode === 'ask' && userToolCount > 0) {
                         // agent模式或启用工具的问答模式：文档只保留ID，块获取kramdown
                         if (doc.type === 'doc') {
                             content = '';
@@ -2706,7 +2622,7 @@
 
                 // 准备 Agent/Ask 模式的工具列表
                 let toolsForAgent: any[] | undefined = undefined;
-                if ((chatMode === 'agent' || chatMode === 'ask') && userToolCount > 0) {
+                if (chatMode === 'ask' && userToolCount > 0) {
                     const currentSelectedTools =
                         chatMode === 'ask' ? selectedToolsAsk : selectedTools;
                     const selectedToolDefs = AVAILABLE_TOOLS.filter(tool =>
@@ -3167,7 +3083,7 @@
 
                             // agent模式或启用工具的问答模式：文档块只传递ID，不传递内容
                             if (
-                                (chatMode === 'agent' || chatMode === 'ask') &&
+                                chatMode === 'ask' &&
                                 userToolCount > 0 &&
                                 doc.type === 'doc'
                             ) {
@@ -3339,16 +3255,9 @@
                                           ? '网页'
                                           : '块';
 
-                                // agent模式：文档块只传递ID，不传递内容
-                                if (chatMode === 'agent' && doc.type === 'doc') {
-                                    return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\``;
-                                }
-
-                                // 其他情况：传递完整内容
                                 if (doc.content) {
                                     return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\`\n\n\`\`\`markdown\n${doc.content}\n\`\`\``;
                                 } else {
-                                    // 如果没有内容（agent模式下的文档），只传递ID
                                     return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\``;
                                 }
                             })
@@ -3417,7 +3326,7 @@
 
                                 // agent模式或启用工具的问答模式：文档块只传递ID，不传递内容
                                 if (
-                                    (chatMode === 'agent' || chatMode === 'ask') &&
+                                    chatMode === 'ask' &&
                                     userToolCount > 0 &&
                                     doc.type === 'doc'
                                 ) {
@@ -3450,12 +3359,10 @@
         // Agent/Ask 模式带有工具时，添加工具使用强制规则
         let hasToolInstruction = false;
         let hasSoulEnabled = false;
-        if ((chatMode === 'agent' || chatMode === 'ask') && userToolCount > 0) {
+        if (chatMode === 'ask' && userToolCount > 0) {
             // 如果已有基础提示词，添加换行后追加工具说明；否则直接使用工具说明
             if (baseSystemPrompt.trim()) {
-                baseSystemPrompt += '\n\n' + AGENT_TOOL_USAGE_INSTRUCTION;
             } else {
-                baseSystemPrompt = AGENT_TOOL_USAGE_INSTRUCTION;
             }
             hasToolInstruction = true;
 
@@ -3824,7 +3731,7 @@
                 try {
                     let content: string;
 
-                    if ((chatMode === 'agent' || chatMode === 'ask') && userToolCount > 0) {
+                    if (chatMode === 'ask' && userToolCount > 0) {
                         // agent模式或启用工具的问答模式：文档只传递ID
                         if (doc.type === 'doc') {
                             content = '';
@@ -3914,7 +3821,7 @@
 
         // DeepSeek 思考模式：开启新一轮对话前清理历史消息中的 reasoning_content，保留工具调用链
         if (
-            (chatMode === 'agent' || chatMode === 'ask') &&
+            chatMode === 'ask' &&
             userToolCount > 0 &&
             currentProvider === 'deepseek'
         ) {
@@ -3928,7 +3835,7 @@
         }
 
         const isDeepseekThinkingAgent =
-            (chatMode === 'agent' || chatMode === 'ask') &&
+            chatMode === 'ask' &&
             userToolCount > 0 &&
             modelConfig.capabilities?.thinking &&
             (modelConfig.thinkingEnabled || false);
@@ -4011,7 +3918,7 @@
 
                             // agent模式或启用工具的问答模式：文档块只传递ID，不传递内容
                             if (
-                                (chatMode === 'agent' || chatMode === 'ask') &&
+                                chatMode === 'ask' &&
                                 userToolCount > 0 &&
                                 doc.type === 'doc'
                             ) {
@@ -4177,7 +4084,7 @@
 
                                 // agent模式或启用工具的问答模式：文档块只传递ID，不传递内容
                                 if (
-                                    (chatMode === 'agent' || chatMode === 'ask') &&
+                                    chatMode === 'ask' &&
                                     userToolCount > 0 &&
                                     doc.type === 'doc'
                                 ) {
@@ -4261,7 +4168,7 @@
 
                                 // agent模式或启用工具的问答模式：文档块只传递ID，不传递内容
                                 if (
-                                    (chatMode === 'agent' || chatMode === 'ask') &&
+                                    chatMode === 'ask' &&
                                     userToolCount > 0 &&
                                     doc.type === 'doc'
                                 ) {
@@ -4286,13 +4193,11 @@
         }
 
         // 根据模式添加系统提示词
-        if ((chatMode === 'agent' || chatMode === 'ask') && userToolCount > 0) {
+        if (chatMode === 'ask' && userToolCount > 0) {
             // Agent 模式或启用工具的问答模式下添加工具使用强制规则
             let baseSystemPrompt = settings.aiSystemPrompt || '';
             if (baseSystemPrompt.trim()) {
-                baseSystemPrompt += '\n\n' + AGENT_TOOL_USAGE_INSTRUCTION;
             } else {
-                baseSystemPrompt = AGENT_TOOL_USAGE_INSTRUCTION;
             }
             messagesToSend.unshift({ role: 'system', content: baseSystemPrompt });
         } else if (settings.aiSystemPrompt) {
@@ -4377,7 +4282,7 @@
 
             // 准备工具列表
             let toolsForAgent: any[] | undefined = undefined;
-            if ((chatMode === 'agent' || chatMode === 'ask') && userToolCount > 0) {
+            if (chatMode === 'ask' && userToolCount > 0) {
                 // 根据选中的工具名称筛选出对应的工具定义
                 const currentSelectedTools = chatMode === 'ask' ? selectedToolsAsk : selectedTools;
                 const selectedToolDefs = AVAILABLE_TOOLS.filter(tool =>
@@ -4399,8 +4304,7 @@
             let webSearchTools: any[] | undefined = undefined;
             if (
                 modelConfig.capabilities?.webSearch &&
-                modelConfig.webSearchEnabled &&
-                chatMode !== 'agent'
+                modelConfig.webSearchEnabled
             ) {
                 // 根据模型类型构建不同的联网工具配置
                 const modelIdLower = modelConfig.id.toLowerCase();
@@ -4429,7 +4333,7 @@
 
             // Agent 模式或启用工具的问答模式使用循环调用
             if (
-                (chatMode === 'agent' || chatMode === 'ask') &&
+                chatMode === 'ask' &&
                 toolsForAgent &&
                 toolsForAgent.length > 0
             ) {
@@ -6716,24 +6620,7 @@
         }
 
         try {
-            // agent模式或启用工具的问答模式下，文档只存储块ID
-            if (chatMode === 'agent' || (chatMode === 'ask' && userToolCount > 0)) {
-                contextDocuments = [
-                    ...contextDocuments,
-                    {
-                        id: docId,
-                        title: docTitle,
-                        content: '', // agent模式下不存储内容，只存储ID
-                        type: 'doc',
-                    },
-                ];
-                isSearchDialogOpen = false;
-                searchKeyword = '';
-                searchResults = [];
-                return;
-            }
-
-            // 非agent模式：获取文档内容
+            // 获取文档内容
             const data = await exportMdContent(docId, false, false, 2, 0, false);
             if (data && data.content) {
                 contextDocuments = [
@@ -6892,45 +6779,7 @@
                 isDoc = blockInfo?.type === 'd'; // 'd' 表示文档块
             }
 
-            // agent模式或启用工具的问答模式：获取kramdown格式（用于AI），但使用Markdown生成显示标题
-            if (chatMode === 'agent' || (chatMode === 'ask' && userToolCount > 0)) {
-                const blockData = await getBlockKramdown(blockId);
-                if (blockData && blockData.kramdown) {
-                    // 获取Markdown格式用于生成友好的显示标题
-                    let displayTitle = '块内容';
-                    try {
-                        const mdData = await exportMdContent(blockId, false, false, 2, 0, false);
-                        if (mdData && mdData.content) {
-                            const contentPreview = mdData.content.replace(/\n/g, ' ').trim();
-                            displayTitle =
-                                contentPreview.length > 20
-                                    ? contentPreview.substring(0, 20) + '...'
-                                    : contentPreview || (isDoc ? '文档内容' : '块内容');
-                        }
-                    } catch (error) {
-                        console.warn('获取Markdown预览失败，使用kramdown生成标题:', error);
-                        // 降级使用kramdown生成标题
-                        const contentPreview = blockData.kramdown.replace(/\n/g, ' ').trim();
-                        displayTitle =
-                            contentPreview.length > 20
-                                ? contentPreview.substring(0, 20) + '...'
-                                : contentPreview || blockTitle || (isDoc ? '文档内容' : '块内容');
-                    }
-
-                    contextDocuments = [
-                        ...contextDocuments,
-                        {
-                            id: blockId,
-                            title: displayTitle,
-                            content: blockData.kramdown, // 存储kramdown格式用于AI
-                            type: isDoc ? 'doc' : 'block',
-                        },
-                    ];
-                }
-                return;
-            }
-
-            // ask模式：获取块的Markdown内容
+            // 获取块的Markdown内容
             const data = await exportMdContent(blockId, false, false, 2, 0, false);
             if (data && data.content) {
                 // 检查是否为纯图片块（只包含图片Markdown语法）
@@ -8344,107 +8193,6 @@
         );
     }
 
-    // 工具配置管理
-    async function loadToolsConfig() {
-        try {
-            const data = await plugin.loadData('agent-tools-config.json');
-            if (data?.selectedTools && Array.isArray(data.selectedTools)) {
-                selectedTools = data.selectedTools;
-            } else {
-                selectedTools = [];
-            }
-            // 加载所有工具的 autoApprove 配置（包括未选中的工具）
-            if (data?.toolAutoApproveSettings && typeof data.toolAutoApproveSettings === 'object') {
-                toolAutoApproveSettings = data.toolAutoApproveSettings;
-            } else {
-                toolAutoApproveSettings = {};
-            }
-            if (data?.selectedToolsAsk && Array.isArray(data.selectedToolsAsk)) {
-                selectedToolsAsk = data.selectedToolsAsk;
-            } else {
-                selectedToolsAsk = [];
-            }
-            if (
-                data?.toolAutoApproveSettingsAsk &&
-                typeof data.toolAutoApproveSettingsAsk === 'object'
-            ) {
-                toolAutoApproveSettingsAsk = data.toolAutoApproveSettingsAsk;
-            } else {
-                toolAutoApproveSettingsAsk = {};
-            }
-            // 初始化快照，避免初次加载触发自动保存
-            lastSavedToolsConfigSnapshot = JSON.stringify({
-                selectedTools: selectedTools || [],
-                toolAutoApproveSettings: toolAutoApproveSettings || {},
-                selectedToolsAsk: selectedToolsAsk || [],
-                toolAutoApproveSettingsAsk: toolAutoApproveSettingsAsk || {},
-            });
-        } catch (error) {
-            console.error('[ToolConfig] Load error:', error);
-            selectedTools = [];
-            toolAutoApproveSettings = {};
-            selectedToolsAsk = [];
-            toolAutoApproveSettingsAsk = {};
-            lastSavedToolsConfigSnapshot = JSON.stringify({
-                selectedTools: [],
-                toolAutoApproveSettings: {},
-                selectedToolsAsk: [],
-                toolAutoApproveSettingsAsk: {},
-            });
-        } finally {
-            // 标记配置已加载完成，此后才允许自动保存
-            isToolConfigLoaded = true;
-        }
-    }
-
-    async function saveToolsConfig() {
-        // 只在配置加载完成后才保存，避免初始化时覆盖已保存的配置
-        if (!isToolConfigLoaded) {
-            return;
-        }
-
-        const currentConfig = {
-            selectedTools: selectedTools || [],
-            toolAutoApproveSettings: toolAutoApproveSettings || {},
-            selectedToolsAsk: selectedToolsAsk || [],
-            toolAutoApproveSettingsAsk: toolAutoApproveSettingsAsk || {},
-        };
-        const currentSnapshot = JSON.stringify(currentConfig);
-        // 配置未变化时不落盘，避免安装后自动生成配置文件
-        if (currentSnapshot === lastSavedToolsConfigSnapshot) {
-            return;
-        }
-
-        try {
-            await plugin.saveData('agent-tools-config.json', currentConfig);
-            lastSavedToolsConfigSnapshot = currentSnapshot;
-        } catch (error) {
-            console.error('[ToolConfig] Save error:', error);
-        }
-    }
-
-    // 监听工具选择变化，自动保存
-    $: {
-        // 只在配置加载完成后，且确实有变化时才保存
-        if (isToolConfigLoaded && (selectedTools || selectedToolsAsk)) {
-            // 使用 tick 确保在下一个事件循环保存，避免频繁保存
-            tick().then(() => {
-                saveToolsConfig();
-            });
-        }
-    }
-
-    // 监听 autoApprove 设置变化，自动保存
-    $: {
-        // 只在配置加载完成后，且确实有变化时才保存
-        if (isToolConfigLoaded && toolAutoApproveSettings) {
-            // 使用 tick 确保在下一个事件循环保存，避免频繁保存
-            tick().then(() => {
-                saveToolsConfig();
-            });
-        }
-    }
-
     // 获取工具的显示名称
     function getToolDisplayName(toolName: string): string {
         const key = `tools.${toolName}.name`;
@@ -9195,7 +8943,7 @@
 
         // DeepSeek 思考模式：开启新一轮对话前清理历史消息中的 reasoning_content，保留工具调用链
         if (
-            (chatMode === 'agent' || chatMode === 'ask') &&
+            chatMode === 'ask' &&
             userToolCount > 0 &&
             currentProvider === 'deepseek'
         ) {
@@ -9209,7 +8957,7 @@
         }
 
         const isDeepseekThinkingAgent =
-            (chatMode === 'agent' || chatMode === 'ask') &&
+            chatMode === 'ask' &&
             userToolCount > 0 &&
             modelConfig &&
             modelConfig.capabilities?.thinking &&
@@ -9292,7 +9040,7 @@
                                       : '块';
                             // agent模式或启用工具的问答模式：文档块只传递ID，不传递内容
                             if (
-                                (chatMode === 'agent' || chatMode === 'ask') &&
+                                chatMode === 'ask' &&
                                 userToolCount > 0 &&
                                 doc.type === 'doc'
                             ) {
@@ -9563,11 +9311,9 @@
 
         // Agent/Ask 模式带有工具时，添加工具使用强制规则
         let hasToolInstruction = false;
-        if ((chatMode === 'agent' || chatMode === 'ask') && userToolCount > 0) {
+        if (chatMode === 'ask' && userToolCount > 0) {
             if (baseSystemPrompt.trim()) {
-                baseSystemPrompt += '\n\n' + AGENT_TOOL_USAGE_INSTRUCTION;
             } else {
-                baseSystemPrompt = AGENT_TOOL_USAGE_INSTRUCTION;
             }
             hasToolInstruction = true;
         }
@@ -9605,7 +9351,7 @@
 
             // 准备工具列表
             let toolsForAgent: any[] | undefined = undefined;
-            if ((chatMode === 'agent' || chatMode === 'ask') && userToolCount > 0) {
+            if (chatMode === 'ask' && userToolCount > 0) {
                 // 根据选中的工具名称筛选出对应的工具定义
                 const currentSelectedTools = chatMode === 'ask' ? selectedToolsAsk : selectedTools;
                 const selectedToolDefs = AVAILABLE_TOOLS.filter(tool =>
@@ -9628,7 +9374,7 @@
 
             // Agent 模式或问答模式启用工具使用循环调用
             if (
-                (chatMode === 'agent' || chatMode === 'ask') &&
+                chatMode === 'ask' &&
                 toolsForAgent &&
                 toolsForAgent.length > 0
             ) {
@@ -10309,13 +10055,6 @@
 <div class="ai-sidebar" class:ai-sidebar--fullscreen={isFullscreen} bind:this={sidebarContainer}>
     <div class="ai-sidebar__header">
         <h3 class="ai-sidebar__title">
-            <button
-                class="b3-button b3-button--text"
-                on:click={openTranslateDialog}
-                title={t('aiSidebar.translate.openDialog') || '翻译'}
-            >
-                <svg class="b3-button__icon"><use xlink:href="#iconTranslate"></use></svg>
-            </button>
             <div class="ai-sidebar__webapp-menu-container">
                 <button
                     class="b3-button b3-button--text"
@@ -13040,20 +12779,8 @@
                 bind:value={chatMode}
             >
                 <option value="ask">{t('aiSidebar.mode.ask')}</option>
-                <option value="agent">{t('aiSidebar.mode.agent')}</option>
             </select>
 
-            <!-- Agent/Ask 模式工具选择按钮 -->
-            {#if chatMode === 'agent' || chatMode === 'ask'}
-                <button
-                    class="b3-button b3-button--text ai-sidebar__tool-selector-btn"
-                    on:click={() => (isToolSelectorOpen = !isToolSelectorOpen)}
-                    title={t('aiSidebar.agent.selectTools')}
-                >
-                    <svg class="b3-button__icon"><use xlink:href="#iconSettings"></use></svg>
-                    <span>{t('aiSidebar.agent.tools')} ({userToolCount})</span>
-                </button>
-            {/if}
 
             <!-- 模型选择器（问答模式：支持单选/多选切换；其他模式：仅单选） -->
             {#if chatMode === 'ask'}
@@ -13885,24 +13612,6 @@
         </div>
     {/if}
 
-    <!-- 工具选择器对话框 -->
-    {#if isToolSelectorOpen}
-        {#if chatMode === 'ask'}
-            <ToolSelector
-                bind:selectedTools={selectedToolsAsk}
-                bind:toolAutoApproveSettings={toolAutoApproveSettingsAsk}
-                categories={QA_TOOL_CATEGORIES}
-                on:close={() => (isToolSelectorOpen = false)}
-            />
-        {:else}
-            <ToolSelector
-                bind:selectedTools
-                bind:toolAutoApproveSettings
-                categories={TOOL_CATEGORIES}
-                on:close={() => (isToolSelectorOpen = false)}
-            />
-        {/if}
-    {/if}
 
     <!-- 保存到笔记对话框 -->
     {#if isSaveToNoteDialogOpen}
@@ -14024,59 +13733,6 @@
     {/if}
 
     <!-- 工具批准对话框 -->
-    {#if isToolApprovalDialogOpen && pendingToolCall}
-        <div class="tool-approval-dialog__overlay" on:click={rejectToolCall}></div>
-        <div class="tool-approval-dialog">
-            <div class="tool-approval-dialog__header">
-                <h3>{t('tools.waitingApproval')}</h3>
-                <button
-                    class="b3-button b3-button--text"
-                    on:click={rejectToolCall}
-                    title={t('common.close')}
-                >
-                    <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
-                </button>
-            </div>
-
-            <div class="tool-approval-dialog__content">
-                <div class="tool-approval-dialog__tool-info">
-                    <div class="tool-approval-dialog__tool-name">
-                        <svg class="b3-button__icon">
-                            <use xlink:href="#iconSettings"></use>
-                        </svg>
-                        <strong>{getToolDisplayName(pendingToolCall.function.name)}</strong>
-                    </div>
-                    <div class="tool-approval-dialog__tool-id">
-                        ID: {pendingToolCall.id}
-                    </div>
-                </div>
-
-                <div class="tool-approval-dialog__params">
-                    <div class="tool-approval-dialog__section-title">
-                        {t('tools.selector.parameters')}:
-                    </div>
-                    <pre class="tool-approval-dialog__code">{pendingToolCall.function
-                            .arguments}</pre>
-                </div>
-
-                <div class="tool-approval-dialog__warning">
-                    <svg class="b3-button__icon"><use xlink:href="#iconInfo"></use></svg>
-                    <span>请仔细检查参数，确认无误后再批准执行</span>
-                </div>
-            </div>
-
-            <div class="tool-approval-dialog__footer">
-                <button class="b3-button b3-button--cancel" on:click={rejectToolCall}>
-                    <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
-                    {t('tools.reject')}
-                </button>
-                <button class="b3-button b3-button--primary" on:click={approveToolCall}>
-                    <svg class="b3-button__icon"><use xlink:href="#iconCheck"></use></svg>
-                    {t('tools.approve')}
-                </button>
-            </div>
-        </div>
-    {/if}
 
     <!-- 图片查看器 -->
     {#if isImageViewerOpen}
@@ -14129,15 +13785,6 @@
             </div>
         </div>
     {/if}
-
-    <!-- 翻译对话框 -->
-    <TranslateDialog
-        isOpen={isTranslateDialogOpen}
-        {plugin}
-        {providers}
-        {settings}
-        on:close={() => (isTranslateDialogOpen = false)}
-    />
 
     <!-- 小程序管理器 -->
     <WebAppManager
@@ -15430,11 +15077,11 @@
         }
 
         &.ai-sidebar__send-btn--abort {
-            background-color: #ef4444;
+            background-color: var(--b3-theme-error);
             color: white;
 
             &:hover {
-                background-color: #dc2626;
+                background-color: var(--b3-theme-error-lighter);
             }
         }
 
@@ -15476,7 +15123,7 @@
         left: 0;
         right: 0;
         bottom: 0;
-        background: rgba(0, 0, 0, 0.5);
+        background: var(--b3-dialog-shadow);
     }
 
     .ai-sidebar__prompt-dialog-content {
@@ -15627,7 +15274,7 @@
         left: 0;
         right: 0;
         bottom: 0;
-        background: rgba(0, 0, 0, 0.5);
+        background: var(--b3-dialog-shadow);
     }
 
     .ai-sidebar__search-dialog-content {
@@ -15752,7 +15399,7 @@
         left: 0;
         right: 0;
         bottom: 0;
-        background: rgba(0, 0, 0, 0.5);
+        background: var(--b3-dialog-shadow);
     }
 
     .ai-sidebar__edit-dialog-content {
@@ -15916,7 +15563,7 @@
         left: 0;
         right: 0;
         bottom: 0;
-        background: rgba(0, 0, 0, 0.5);
+        background: var(--b3-dialog-shadow);
     }
 
     .ai-sidebar__diff-dialog-content {
@@ -16002,12 +15649,12 @@
         min-height: 24px;
 
         &--removed {
-            background: rgba(255, 0, 0, 0.1);
+            background: color-mix(in srgb, var(--b3-theme-error) 10%, transparent);
             color: var(--b3-theme-error);
         }
 
         &--added {
-            background: rgba(0, 255, 0, 0.1);
+            background: color-mix(in srgb, var(--b3-theme-success) 10%, transparent);
             color: var(--b3-theme-success);
         }
 
@@ -16086,7 +15733,7 @@
         left: 0;
         right: 0;
         bottom: 0;
-        background: rgba(0, 0, 0, 0.5);
+        background: var(--b3-dialog-shadow);
         z-index: 999;
     }
 
@@ -16304,7 +15951,7 @@
         left: 0;
         right: 0;
         bottom: 0;
-        background: rgba(0, 0, 0, 0.5);
+        background: var(--b3-dialog-shadow);
         z-index: 999;
     }
 
@@ -17381,7 +17028,7 @@
         transform: translate(-50%, -50%);
         background: var(--b3-theme-background);
         border-radius: 8px;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 4px 20px var(--b3-dialog-shadow);
         z-index: 1001;
         max-width: 90vw;
         max-height: 90vh;

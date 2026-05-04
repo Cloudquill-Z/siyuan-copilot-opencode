@@ -8,7 +8,6 @@
         "settingsPanel": "设置面板",
         "settingsGroup": {
             "ai": "AI 设置",
-            "tools": "工具设置",
             "aiPlatform": "AI 平台配置",
             "systemPrompt": "系统提示词",
             "platformManagement": "平台管理",
@@ -17,7 +16,6 @@
             "sessionManagement": "会话管理",
             "soul": "SOUL 文档",
             "webApp": "网页小程序",
-            "translate": "翻译设置",
             "group1": "页签1",
             "group2": "页签2",
             "reset": "重置设置"
@@ -95,11 +93,6 @@
             "description": "设置保存会话的默认路径，支持sprig语法，如 /{{now | date \"2006/200601\"}}/",
             "placeholder": "留空则使用当前文档路径"
         },
-        "pythonPath": {
-            "title": "Python 解释器路径",
-            "description": "设置 Python 可执行文件的路径，用于运行 Python 代码工具。留空则使用系统默认的 python 命令",
-            "placeholder": "例如：C:\\Python311\\python.exe 或 /usr/bin/python3"
-        },
         "textinput": {
             "title": "文本输入",
             "description": "请输入文本内容",
@@ -164,43 +157,18 @@
             "notFound": "块不存在，请检查 ID 是否正确",
             "notDoc": "该 ID 不是文档类型",
             "error": "验证失败"
-        },
-        "translate": {
-            "temperature": {
-                "title": "翻译 Temperature",
-                "description": "翻译专用的 temperature 参数（0-2），为空则使用模型默认值。值越小，翻译越准确一致；值越大，翻译越灵活多样"
-            },
-            "prompt": {
-                "title": "翻译提示词",
-                "description": "翻译时使用的提示词模板，${content} 会被替换为要翻译的内容",
-                "placeholder": "输入翻译提示词模板..."
-            }
         }
     },
     "aiSidebar": {
-        "title": "Copilot",
+        "title": "OpenCode",
         "unsaved": "未保存",
         "unsavedChanges": "有未保存的更改",
         "mode": {
             "label": "模式",
             "ask": "问答模式",
             "edit": "编辑模式",
-            "agent": "Agent模式",
-            "autoApprove": "自动批准",
             "askDescription": "仅进行问答，不修改笔记内容",
-            "editDescription": "AI可以直接编辑思源笔记内容",
-            "agentDescription": "AI可以使用工具自主完成复杂任务",
-            "selectTools": "选择工具"
-        },
-        "agent": {
-            "tools": "工具",
-            "selectTools": "选择工具",
-            "toolsSelected": "已选工具",
-            "toolCall": "工具调用",
-            "toolCallCompleted": "工具调用完成",
-            "toolCallFailed": "工具调用失败",
-            "viewResult": "查看结果",
-            "hideResult": "隐藏结果"
+            "editDescription": "AI可以直接编辑思源笔记内容"
         },
         "empty": {
             "title": "开始对话",
@@ -249,27 +217,6 @@
             "viewDiff": "查看差异",
             "applied": "已应用",
             "rejected": "已拒绝"
-        },
-        "translate": {
-            "title": "翻译",
-            "openDialog": "打开翻译对话框",
-            "inputLanguage": "输入语言",
-            "outputLanguage": "输出语言",
-            "inputText": "输入文本",
-            "outputText": "翻译结果",
-            "inputPlaceholder": "请输入要翻译的文本...",
-            "outputPlaceholder": "翻译结果将显示在这里...",
-            "auto": "自动检测",
-            "swap": "交换语言",
-            "translate": "翻译",
-            "clear": "清空",
-            "cancel": "取消",
-            "history": "翻译历史",
-            "noHistory": "暂无翻译历史",
-            "emptyInput": "请输入要翻译的文本",
-            "noModel": "请选择翻译模型",
-            "noConfig": "未找到模型配置",
-            "error": "翻译失败"
         },
         "modelSettings": {
             "unlimited": "无限制",
@@ -478,13 +425,6 @@
     },
     "platform": {
         "builtIn": {
-            "gemini": "Gemini",
-            "deepseek": "DeepSeek",
-            "moonshot": "月之暗面 (Kimi)",
-            "openai": "OpenAI",
-            "volcano": "火山引擎",
-            "Achuan": "A API",
-            "AchuanDescription": "为您提供稳定可靠的Openai ChatGPT、Gemini、Claude、Deepseek、Grok等API直连中转服务，支持nanobanana生图模型（gemini-3-pro-image-preview）。人民币:美刀=0.6:1，注册即送$0.2试用额度。",
             "opencode": "OpenCode",
             "opencodeDescription": "OpenCode 本地 MCP 服务器，聚合多个 AI 提供商和模型，无需 API Key。"
         },
@@ -547,7 +487,7 @@
         "aiChatDialog": "AI 助手"
     },
     "models": {
-        "remove":"移除",
+        "remove": "移除",
         "fetchSuccess": "成功获取 {count} 个模型",
         "fetchFailed": "获取模型失败",
         "addSuccess": "模型已添加",
@@ -574,103 +514,9 @@
         "thinking": "思考",
         "vision": "视觉",
         "imageGeneration": "生图",
-        "toolCalling": "工具调用",
         "webSearch": "联网搜索",
         "noMatch": "没有找到匹配的模型",
         "fetching": "正在获取模型列表..."
-    },
-    "tools": {
-        "category": {
-            "web": "网页工具",
-            "siyuan": "思源笔记常规工具",
-            "database": "数据库",
-            "other": "其他"
-        },
-        "selector": {
-            "title": "工具选择",
-            "info": "选择AI可以使用的工具。AI会根据对话内容自动判断何时使用这些工具。（注意：添加工具会增加token数）",
-            "selectAll": "全选",
-            "deselectAll": "取消全选",
-            "selected": "已选择",
-            "parameters": "参数"
-        },
-        "autoApprove": {
-            "label": "自动批准",
-            "tooltip": "启用后，此工具调用不需要手动确认",
-            "footerInfo": "可为每个工具单独设置是否自动批准"
-        },
-        "fetch_web_content": {
-            "name": "获取网页内容"
-        },
-        "web_fetch": {
-            "name": "获取网页内容"
-        },
-        "siyuan_sql_query": {
-            "name": "SQL查询"
-        },
-        "siyuan_database": {
-            "name": "数据库操作"
-        },
-        "siyuan_insert_block": {
-            "name": "插入块"
-        },
-        "siyuan_update_block": {
-            "name": "更新块"
-        },
-        "siyuan_get_block_attrs": {
-            "name": "获取块属性"
-        },
-        "siyuan_set_block_attrs": {
-            "name": "设置块属性"
-        },
-        "siyuan_get_block_content": {
-            "name": "获取块内容"
-        },
-        "siyuan_create_document": {
-            "name": "创建文档"
-        },
-        "siyuan_list_notebooks": {
-            "name": "列出笔记本"
-        },
-        "siyuan_create_notebook": {
-            "name": "创建笔记本"
-        },
-        "siyuan_rename_document": {
-            "name": "重命名文档"
-        },
-        "siyuan_move_documents": {
-            "name": "移动文档"
-        },
-        "siyuan_get_doc_tree": {
-            "name": "获取文档树"
-        },
-        "siyuan_fetch_sync_post": {
-            "name": "思源笔记任意API调用"
-        },
-        "siyuan_delete_block": {
-            "name": "删除块"
-        },
-        "siyuan_send_notification":{
-            "name": "发送系统通知"
-        },
-        "siyuan_get_current_time":{
-            "name": "获取当前时间"
-        },
-        "run_js": {
-            "name": "运行 JavaScript"
-        },
-        "run_python": {
-            "name": "运行 Python"
-        },
-        "siyuan_create_child_document": {
-            "name": "创建子文档"
-        },
-        "calling": "正在调用工具",
-        "called": "工具已调用",
-        "result": "工具结果",
-        "waitingApproval": "等待批准",
-        "approve": "批准",
-        "reject": "拒绝"
     },
     "multiModel": {
         "title": "多模型对话",

@@ -1,3 +1,27 @@
+/* OpenCode Brand Accent — blue-purple gradient */
+.ai-sidebar {
+  /* OpenCode accent: blends with user's theme for light/dark compatibility */
+  --opencode-accent: #6366f1;
+  --opencode-accent-light: #818cf8;
+  --opencode-accent-dark: #4f46e5;
+  --opencode-surface: #f8f7ff;
+
+  /* Override primary with OpenCode brand on user-selected messages */
+  .ai-message--user .ai-message__content {
+    border-left: 3px solid var(--opencode-accent);
+  }
+
+  /* Sidebar header accent */
+  .ai-sidebar__header {
+    border-bottom: 2px solid var(--opencode-accent-light);
+  }
+
+  /* Active mode selector accent */
+  .ai-sidebar__mode-select option:checked {
+    color: var(--opencode-accent);
+  }
+}
+
 /* AI Sidebar Styles */
 .ai-sidebar {
   font-family: var(--b3-font-family);

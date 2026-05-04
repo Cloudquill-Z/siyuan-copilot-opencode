@@ -2,7 +2,7 @@
   "name": "siyuan-copilot-opencode",
   "author": "Achuan-2",
   "url": "https://github.com/zzl793780096-creator/siyuan-copilot-opencode",
-  "version": "2.3.5",
+  "version": "0.0.1",
   "minAppVersion": "3.6.0",
   "backends": [
     "all"
@@ -16,8 +16,8 @@
     "zh_CN": "思源 OpenCode"
   },
   "description": {
-    "default": "Independent SiYuan OpenCode plugin for note-aware chat, web tools, and local OpenCode workflows",
-    "zh_CN": "为 SiYuan Copilot 增加 OpenCode Provider 的扩展插件，支持基于笔记上下文进行对话与编辑"
+    "default": "Independent SiYuan OpenCode plugin for note-aware chat and local OpenCode workflows",
+    "zh_CN": "独立的思源 OpenCode AI 对话插件，基于笔记上下文进行智能对话"
   },
   "readme": {
     "default": "README_en_US.md",

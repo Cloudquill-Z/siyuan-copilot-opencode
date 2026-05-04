@@ -8,7 +8,6 @@
         "settingsPanel": "Settings Panel",
         "settingsGroup": {
             "ai": "AI Settings",
-            "tools": "Tools Settings",
             "aiPlatform": "AI Platform Configuration",
             "systemPrompt": "System Prompt",
             "platformManagement": "Platform Management",
@@ -17,7 +16,6 @@
             "sessionManagement": "Session Management",
             "soul": "SOUL Document",
             "webApp": "Web App",
-            "translate": "Translation Settings",
             "group1": "Tab1",
             "group2": "Tab2",
             "reset": "Reset Settings"
@@ -95,11 +93,6 @@
             "description": "Set the default path for saving sessions, supports sprig syntax like /{{now | date \"2006/200601\"}}/",
             "placeholder": "Leave empty to use current document path"
         },
-        "pythonPath": {
-            "title": "Python Interpreter Path",
-            "description": "Set the path to the Python executable for running Python code tool. Leave empty to use system default python command",
-            "placeholder": "e.g.: C:\\Python311\\python.exe or /usr/bin/python3"
-        },
         "textinput": {
             "title": "Text Input",
             "description": "Please enter text content",
@@ -165,43 +158,18 @@
             "notFound": "Block not found, please check the ID",
             "notDoc": "The ID is not a document type",
             "error": "Validation failed"
-        },
-        "translate": {
-            "temperature": {
-                "title": "Translation Temperature",
-                "description": "Temperature parameter for translation (0-2). Leave empty to use model default. Lower values make translation more accurate and consistent; higher values make it more flexible and diverse"
-            },
-            "prompt": {
-                "title": "Translation Prompt",
-                "description": "Prompt template for translation, ${content} will be replaced with the content to translate",
-                "placeholder": "Enter translation prompt template..."
-            }
         }
     },
     "aiSidebar": {
-        "title": "Copilot",
+        "title": "OpenCode",
         "unsaved": "Unsaved",
         "unsavedChanges": "Unsaved changes",
         "mode": {
             "label": "Mode",
             "ask": "Ask Mode",
             "edit": "Edit Mode",
-            "agent": "Agent Mode",
-            "autoApprove": "Auto Approve",
             "askDescription": "Q&A only, no modification to note content",
-            "editDescription": "AI can directly edit SiYuan note content",
-            "agentDescription": "AI can use tools to autonomously complete complex tasks",
-            "selectTools": "Select Tools"
-        },
-        "agent": {
-            "tools": "Tools",
-            "selectTools": "Select Tools",
-            "toolsSelected": "Selected Tools",
-            "toolCall": "Tool Call",
-            "toolCallCompleted": "Tool Call Completed",
-            "toolCallFailed": "Tool Call Failed",
-            "viewResult": "View Result",
-            "hideResult": "Hide Result"
+            "editDescription": "AI can directly edit SiYuan note content"
         },
         "empty": {
             "title": "Start Conversation",
@@ -250,27 +218,6 @@
             "viewDiff": "View Diff",
             "applied": "Applied",
             "rejected": "Rejected"
-        },
-        "translate": {
-            "title": "Translation",
-            "openDialog": "Open Translation Dialog",
-            "inputLanguage": "Input Language",
-            "outputLanguage": "Output Language",
-            "inputText": "Input Text",
-            "outputText": "Translation Result",
-            "inputPlaceholder": "Enter text to translate...",
-            "outputPlaceholder": "Translation result will appear here...",
-            "auto": "Auto Detect",
-            "swap": "Swap Languages",
-            "translate": "Translate",
-            "clear": "Clear",
-            "cancel": "Cancel",
-            "history": "Translation History",
-            "noHistory": "No translation history",
-            "emptyInput": "Please enter text to translate",
-            "noModel": "Please select a translation model",
-            "noConfig": "Model configuration not found",
-            "error": "Translation failed"
         },
         "modelSettings": {
             "title": "Model Settings",
@@ -477,13 +424,6 @@
     },
     "platform": {
         "builtIn": {
-            "gemini": "Gemini",
-            "deepseek": "DeepSeek",
-            "moonshot": "Moonshot(Kimi)",
-            "openai": "OpenAI",
-            "volcano": "Volcano Engine",
-            "Achuan": "A API",
-            "v3Description": "Providing stable and reliable API direct connection relay services for OpenAI ChatGPT, Gemini, Claude, Deepseek, Grok, etc.",
             "opencode": "OpenCode",
             "opencodeDescription": "OpenCode local MCP server that aggregates multiple AI providers and models, no API Key required."
         },
@@ -571,87 +511,9 @@
         "thinking": "Thinking Mode",
         "vision": "Vision",
         "imageGeneration": "Image Gen",
-        "toolCalling": "Tool Calling",
         "webSearch": "Web Search",
         "noMatch": "No matching models found",
         "fetching": "Fetching model list..."
-    },
-    "tools": {
-        "category": {
-            "web": "Web Tools",
-            "siyuan": "SiYuan Notes",
-            "other": "Other"
-        },
-        "selector": {
-            "title": "Tool Selection",
-            "info": "Select the tools that AI can use. AI will automatically determine when to use these tools based on the conversation context.",
-            "selectAll": "Select All",
-            "deselectAll": "Deselect All",
-            "selected": "Selected",
-            "parameters": "Parameters"
-        },
-        "autoApprove": {
-            "label": "Auto Approve",
-            "tooltip": "When enabled, this tool call will not require manual confirmation",
-            "footerInfo": "You can set auto-approve for each tool individually"
-        },
-        "fetch_web_content": {
-            "name": "Fetch Web Content"
-        },
-        "web_fetch": {
-            "name": "Fetch Web Content"
-        },
-        "siyuan_sql_query": {
-            "name": "SQL Query"
-        },
-        "siyuan_database": {
-            "name": "Database Operations"
-        },
-        "siyuan_insert_block": {
-            "name": "Insert Block"
-        },
-        "siyuan_update_block": {
-            "name": "Update Block"
-        },
-        "siyuan_get_block_attrs": {
-            "name": "Get Block Attributes"
-        },
-        "siyuan_set_block_attrs": {
-            "name": "Set Block Attributes"
-        },
-        "siyuan_get_block_content": {
-            "name": "Get Block Content"
-        },
-        "siyuan_create_document": {
-            "name": "Create Document"
-        },
-        "siyuan_list_notebooks": {
-            "name": "List Notebooks"
-        },
-        "siyuan_create_notebook": {
-            "name": "Create Notebook"
-        },
-        "siyuan_rename_document": {
-            "name": "Rename Document"
-        },
-        "siyuan_move_documents": {
-            "name": "Move Documents"
-        },
-        "siyuan_get_doc_tree": {
-            "name": "Get Document Tree"
-        },
-        "run_js": {
-            "name": "Run JavaScript"
-        },
-        "run_python": {
-            "name": "Run Python"
-        },
-        "calling": "Calling Tool",
-        "called": "Tool Called",
-        "result": "Tool Result",
-        "waitingApproval": "Waiting for Approval",
-        "approve": "Approve",
-        "reject": "Reject"
     },
     "multiModel": {
         "title": "Multi-Model Chat",

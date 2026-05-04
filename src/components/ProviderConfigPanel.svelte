@@ -4,18 +4,14 @@
     import { pushMsg, pushErrMsg } from '../api';
     import type { ProviderConfig, ModelConfig } from '../defaultSettings';
     import { t } from '../utils/i18n';
-    import { getModelCapabilities } from '../utils/modelCapabilities';
 
     export let providerId: string;
     export let providerName: string;
-    export let defaultApiUrl: string = ''; // 默认 API 地址
-    export let websiteUrl: string = ''; // 平台官网链接
+    export let defaultApiUrl: string = '';
+    export let websiteUrl: string = '';
     export let config: ProviderConfig;
-    export let isCustomProvider: boolean = false; // 是否为自定义平台
+    export let isCustomProvider: boolean = false;
 
-    // 内置平台列表（不需要自定义参数）
-    const builtInProviders = ['Achuan', 'gemini', 'deepseek', 'openai', 'moonshot', 'volcano', 'opencode'];
-    $: isBuiltInProvider = builtInProviders.includes(providerId);
     $: isOpenCodeProvider = providerId === 'opencode';
 
     const dispatch = createEventDispatcher();
@@ -29,12 +25,10 @@
     let manualModelName = '';
     let isEditingName = false;
     let editingName = providerName;
-    let showApiKey = false; // 控制 API Key 是否显示明文
-    let showAdvancedConfig = false; // 控制高级设置是否显示
-    let customBodyErrors: { [modelId: string]: string | null } = {}; // 跟踪每个模型的 JSON 验证错误
-    let showCustomBodyForModel: { [modelId: string]: boolean } = {}; // 控制每个模型的自定义参数折叠/展开
+    let showAdvancedConfig = false;
+    let customBodyErrors: { [modelId: string]: string | null } = {};
+    let showCustomBodyForModel: { [modelId: string]: boolean } = {};
 
-    // 验证 JSON 字符串（支持嵌套 JSON）
     function validateJsonString(str: string): {
         valid: boolean;
         error?: string;
@@ -45,16 +39,12 @@
         }
         try {
             const parsed = JSON.parse(str);
-            // 确保是对象类型
             if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
                 return { valid: false, error: '必须是 JSON 对象格式' };
             }
-            // 返回格式化的 JSON（保持嵌套结构）
             return { valid: true, formatted: JSON.stringify(parsed, null, 2) };
         } catch (e: any) {
-            // 提取更友好的错误信息
             const message = e.message || '无效的 JSON 格式';
-            // 尝试提取位置信息
             const posMatch = message.match(/position\s+(\d+)/i);
             if (posMatch) {
                 const pos = parseInt(posMatch[1]);
@@ -64,7 +54,6 @@
         }
     }
 
-    // 处理 customBody 更新，带验证
     function handleCustomBodyChange(modelId: string, value: string) {
         const result = validateJsonString(value);
         customBodyErrors[modelId] = result.valid ? null : result.error || null;
@@ -72,7 +61,6 @@
         updateModel(modelId, 'customBody', value);
     }
 
-    // 格式化 JSON
     function formatCustomBodyJson(modelId: string, currentValue: string) {
         const result = validateJsonString(currentValue);
         if (result.valid && result.formatted) {
@@ -83,7 +71,6 @@
         }
     }
 
-    // 确保 advancedConfig 存在
     $: {
         if (!config.advancedConfig) {
             config.advancedConfig = {
@@ -93,67 +80,13 @@
         }
     }
 
-    // 生成 API 地址预览
-    // 规则说明：
-    // 1. 以 '/' 结尾：去掉 /v1 前缀，保留后续路径
-    //    例如：https://text.pollinations.ai/openai/ -> https://text.pollinations.ai/openai/chat/completions
-    // 2. 以 '#' 结尾：强制使用输入地址，完全不拼接端点路径
-    //    例如：https://text.pollinations.ai/openai# -> https://text.pollinations.ai/openai
-    // 3. 其他情况：使用完整的默认端点
-    //    例如：https://api.openai.com -> https://api.openai.com/v1/chat/completions
-    function buildApiPreview(raw: string) {
-        if (!raw) return '';
-        let s = raw.trim();
-
-        // 记录原始结尾标记
-        const endsWithHash = s.endsWith('#');
-        const endsWithSlash = s.endsWith('/');
-
-        // 移除结尾标记
-        if (endsWithHash) {
-            s = s.slice(0, -1);
-        } else if (endsWithSlash) {
-            s = s.slice(0, -1);
-        }
-
-        // 补全协议
-        if (!/^https?:\/\//.test(s)) {
-            s = 'https://' + s;
-        }
-
-        try {
-            new URL(s);
-        } catch (e) {
-            return s; // 无效URL
-        }
-
-        // 规则2：以 '#' 结尾，强制使用输入地址，不拼接任何路径
-        if (endsWithHash) {
-            return s;
-        }
-
-        // 规则1：以 '/' 结尾，去掉 /v1 前缀
-        if (endsWithSlash) {
-            return s + '/chat/completions';
-        }
-
-        // 规则3：默认情况，拼接完整路径
-        return s + '/v1/chat/completions';
-    }
-
-    // 响应式预览值：优先使用用户输入的 customApiUrl，否则使用默认 API 地址做示例
-    $: apiPreview = buildApiPreview(config.customApiUrl || defaultApiUrl || '');
-
-    // 获取模型列表
     async function loadModels() {
         if (isOpenCodeProvider) {
-            // OpenCode: 使用 serverUrl
             if (!config.serverUrl && !defaultApiUrl) {
                 pushErrMsg('请先设置 OpenCode Server 地址');
                 return;
             }
         } else {
-            // 其他平台: 需要 apiKey
             if (!config.apiKey) {
                 pushErrMsg(t('aiSidebar.errors.noApiKey'));
                 return;
@@ -168,14 +101,12 @@
                 isOpenCodeProvider ? (config.serverUrl || defaultApiUrl || '') : config.customApiUrl,
                 config.advancedConfig
             );
-            // 去重：使用 Map 以模型 ID 为键进行去重
             const uniqueModelsMap = new Map();
             models.forEach(m => {
                 if (!uniqueModelsMap.has(m.id)) {
                     uniqueModelsMap.set(m.id, { id: m.id, name: m.name });
                 }
             });
-            // 按模型ID升序排序
             availableModels = Array.from(uniqueModelsMap.values()).sort((a, b) =>
                 a.id.localeCompare(b.id)
             );
@@ -190,7 +121,6 @@
         }
     }
 
-    // 打开模型搜索弹窗
     function openModelSearchModal() {
         if (isOpenCodeProvider) {
             if (!config.serverUrl && !defaultApiUrl) {
@@ -206,41 +136,32 @@
         loadModels();
     }
 
-    // 关闭模型搜索弹窗
     function closeModelSearchModal() {
         showModelSearchModal = false;
         searchQuery = '';
         availableModels = [];
     }
 
-    // 添加模型
     function addModel(modelId: string, modelName: string) {
-        // 检查是否已存在
         if (config.models.some(m => m.id === modelId)) {
             pushErrMsg('该模型已添加');
             return;
         }
-
-        // 自动检测模型能力
-        const capabilities = getModelCapabilities(modelId);
 
         const newModel: ModelConfig = {
             id: modelId,
             name: modelName,
             temperature: 1,
             maxTokens: -1,
-            capabilities: capabilities,
-            thinkingEnabled: false, // 默认不开启思考模式
-            thinkingEffort: 'medium', // 默认思考强度
+            thinkingEnabled: false,
+            thinkingEffort: 'medium',
         };
 
         config.models = [...config.models, newModel];
         dispatch('change');
         pushMsg(`已添加模型: ${modelName}`);
-        // 不再清空搜索关键词，方便连续添加多个模型
     }
 
-    // 手动添加模型
     function addManualModel() {
         if (!manualModelId.trim()) {
             pushErrMsg(t('models.idRequired'));
@@ -255,26 +176,22 @@
         showAddModelModal = false;
     }
 
-    // 打开添加模型弹窗
     function openAddModelModal() {
         showAddModelModal = true;
     }
 
-    // 关闭添加模型弹窗
     function closeAddModelModal() {
         showAddModelModal = false;
         manualModelId = '';
         manualModelName = '';
     }
 
-    // 删除模型
     function removeModel(modelId: string) {
         config.models = config.models.filter(m => m.id !== modelId);
         dispatch('change');
         pushMsg('已删除模型');
     }
 
-    // 切换模型添加/删除状态
     function toggleModel(modelId: string, modelName: string) {
         const isAdded = config.models.some(m => m.id === modelId);
         if (isAdded) {
@@ -284,7 +201,6 @@
         }
     }
 
-    // 更新模型配置
     function updateModel(modelId: string, field: keyof ModelConfig, value: any) {
         const model = config.models.find(m => m.id === modelId);
         if (model) {
@@ -294,30 +210,23 @@
         }
     }
 
-    // 过滤并排序模型 - 支持空格分隔的多关键词搜索
     $: filteredModels = availableModels
         .filter(m => {
             if (!searchQuery.trim()) return true;
-
-            // 将搜索词按空格分割成多个关键词
             const keywords = searchQuery.toLowerCase().trim().split(/\s+/);
             const modelId = m.id.toLowerCase();
             const modelName = m.name.toLowerCase();
-
-            // 所有关键词都必须在 id 或 name 中出现（并集搜索）
             return keywords.every(
                 keyword => modelId.includes(keyword) || modelName.includes(keyword)
             );
         })
         .sort((a, b) => a.id.localeCompare(b.id));
 
-    // 开始编辑名称
     function startEditName() {
         editingName = providerName;
         isEditingName = true;
     }
 
-    // 保存名称
     function saveName() {
         if (editingName.trim() && editingName !== providerName) {
             dispatch('rename', { newName: editingName.trim() });
@@ -326,30 +235,13 @@
         isEditingName = false;
     }
 
-    // 取消编辑
     function cancelEditName() {
         editingName = providerName;
         isEditingName = false;
     }
 
-    // 同步 providerName 的变化
     $: if (!isEditingName) {
         editingName = providerName;
-    }
-
-    // 获取模型能力的 emoji 字符串
-    function getModelCapabilitiesEmoji(modelId: string): string {
-        const capabilities = getModelCapabilities(modelId);
-        if (!capabilities || Object.keys(capabilities).length === 0) return '';
-
-        const emojis: string[] = [];
-        if (capabilities.thinking) emojis.push('💡');
-        if (capabilities.vision) emojis.push('👀');
-        if (capabilities.imageGeneration) emojis.push('🖼️');
-        if (capabilities.toolCalling) emojis.push('🛠️');
-        if (capabilities.webSearch) emojis.push('🌐');
-
-        return emojis.length > 0 ? ' ' + emojis.join(' ') : '';
     }
 </script>
 
@@ -382,9 +274,9 @@
             <div class="provider-header-content">
                 <div class="provider-title-row">
                     <h4>{providerName}</h4>
-                    {#if config.customWebsiteUrl || websiteUrl}
+                    {#if websiteUrl}
                         <a
-                            href={config.customWebsiteUrl || websiteUrl}
+                            href={websiteUrl}
                             target="_blank"
                             rel="noopener noreferrer"
                             class="platform-link"
@@ -397,25 +289,6 @@
                         </a>
                     {/if}
                 </div>
-                {#if providerId === 'Achuan'}
-                    <div class="provider-description">
-                        {t('platform.builtIn.AchuanDescription')}
-                    </div>
-                    <div style="margin-top:6px;">
-                        <a
-                            href="https://achuan-2.apifox.cn/doc-8155570"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            class="platform-link"
-                            title="Achuan API 使用帮助"
-                        >
-                            <svg class="b3-button__icon">
-                                <use xlink:href="#iconHelp"></use>
-                            </svg>
-                            <span>帮助指南</span>
-                        </a>
-                    </div>
-                {/if}
             </div>
             {#if isCustomProvider}
                 <button
@@ -468,11 +341,6 @@
                     }}
                     placeholder={t('platform.apiUrlPlaceholder')}
                 />
-                {#if apiPreview}
-                    <div class="api-preview">
-                        <div class="api-preview__url">{apiPreview}</div>
-                    </div>
-                {/if}
                 <div class="b3-label__text label-description">
                     {t('platform.apiUrlHint')}
                 </div>
@@ -480,16 +348,7 @@
 
             <div>
                 <div class="b3-label__text">API Key</div>
-            <div class="api-key-input-wrapper">
-                {#if showApiKey}
-                    <input
-                        class="b3-text-field fn__flex-1"
-                        type="text"
-                        bind:value={config.apiKey}
-                        on:change={() => dispatch('change')}
-                        placeholder={t('settings.ai.apiKey.description')}
-                    />
-                {:else}
+                <div class="api-key-input-wrapper">
                     <input
                         class="b3-text-field fn__flex-1"
                         type="password"
@@ -497,48 +356,6 @@
                         on:change={() => dispatch('change')}
                         placeholder={t('settings.ai.apiKey.description')}
                     />
-                {/if}
-                <button
-                    class="b3-button b3-button--text api-key-toggle"
-                    on:click={() => (showApiKey = !showApiKey)}
-                >
-                    <svg class="b3-button__icon">
-                        <use xlink:href={showApiKey ? '#iconEye' : '#iconEyeoff'}></use>
-                    </svg>
-                </button>
-            </div>
-        </div>
-        {/if}
-
-        {#if isCustomProvider}
-            <div>
-                <div class="b3-label__text">{t('platform.websiteUrl')}</div>
-                <div class="website-url-input-wrapper">
-                    <input
-                        class="b3-text-field fn__flex-1"
-                        type="text"
-                        bind:value={config.customWebsiteUrl}
-                        on:change={() => dispatch('change')}
-                        placeholder={t('platform.websiteUrlPlaceholder')}
-                    />
-                    <button
-                        class="b3-button b3-button--text website-url-open"
-                        on:click={() => {
-                            const url = config.customWebsiteUrl?.trim();
-                            if (url) {
-                                window.open(url, '_blank', 'noopener,noreferrer');
-                            }
-                        }}
-                        disabled={!config.customWebsiteUrl?.trim()}
-                        title="打开官网"
-                    >
-                        <svg class="b3-button__icon">
-                            <use xlink:href="#iconOpenWindow"></use>
-                        </svg>
-                    </button>
-                </div>
-                <div class="b3-label__text label-description">
-                    {t('platform.websiteUrlHint')}
                 </div>
             </div>
         {/if}
@@ -559,7 +376,6 @@
             </div>
         </div>
 
-        <!-- 高级自定义设置 -->
         <div class="advanced-config-section">
             <button
                 class="b3-button b3-button--text advanced-toggle"
@@ -634,7 +450,7 @@
                                 <div class="model-search-item">
                                     <div class="model-search-item__info">
                                         <span class="model-search-item__name">
-                                            {model.name}{getModelCapabilitiesEmoji(model.id)}
+                                            {model.name}
                                         </span>
                                         <span class="model-search-item__id">{model.id}</span>
                                     </div>
@@ -716,103 +532,6 @@
                                     updateModel(model.id, 'maxTokens', model.maxTokens)}
                             />
                         </div>
-                        <div class="model-config-item">
-                            <span>{t('models.capabilities')}</span>
-                            <div class="model-capabilities">
-                                <label class="">
-                                    <input
-                                        type="checkbox"
-                                        class="b3-switch"
-                                        checked={model.capabilities?.thinking || false}
-                                        on:change={e => {
-                                            if (!model.capabilities) model.capabilities = {};
-                                            model.capabilities.thinking = e.currentTarget.checked;
-                                            updateModel(
-                                                model.id,
-                                                'capabilities',
-                                                model.capabilities
-                                            );
-                                        }}
-                                    />
-                                    <span class="capability-label">💡 {t('models.thinking')}</span>
-                                </label>
-                                <label class="">
-                                    <input
-                                        type="checkbox"
-                                        class="b3-switch"
-                                        checked={model.capabilities?.vision || false}
-                                        on:change={e => {
-                                            if (!model.capabilities) model.capabilities = {};
-                                            model.capabilities.vision = e.currentTarget.checked;
-                                            updateModel(
-                                                model.id,
-                                                'capabilities',
-                                                model.capabilities
-                                            );
-                                        }}
-                                    />
-                                    <span class="capability-label">👀 {t('models.vision')}</span>
-                                </label>
-                                <label class="">
-                                    <input
-                                        type="checkbox"
-                                        class="b3-switch"
-                                        checked={model.capabilities?.imageGeneration || false}
-                                        on:change={e => {
-                                            if (!model.capabilities) model.capabilities = {};
-                                            model.capabilities.imageGeneration =
-                                                e.currentTarget.checked;
-                                            updateModel(
-                                                model.id,
-                                                'capabilities',
-                                                model.capabilities
-                                            );
-                                        }}
-                                    />
-                                    <span class="capability-label">
-                                        🖼️ {t('models.imageGeneration')}
-                                    </span>
-                                </label>
-                                <label class="">
-                                    <input
-                                        type="checkbox"
-                                        class="b3-switch"
-                                        checked={model.capabilities?.toolCalling || false}
-                                        on:change={e => {
-                                            if (!model.capabilities) model.capabilities = {};
-                                            model.capabilities.toolCalling =
-                                                e.currentTarget.checked;
-                                            updateModel(
-                                                model.id,
-                                                'capabilities',
-                                                model.capabilities
-                                            );
-                                        }}
-                                    />
-                                    <span class="capability-label">
-                                        🛠️ {t('models.toolCalling')}
-                                    </span>
-                                </label>
-                                <label class="">
-                                    <input
-                                        type="checkbox"
-                                        class="b3-switch"
-                                        checked={model.capabilities?.webSearch || false}
-                                        on:change={e => {
-                                            if (!model.capabilities) model.capabilities = {};
-                                            model.capabilities.webSearch = e.currentTarget.checked;
-                                            updateModel(
-                                                model.id,
-                                                'capabilities',
-                                                model.capabilities
-                                            );
-                                        }}
-                                    />
-                                    <span class="capability-label">🌐 {t('models.webSearch')}</span>
-                                </label>
-                            </div>
-                        </div>
-                        <!-- 自定义参数设置（所有平台都显示，默认折叠） -->
                         <div class="model-config-item">
                             <button
                                 class="custom-body-toggle"
@@ -967,18 +686,6 @@
         gap: 12px;
     }
 
-    .provider-description {
-        font-size: 12px;
-        color: var(--b3-theme-on-surface);
-        line-height: 1.5;
-        background: var(--b3-theme-primary-lightest);
-        padding: 6px 12px;
-        border-radius: 4px;
-        border-left: 3px solid var(--b3-theme-primary);
-        opacity: 0.9;
-        margin-top: 2px;
-    }
-
     .platform-link {
         display: flex;
         align-items: center;
@@ -1036,55 +743,11 @@
         width: 100%;
     }
 
-    .website-url-input-wrapper {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        width: 100%;
-    }
-
-    .website-url-open {
-        flex-shrink: 0;
-        opacity: 0.6;
-        transition: opacity 0.2s;
-
-        &:hover:not(:disabled) {
-            opacity: 1;
-        }
-
-        &:disabled {
-            opacity: 0.3;
-            cursor: not-allowed;
-        }
-    }
-
-    .api-key-toggle {
-        flex-shrink: 0;
-        opacity: 0.6;
-        transition: opacity 0.2s;
-
-        &:hover {
-            opacity: 1;
-        }
-    }
-
-    .api-preview {
-        margin-top: 8px;
-        font-size: 12px;
+    .label-description {
+        font-size: 11px;
         color: var(--b3-theme-on-surface-light);
-        word-break: break-all;
-        background: var(--b3-theme-surface);
-        padding: 6px;
-        border-radius: 4px;
-        border: 1px solid var(--b3-border-color);
-    }
-
-    .api-preview__url {
         margin-top: 4px;
-        color: var(--b3-theme-on-surface);
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Roboto Mono', 'Segoe UI Mono',
-            monospace;
-        font-size: 13px;
+        line-height: 1.4;
     }
 
     .provider-config__model-buttons {
@@ -1096,13 +759,6 @@
             flex: 1;
             min-width: 0;
         }
-    }
-
-    .label-description {
-        font-size: 11px;
-        color: var(--b3-theme-on-surface-light);
-        margin-top: 4px;
-        line-height: 1.4;
     }
 
     .model-search-results {
@@ -1193,33 +849,13 @@
         }
     }
 
-    .model-capabilities {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin-top: 4px;
-
-        label {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            white-space: nowrap;
-        }
-
-        .capability-label {
-            font-size: 12px;
-            color: var(--b3-theme-on-surface);
-        }
-    }
-
-    // 弹窗样式
     .modal-overlay {
         position: fixed;
         top: 0;
         left: 0;
         right: 0;
         bottom: 0;
-        background: rgba(0, 0, 0, 0.5);
+        background: var(--b3-dialog-shadow);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -1291,35 +927,10 @@
         }
     }
 
-    // 模型搜索弹窗专用样式
     .modal-content--large {
         min-width: 600px;
         max-width: 800px;
         max-height: 70vh;
-    }
-
-    .model-search-results {
-        max-height: 400px;
-        overflow-y: auto;
-        border: 1px solid var(--b3-border-color);
-        border-radius: 4px;
-        background: var(--b3-theme-background);
-    }
-
-    .model-search-item {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 12px;
-        border-bottom: 1px solid var(--b3-border-color);
-
-        &:last-child {
-            border-bottom: none;
-        }
-
-        &:hover {
-            background: var(--b3-theme-surface);
-        }
     }
 
     .model-search-item__info {
@@ -1327,12 +938,6 @@
         flex-direction: column;
         gap: 2px;
         flex: 1;
-    }
-
-    .model-search-item__name {
-        font-size: 14px;
-        font-weight: 500;
-        color: var(--b3-theme-on-background);
     }
 
     .model-search-item__id {
@@ -1371,7 +976,6 @@
         }
     }
 
-    // 高级设置样式
     .advanced-config-section {
         margin-top: 8px;
         border-top: 1px solid var(--b3-border-color);
@@ -1420,20 +1024,16 @@
         border-left: 3px solid var(--b3-theme-primary);
     }
 
-    // 自定义参数折叠按钮样式
     .custom-body-toggle {
         display: flex;
         align-items: center;
         gap: 4px;
         padding: 4px 0;
-        width: 100%;
-        justify-content: flex-start;
-        color: var(--b3-theme-on-surface);
-        font-size: 12px;
-        background: none;
+        background: transparent;
         border: none;
         cursor: pointer;
-        transition: color 0.2s;
+        color: var(--b3-theme-on-surface);
+        font-size: 13px;
 
         &:hover {
             color: var(--b3-theme-on-background);
@@ -1449,48 +1049,49 @@
         margin-top: 8px;
     }
 
-    // 自定义参数 JSON 样式
     .custom-body-header {
         display: flex;
-        align-items: center;
-        gap: 8px;
+        justify-content: flex-end;
+        margin-bottom: 4px;
     }
 
     .format-json-btn {
-        padding: 2px 4px;
-        border-radius: 4px;
-        background: transparent;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
         border: none;
+        background: var(--b3-theme-surface);
+        border-radius: 4px;
         cursor: pointer;
-        opacity: 0.6;
-        transition: opacity 0.2s;
 
         &:hover {
-            opacity: 1;
-            background: var(--b3-theme-surface);
+            background: var(--b3-theme-surface-light);
         }
     }
 
     .custom-body-textarea {
-        white-space: pre;
-        tab-size: 2;
+        width: 100%;
+        min-height: 80px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Roboto Mono', monospace;
+        font-size: 12px;
+        resize: vertical;
+    }
 
-        &.json-error {
-            border-color: var(--b3-theme-error) !important;
-            background-color: color-mix(in srgb, var(--b3-theme-error) 5%, transparent);
-        }
+    .custom-body-textarea.json-error {
+        border-color: var(--b3-theme-error) !important;
+        background: var(--b3-card-error-background);
+    }
 
-        &.json-valid {
-            border-color: var(--b3-theme-success, #52c41a) !important;
-        }
+    .custom-body-textarea.json-valid {
+        border-color: var(--b3-theme-success) !important;
     }
 
     .json-error-hint {
+        margin-top: 4px;
         font-size: 11px;
         color: var(--b3-theme-error);
-        margin-top: 4px;
-        padding: 4px 8px;
-        background: color-mix(in srgb, var(--b3-theme-error) 10%, transparent);
-        border-radius: 4px;
+        line-height: 1.3;
     }
 </style>

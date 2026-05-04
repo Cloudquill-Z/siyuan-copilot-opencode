@@ -22,7 +22,7 @@
             thinkingEffort?: ThinkingEffort;
         }>,
         enableMultiModel: false,
-        chatMode: 'ask' as 'ask' | 'edit' | 'agent',
+        chatMode: 'ask' as 'ask' | 'edit',
     };
     export let plugin: any;
 
@@ -54,7 +54,7 @@
         thinkingEffort?: ThinkingEffort;
     }> = [];
     let tempEnableMultiModel = false;
-    let tempChatMode: 'ask' | 'edit' | 'agent' = 'ask';
+    let tempChatMode: 'ask' | 'edit' = 'ask';
 
     // 当前正在编辑的预设ID（空字符串表示新建/默认）
     let editingPresetId = '';
@@ -75,7 +75,7 @@
             thinkingEffort?: ThinkingEffort;
         }>;
         enableMultiModel: boolean;
-        chatMode: 'ask' | 'edit' | 'agent';
+        chatMode: 'ask' | 'edit';
         createdAt: number;
     }
 
@@ -109,7 +109,7 @@
             thinkingEffort?: ThinkingEffort;
         }>,
         enableMultiModel: false,
-        chatMode: 'ask' as 'ask' | 'edit' | 'agent',
+        chatMode: 'ask' as 'ask' | 'edit',
     };
 
     // 处理MultiModelSelector的选择事件（单模型模式）
@@ -1177,7 +1177,6 @@
                     >
                         <option value="ask">{t('aiSidebar.mode.ask') || '问答模式'}</option>
                         <option value="edit">{t('aiSidebar.mode.edit') || '编辑模式'}</option>
-                        <option value="agent">{t('aiSidebar.mode.agent') || 'Agent模式'}</option>
                     </select>
                     <div class="model-settings-hint">
                         {t('aiSidebar.modelSettings.chatModeHint') ||

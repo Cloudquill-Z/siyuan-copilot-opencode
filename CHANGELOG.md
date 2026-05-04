@@ -1,3 +1,13 @@
+## v0.0.1 / 20260504
+- 🏗️ 重构为独立 OpenCode 插件，移除所有其他 Provider（Achuan、gemini、deepseek、openai、moonshot、volcano）
+- 🔥 移除 Agent 模式和工具系统
+- 🐛 修复 serverUrl 配置被忽略的 bug
+- 🐛 修复多轮对话上下文丢失问题
+- ✨ 新增 SSE 流式响应支持
+- ✨ 新增 Session 复用和自动清理
+- 🎨 UI 配色重构，采用 OpenCode 品牌风格
+- 📝 更新 README 和 i18n
+
 ## v2.3.5 / 20260323
 - 🔥 arial-label改为title
 - 🌐 i18n 优化
