@@ -58,7 +58,20 @@
     type ToolConfig = { name: string; autoApprove: boolean; };
     function createGetSiyuanSkillsTool(_names: string[]) { return null; }
     function executeToolCall(_tc: any): Promise<string> { return Promise.resolve('tools disabled'); }
-    function soul(_op: any): Promise<{ success: boolean; content: string }> { return Promise.resolve({ success: false, content: '' }); }
+    async function soul(_op: any): Promise<{ success: boolean; content: string }> {
+        try {
+            const docId = settings.soulDocId?.trim();
+            if (!docId) return { success: false, content: '' };
+            const data = await exportMdContent(docId, false, false, 2, 0, false);
+            if (data && data.content) {
+                return { success: true, content: data.content };
+            }
+            return { success: false, content: '' };
+        } catch (e) {
+            console.error('[SOUL] 获取文档内容失败:', e);
+            return { success: false, content: '' };
+        }
+    }
     function isSupportedThinkingGeminiModel(_id: string) { return false; }
     function isSupportedThinkingClaudeModel(_id: string) { return false; }
     function isGemini3Model(_id: string) { return false; }
@@ -1316,6 +1329,9 @@
                             };
                         });
                         settings.aiProviders.opencode.models = modelConfigs;
+                        if (!settings.currentProvider) {
+                            settings.currentProvider = 'opencode';
+                        }
                         if (!settings.currentModelId || !modelConfigs.find(m => m.id === settings.currentModelId)) {
                             settings.currentModelId = modelConfigs[0].id;
                         }
@@ -6873,7 +6889,8 @@
 
     // 处理拖放
     function handleDragOver(event: DragEvent) {
-        if (event.dataTransfer.types.includes('application/multi-model-sort')) {
+        const types = event.dataTransfer?.types;
+        if (types && [...types].includes('application/multi-model-sort')) {
             return;
         }
         event.preventDefault();
@@ -6882,7 +6899,8 @@
     }
 
     function handleDragLeave(event: DragEvent) {
-        if (event.dataTransfer.types.includes('application/multi-model-sort')) {
+        const types = event.dataTransfer?.types;
+        if (types && [...types].includes('application/multi-model-sort')) {
             return;
         }
         event.preventDefault();
@@ -6900,7 +6918,8 @@
     }
 
     async function handleDrop(event: DragEvent) {
-        if (event.dataTransfer.types.includes('application/multi-model-sort')) {
+        const types = event.dataTransfer?.types;
+        if (types && [...types].includes('application/multi-model-sort')) {
             return;
         }
         event.preventDefault();

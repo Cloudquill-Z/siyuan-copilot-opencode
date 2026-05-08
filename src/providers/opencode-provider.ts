@@ -22,6 +22,8 @@ export interface OpenCodeModelInfo {
     id: string;
     name: string;
     providerID?: string;
+    enableThinking?: boolean;
+    reasoningEffort?: 'low' | 'medium' | 'high' | 'auto';
 }
 
 const DEFAULT_SERVER_URL = 'http://localhost:4096';
@@ -255,11 +257,18 @@ export async function fetchOpenCodeModels(config: OpenCodeProviderConfig): Promi
             const uniqueId = providerID ? `${providerID}/${modelId}` : modelId;
             if (seen.has(uniqueId)) return;
             seen.add(uniqueId);
-            models.push({
+            const m: OpenCodeModelInfo = {
                 id: modelId,
                 name: modelInfo?.name || modelInfo?.displayName || modelId,
                 providerID: providerID || undefined
-            });
+            };
+            if (typeof modelInfo?.enableThinking === 'boolean') {
+                m.enableThinking = modelInfo.enableThinking;
+            }
+            if (modelInfo?.reasoningEffort && ['low', 'medium', 'high', 'auto'].includes(modelInfo.reasoningEffort)) {
+                m.reasoningEffort = modelInfo.reasoningEffort;
+            }
+            models.push(m);
         };
 
         for (const provider of providers) {

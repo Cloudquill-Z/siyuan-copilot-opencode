@@ -103,6 +103,8 @@ export interface ModelInfo {
     name: string;
     provider: string;
     providerID?: string;
+    enableThinking?: boolean;
+    reasoningEffort?: 'low' | 'medium' | 'high' | 'auto';
 }
 
 export type AIProvider = 'opencode';
@@ -148,7 +150,9 @@ export async function fetchModels(
         id: model.providerID ? `${model.providerID}/${model.id}` : model.id,
         name: model.name,
         provider: 'OpenCode',
-        providerID: model.providerID
+        providerID: model.providerID,
+        enableThinking: model.enableThinking,
+        reasoningEffort: model.reasoningEffort
     }));
 }
 
