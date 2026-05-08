@@ -194,7 +194,11 @@ export async function chat(
             onChunk: options.onChunk,
             onComplete: options.onComplete,
             onError: options.onError,
-            signal: options.signal
+            signal: options.signal,
+            enableThinking: options.enableThinking,
+            reasoningEffort: options.reasoningEffort,
+            onThinkingChunk: options.onThinkingChunk,
+            onThinkingComplete: options.onThinkingComplete
         },
         { serverUrl }
     );

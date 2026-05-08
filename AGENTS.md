@@ -2,16 +2,17 @@
 
 ## Project identity
 
-Standalone SiYuan Note plugin (Svelte + TypeScript) that connects to a local [OpenCode](https://opencode.ai) service. v0.0.1 was refactored from `siyuan-plugin-copilot` — only the `opencode` provider remains. The plugin can auto-start `opencode serve` in Electron environments.
+Standalone SiYuan Note plugin (Svelte + TypeScript) that connects to a local [OpenCode](https://opencode.ai) service. v0.0.2 was refactored from `siyuan-plugin-copilot` — only the `opencode` provider remains. The plugin can auto-start `opencode serve` in Electron environments.
 
 ## Commands
 
 ```bash
-npm run dev           # dev build with watch → dev/; auto-copies to SiYuan after each bundle
-npm run build         # production build → dist/ + package.zip
-npm run make-link     # create symlink from dist/ to SiYuan plugins dir
-npm run make-install  # vite build (no minify) + copy dist/ to SiYuan plugins dir
-npm run update-version # bump version in plugin.json
+npm run dev            # dev build with watch → dev/; auto-copies to SiYuan after each bundle
+npm run build          # production build → dist/ + package.zip
+npm run make-link      # create symlink from dev/ to SiYuan plugins dir (admin rights may need elevate.ps1)
+npm run make_dev_copy  # one-shot copy dev/ → SiYuan plugins dir (env SIYUAN_PLUGIN_DIR or detect)
+npm run make-install   # vite build + copy dist/ → SiYuan plugins dir
+npm run update-version # bump version in plugin.json AND package.json
 ```
 
 - `pnpm` is also used (gh_release.sh uses `pnpm run build`); `pnpm-lock.yaml` and `package-lock.json` are both gitignored
@@ -21,8 +22,9 @@ npm run update-version # bump version in plugin.json
 ## Dev copy flow
 
 - `npm run dev` bundles to `dev/`, then a Vite `writeBundle` hook auto-runs `scripts/make_dev_copy.js`
-- `make_dev_copy.js` has a hardcoded Windows path (`D:\Notes\Siyuan\...`) as fallback; set `SIYUAN_PLUGIN_DIR` env var to override, or edit the script
+- `make_dev_copy.js` has a hardcoded Windows path as fallback; set `SIYUAN_PLUGIN_DIR` env var to override, or edit the script
 - `make_dev_copy.js` does incremental copy (not full delete+recreate)
+- `elevate.ps1` re-runs any script with admin rights (needed for symlink creation)
 
 ## Build output
 
@@ -46,8 +48,9 @@ src/utils/                        — i18n, hotkey, assets, modelCapabilities, w
 ```
 
 - **Only one provider**: OpenCode. No multi-provider dispatch or agent-mode tools.
-- Plugin registers two tab types: `opencode-ai-tab` (chat) and `opencode-webapp` (embedded browser)
-- Also registers three event bus hooks: `open-menu-doctree`, `click-editortitleicon`, `open-menu-link`
+- Plugin registers two tab types: `opencode-ai-tab` (chat sidebar) and `opencode-webapp` (embedded browser with navbar, search, favicon fetch, history)
+- Registers three event bus hooks: `open-menu-doctree`, `click-editortitleicon`, `open-menu-link`
+- WebView tab: Electron `<webview>` or fallback `<iframe>`; includes address bar with history search, favicon auto-fetch (multiple fallback sources), optional search engine
 - `opencode-runner.ts` uses `window.require('child_process')` in Electron; can't use static imports (Vite bundles for browser)
 
 ## Auto-start flow
@@ -91,4 +94,4 @@ DELETE /session/{id}         → cleanup session
 bash gh_release.sh   # commits, pushes main, builds, creates GitHub release with package.zip
 ```
 
-Version tag from `plugin.json` (e.g. `v0.0.1`). Release notes extracted from `CHANGELOG.md` section matching the version. Overwrites existing tags/releases if they exist.
+Version tag from `plugin.json` (e.g. `v0.0.2`). Release notes extracted from `CHANGELOG.md` section matching the version. Overwrites existing tags/releases if they exist.

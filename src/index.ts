@@ -453,7 +453,7 @@ export default class PluginSample extends Plugin {
         await this.loadSettings();
         this.addIcons(`
     <symbol id="${MAIN_ICON_ID}" viewBox="0 0 24 24">
-    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9v-2h2v2zm0-4H9V7h2v5zm4 4h-2v-2h2v2zm0-4h-2V7h2v5z" fill="currentColor"/>
+      <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-4 9h-2v2h2v-2zm-4 0H8v2h2v-2z" fill="currentColor"/>
     </symbol>
     `);
         this.addIcons(`
@@ -1640,6 +1640,12 @@ export default class PluginSample extends Plugin {
     }
 
     async onLayoutReady() {
+        // 注册主要图标（在 addDock 之前确保图标已就绪）
+        this.addIcons(`
+    <symbol id="${MAIN_ICON_ID}" viewBox="0 0 24 24">
+      <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-4 9h-2v2h2v-2zm-4 0H8v2h2v-2z" fill="currentColor"/>
+    </symbol>
+    `);
         //布局加载完成的时候,会自动调用这个函数
         // 注册AI侧栏
         this.addDock({

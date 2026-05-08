@@ -10,7 +10,7 @@
             "ai": "AI Settings",
             "aiPlatform": "AI Platform Configuration",
             "systemPrompt": "System Prompt",
-            "platformManagement": "Platform Management",
+            "platformManagement": "Model Management",
             "displayAndOperation": "Display & Operation",
             "noteExport": "Chat Export",
             "sessionManagement": "Session Management",

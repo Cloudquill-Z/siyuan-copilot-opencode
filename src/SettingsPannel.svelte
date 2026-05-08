@@ -10,6 +10,7 @@
     import type { ModelConfig } from './defaultSettings';
     import { confirm } from 'siyuan';
     import { PLUGIN_ID } from './pluginPaths';
+    import { updateSettings } from './stores/settings';
     export let plugin;
 
     let settings = { ...getDefaultSettings() };
@@ -42,34 +43,36 @@
     $: totalCount = opencodeModels.length;
     $: filteredModels = (() => {
         const q = modelSearchQuery.trim().toLowerCase();
-        if (!q) return opencodeModels;
+        if (!q) {
+            return opencodeModels;
+        }
         const terms = q.split(/\s+/);
-        return opencodeModels.filter((m: ModelConfig) => {
+        const matched = opencodeModels.filter((m: ModelConfig) => {
             const text = `${m.name} ${m.id}`.toLowerCase();
             return terms.every(term => text.includes(term));
         });
+        return matched;
     })();
 
+    $: modelOverflow = opencodeModels.length > 200;
+
     function toggleModelHidden(modelId: string) {
-        const models = opencodeConfig.models;
-        const model = models.find((m: ModelConfig) => m.id === modelId);
-        if (model) {
-            model.hidden = !model.hidden;
-            opencodeConfig.models = [...models];
-            settings.aiProviders = { ...settings.aiProviders };
-            debouncedSave();
-        }
+        opencodeConfig.models = opencodeConfig.models.map((m: ModelConfig) =>
+            m.id === modelId ? { ...m, hidden: !m.hidden } : m
+        );
+        settings.aiProviders = { ...settings.aiProviders, opencode: { ...opencodeConfig } };
+        debouncedSave();
     }
 
     function showAllModels() {
         opencodeConfig.models = opencodeConfig.models.map((m: ModelConfig) => ({ ...m, hidden: false }));
-        settings.aiProviders = { ...settings.aiProviders };
+        settings.aiProviders = { ...settings.aiProviders, opencode: { ...opencodeConfig } };
         debouncedSave();
     }
 
     function hideAllModels() {
         opencodeConfig.models = opencodeConfig.models.map((m: ModelConfig) => ({ ...m, hidden: true }));
-        settings.aiProviders = { ...settings.aiProviders };
+        settings.aiProviders = { ...settings.aiProviders, opencode: { ...opencodeConfig } };
         debouncedSave();
     }
 
@@ -82,13 +85,14 @@
             const models = await fetchModels('opencode', '', serverUrl);
             if (models && models.length > 0) {
                 const existingModels: Record<string, ModelConfig> = {};
+                const existingCount = (opencodeConfig.models || []).length;
                 for (const m of opencodeConfig.models || []) {
                     existingModels[m.id] = m;
                 }
                 const mergedModels: ModelConfig[] = models.map(m => {
                     const existing = existingModels[m.id];
                     const capabilities = getModelCapabilities(m.id);
-                    if (existing) {
+                    if (existing && existingCount <= 100) {
                         return {
                             ...existing,
                             name: m.name,
@@ -101,6 +105,7 @@
                         temperature: 0.7,
                         maxTokens: 4096,
                         capabilities: Object.keys(capabilities).length > 0 ? capabilities : undefined,
+                        hidden: false,
                     };
                 });
                 opencodeConfig.models = mergedModels;
@@ -318,6 +323,7 @@
 
     async function saveSettings() {
         await plugin.saveSettings(settings);
+        updateSettings(JSON.parse(JSON.stringify(settings)));
     }
 
     onMount(async () => {
@@ -522,6 +528,11 @@
                         bind:value={modelSearchQuery}
                         spellcheck="false"
                     />
+                    {#if modelOverflow && !modelSearchQuery.trim()}
+                        <div class="model-management-panel__overflow-hint">
+                            模型过多（{opencodeModels.length} 个），建议使用搜索筛选。
+                        </div>
+                    {/if}
                 </div>
 
                 <div class="model-management-panel__list">
@@ -747,6 +758,16 @@
         width: 100%;
         padding: 6px 8px;
         font-size: 13px;
+    }
+
+    .model-management-panel__overflow-hint {
+        margin-top: 6px;
+        padding: 6px 10px;
+        background: var(--b3-card-warning-background);
+        color: var(--b3-card-warning-color);
+        font-size: 11px;
+        border-radius: 4px;
+        line-height: 1.4;
     }
 
     .model-management-panel__list {

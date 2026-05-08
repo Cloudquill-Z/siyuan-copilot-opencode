@@ -12,6 +12,10 @@ export interface OpenCodeChatOptions {
     onComplete?: (fullText: string) => void;
     onError?: (error: Error) => void;
     signal?: AbortSignal;
+    enableThinking?: boolean;
+    reasoningEffort?: 'low' | 'medium' | 'high' | 'auto';
+    onThinkingChunk?: (text: string) => void;
+    onThinkingComplete?: (thinking: string) => void;
 }
 
 export interface OpenCodeModelInfo {
@@ -39,6 +43,16 @@ function extractTextFromParts(parts: any): string {
     }
     return parts
         .filter((part: any) => part?.type === 'text' && typeof part?.text === 'string')
+        .map((part: any) => part.text)
+        .join('');
+}
+
+function extractThinkingFromParts(parts: any): string {
+    if (!Array.isArray(parts)) {
+        return '';
+    }
+    return parts
+        .filter((part: any) => part?.type === 'reasoning' && typeof part?.text === 'string')
         .map((part: any) => part.text)
         .join('');
 }
@@ -129,7 +143,8 @@ async function openCodeFetch(
 async function parseSSEStream(
     response: Response,
     onChunk: (text: string) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onThinkingChunk?: (text: string) => void
 ): Promise<string> {
     const reader = response.body?.getReader();
     if (!reader) {
@@ -177,6 +192,13 @@ async function parseSSEStream(
                             fullText += text;
                             onChunk(text);
                         }
+
+                        if (onThinkingChunk) {
+                            const thinkingText = extractThinkingFromParts(parsed?.parts || []);
+                            if (thinkingText) {
+                                onThinkingChunk(thinkingText);
+                            }
+                        }
                     } catch (parseErr) {
                         if (parseErr instanceof SyntaxError) {
                             continue;
@@ -219,7 +241,12 @@ export async function fetchOpenCodeModels(config: OpenCodeProviderConfig): Promi
             throw new Error(`Failed to parse models response from OpenCode${responseText ? ': ' + responseText.slice(0, 200) : ' (empty response)'}`);
         }
 
-        const providers: any[] = data?.all || data?.providers || [];
+        const connectedIds: Set<string> = new Set(data?.connected || []);
+        const allProviders: any[] = data?.all || [];
+        const providers = allProviders.filter((p: any) => {
+            const pid = p?.id || p?.providerID || p?.name || '';
+            return connectedIds.has(pid);
+        });
         const models: OpenCodeModelInfo[] = [];
         const seen = new Set<string>();
 
@@ -331,13 +358,19 @@ export async function chatOpenCode(
         const providerID = options.model?.providerID || 'opencode';
         const modelID = options.model?.modelID || 'big-pickle';
 
+        const model: any = { providerID, modelID };
+        if (options.enableThinking && options.reasoningEffort) {
+            model.enableThinking = options.enableThinking;
+            model.reasoningEffort = options.reasoningEffort;
+        }
+
         const response = await openCodeFetch(
             serverUrl,
             `/session/${encodeURIComponent(sessionId)}/message`,
             {
                 method: 'POST',
                 body: JSON.stringify({
-                    model: { providerID, modelID },
+                    model,
                     parts: [{ type: 'text', text: options.prompt }]
                 })
             },
@@ -353,17 +386,27 @@ export async function chatOpenCode(
         let fullText = '';
 
         if (contentType.includes('text/event-stream')) {
+            let accumulatedThinking = '';
             try {
                 fullText = await parseSSEStream(response, (text) => {
                     options.onChunk?.(text);
-                }, options.signal);
+                }, options.signal, (thinking) => {
+                    accumulatedThinking += thinking;
+                    options.onThinkingChunk?.(thinking);
+                });
             } catch (streamErr) {
                 if (fullText) {
                     options.onComplete?.(fullText);
                 }
+                if (accumulatedThinking) {
+                    options.onThinkingComplete?.(accumulatedThinking);
+                }
                 throw streamErr;
             }
             options.onComplete?.(fullText);
+            if (accumulatedThinking) {
+                options.onThinkingComplete?.(accumulatedThinking);
+            }
         } else {
             const responseText = await response.text();
             let data: any;
@@ -386,6 +429,14 @@ export async function chatOpenCode(
 
             const parts = data?.parts || [];
             fullText = extractTextFromParts(parts);
+
+            const thinkingText = extractThinkingFromParts(parts);
+            if (thinkingText && options.onThinkingChunk) {
+                options.onThinkingChunk(thinkingText);
+            }
+            if (thinkingText && options.onThinkingComplete) {
+                options.onThinkingComplete(thinkingText);
+            }
 
             if (options.onChunk && fullText) {
                 const chunkSize = Math.max(1, Math.ceil(fullText.length / 100));

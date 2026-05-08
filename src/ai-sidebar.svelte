@@ -1291,32 +1291,40 @@
         // 监听文档总结事件
         window.addEventListener(SUMMARY_EVENT, handleSummarizeDoc as EventListener);
 
-        // Auto-fetch OpenCode models on startup
-        if (settings.aiProviders?.opencode && (!settings.aiProviders.opencode.models || settings.aiProviders.opencode.models.length === 0)) {
-            try {
-                const providerConfig = settings.aiProviders.opencode;
-                const models = await fetchModels('opencode', '', providerConfig?.serverUrl || 'http://localhost:4096');
-                if (models && models.length > 0) {
-                    const modelConfigs = models.map(m => {
-                        const capabilities = getModelCapabilities(m.id);
-                        return {
-                            id: m.id,
-                            name: m.name,
-                            temperature: 0.7,
-                            maxTokens: 4096,
-                            capabilities: Object.keys(capabilities).length > 0 ? capabilities : undefined,
-                        };
-                    });
-                    settings.aiProviders.opencode.models = modelConfigs;
-                    // Auto-select first model if none selected
-                    if (!settings.currentModelId || !modelConfigs.find(m => m.id === settings.currentModelId)) {
-                        settings.currentModelId = modelConfigs[0].id;
+        // Auto-fetch OpenCode models on startup (or clean up old data)
+        if (settings.aiProviders?.opencode) {
+            const existingModels = settings.aiProviders.opencode.models;
+            const needsCleanup = existingModels && existingModels.length > 100;
+            if (needsCleanup || !existingModels || existingModels.length === 0) {
+                try {
+                    if (needsCleanup) {
+                        console.warn(`[OpenCode] Clearing ${existingModels.length} old models, re-fetching`);
+                        settings.aiProviders.opencode.models = [];
                     }
-                    await plugin.saveData('settings.json', settings);
-                    updateSettings(settings);
+                    const providerConfig = settings.aiProviders.opencode;
+                    const models = await fetchModels('opencode', '', providerConfig?.serverUrl || 'http://localhost:4096');
+                    if (models && models.length > 0) {
+                        const modelConfigs = models.map(m => {
+                            const capabilities = getModelCapabilities(m.id);
+                            return {
+                                id: m.id,
+                                name: m.name,
+                                temperature: 0.7,
+                                maxTokens: 4096,
+                                capabilities: Object.keys(capabilities).length > 0 ? capabilities : undefined,
+                                hidden: false,
+                            };
+                        });
+                        settings.aiProviders.opencode.models = modelConfigs;
+                        if (!settings.currentModelId || !modelConfigs.find(m => m.id === settings.currentModelId)) {
+                            settings.currentModelId = modelConfigs[0].id;
+                        }
+                        await plugin.saveData('settings.json', settings);
+                        updateSettings(JSON.parse(JSON.stringify(settings)));
+                    }
+                } catch (e) {
+                    console.warn('Auto-fetch OpenCode models failed:', e);
                 }
-            } catch (e) {
-                console.warn('Auto-fetch OpenCode models failed:', e);
             }
         }
 

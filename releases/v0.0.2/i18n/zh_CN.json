@@ -10,7 +10,7 @@
             "ai": "AI 设置",
             "aiPlatform": "AI 平台配置",
             "systemPrompt": "系统提示词",
-            "platformManagement": "平台管理",
+            "platformManagement": "模型管理",
             "displayAndOperation": "显示与操作",
             "noteExport": "对话导出",
             "sessionManagement": "会话管理",
@@ -435,7 +435,7 @@
         "cancel": "取消",
         "namePlaceholder": "例如: Claude API, 本地LLM",
         "nameRequired": "请输入平台名称",
-        "management": "平台管理",
+        "management": "模型管理",
         "name": "平台名称",
         "confirmAdd": "确认添加",
         "type": {
