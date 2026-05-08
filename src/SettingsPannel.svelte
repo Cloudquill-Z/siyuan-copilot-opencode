@@ -5,8 +5,10 @@
     import { getDefaultSettings } from './defaultSettings';
     import { normalizeSettings } from './settingsSchema';
     import { pushMsg, pushErrMsg, lsNotebooks, getBlockByID } from './api';
+    import { fetchModels, invalidateModelCache } from './ai-chat';
+    import { getModelCapabilities } from './utils/modelCapabilities';
+    import type { ModelConfig } from './defaultSettings';
     import { confirm } from 'siyuan';
-    import ProviderConfigPanel from './components/ProviderConfigPanel.svelte';
     import { PLUGIN_ID } from './pluginPaths';
     export let plugin;
 
@@ -25,38 +27,108 @@
         items: ISettingItem[];
     }
 
-    const builtInProviderNames: Record<string, string> = {
-        opencode: t('platform.builtIn.opencode'),
-    };
+    let isRefreshingModels = false;
+    let modelSearchQuery = '';
 
-    const builtInProviderDefaultUrls: Record<string, string> = {
-        opencode: 'http://localhost:4096',
-    };
+    let saveTimer: ReturnType<typeof setTimeout> | null = null;
+    function debouncedSave() {
+        if (saveTimer) clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => saveSettings(), 300);
+    }
 
-    const builtInProviderWebsites: Record<string, string> = {
-        opencode: 'https://opencode.ai',
-    };
+    $: opencodeConfig = settings.aiProviders?.opencode || { serverUrl: 'http://localhost:4096', models: [] };
+    $: opencodeModels = opencodeConfig.models || [];
+    $: visibleCount = opencodeModels.filter((m: any) => !m.hidden).length;
+    $: totalCount = opencodeModels.length;
+    $: filteredModels = (() => {
+        const q = modelSearchQuery.trim().toLowerCase();
+        if (!q) return opencodeModels;
+        const terms = q.split(/\s+/);
+        return opencodeModels.filter((m: ModelConfig) => {
+            const text = `${m.name} ${m.id}`.toLowerCase();
+            return terms.every(term => text.includes(term));
+        });
+    })();
 
-    let selectedProviderId = '';
+    function toggleModelHidden(modelId: string) {
+        const models = opencodeConfig.models;
+        const model = models.find((m: ModelConfig) => m.id === modelId);
+        if (model) {
+            model.hidden = !model.hidden;
+            opencodeConfig.models = [...models];
+            settings.aiProviders = { ...settings.aiProviders };
+            debouncedSave();
+        }
+    }
+
+    function showAllModels() {
+        opencodeConfig.models = opencodeConfig.models.map((m: ModelConfig) => ({ ...m, hidden: false }));
+        settings.aiProviders = { ...settings.aiProviders };
+        debouncedSave();
+    }
+
+    function hideAllModels() {
+        opencodeConfig.models = opencodeConfig.models.map((m: ModelConfig) => ({ ...m, hidden: true }));
+        settings.aiProviders = { ...settings.aiProviders };
+        debouncedSave();
+    }
+
+    async function refreshModels() {
+        if (isRefreshingModels) return;
+        isRefreshingModels = true;
+        try {
+            const serverUrl = opencodeConfig.serverUrl || 'http://localhost:4096';
+            invalidateModelCache(serverUrl);
+            const models = await fetchModels('opencode', '', serverUrl);
+            if (models && models.length > 0) {
+                const existingModels: Record<string, ModelConfig> = {};
+                for (const m of opencodeConfig.models || []) {
+                    existingModels[m.id] = m;
+                }
+                const mergedModels: ModelConfig[] = models.map(m => {
+                    const existing = existingModels[m.id];
+                    const capabilities = getModelCapabilities(m.id);
+                    if (existing) {
+                        return {
+                            ...existing,
+                            name: m.name,
+                            capabilities: Object.keys(capabilities).length > 0 ? capabilities : undefined,
+                        };
+                    }
+                    return {
+                        id: m.id,
+                        name: m.name,
+                        temperature: 0.7,
+                        maxTokens: 4096,
+                        capabilities: Object.keys(capabilities).length > 0 ? capabilities : undefined,
+                    };
+                });
+                opencodeConfig.models = mergedModels;
+                settings.aiProviders = { ...settings.aiProviders };
+                await saveSettings();
+                pushMsg(`已刷新模型列表，共 ${mergedModels.length} 个模型`);
+            }
+        } catch (error) {
+            pushErrMsg(`刷新模型失败: ${(error as Error).message}`);
+        } finally {
+            isRefreshingModels = false;
+        }
+    }
+
+    function getModelCapabilitiesEmoji(model: ModelConfig): string {
+        if (!model.capabilities) return '';
+        const emojis: string[] = [];
+        if (model.capabilities.thinking) emojis.push('💡');
+        if (model.capabilities.vision) emojis.push('👀');
+        if (model.capabilities.imageGeneration) emojis.push('🖼️');
+        if (model.capabilities.toolCalling) emojis.push('🛠️');
+        if (model.capabilities.webSearch) emojis.push('🌐');
+        return emojis.length > 0 ? ' ' + emojis.join(' ') : '';
+    }
 
     function handleProviderChange() {
         saveSettings();
     }
-
-    function handleProviderSelect() {
-        settings = { ...settings, selectedProviderId };
-        saveSettings();
-    }
-
-    $: allProviderOptions = [{
-        id: 'opencode',
-        name: builtInProviderNames['opencode'],
-        type: 'built-in' as const,
-    }];
-
-    $: selectedProviderName = selectedProviderId
-        ? builtInProviderNames[selectedProviderId] || t('platform.unknown')
-        : t('platform.select');
 
     let groups: ISettingGroup[] = [
         {
@@ -266,12 +338,6 @@
             settings.aiProviders.opencode = { serverUrl: 'http://localhost:4096', models: [] };
         }
 
-        selectedProviderId = settings.selectedProviderId || settings.currentProvider || 'opencode';
-
-        if (!settings.selectedProviderId) {
-            settings.selectedProviderId = selectedProviderId;
-        }
-
         await loadNotebooks();
 
         if (settings.soulDocId) {
@@ -401,65 +467,94 @@
                 on:changed={onChanged}
             />
         {:else if focusGroup === t('settings.settingsGroup.platformManagement')}
-            <div class="platform-management-layout">
-                <aside class="platform-sidebar">
-                    <div class="unified-platform-manager">
-                        <div class="manager-header">
-                            <h5>{t('platform.management')}</h5>
+            <div class="model-management-panel">
+                <div class="model-management-panel__section">
+                    <div class="config__item">
+                        <div class="config__item-label">
+                            <div class="config__item-title">OpenCode Server</div>
+                            <div class="config__item-description">
+                                {t('platform.apiUrl') || 'API 地址'} (OpenCode Server)
+                            </div>
                         </div>
-
-                        <div class="platform-list">
-                            {#each allProviderOptions as platform (platform.id)}
-                                <div
-                                    class="platform-item"
-                                    class:platform-item--selected={selectedProviderId ===
-                                        platform.id}
-                                    on:click={() => {
-                                        selectedProviderId = platform.id;
-                                        handleProviderSelect();
-                                    }}
-                                    on:keydown={e => {
-                                        if (e.key === 'Enter' || e.key === ' ') {
-                                            selectedProviderId = platform.id;
-                                            handleProviderSelect();
-                                        }
-                                    }}
-                                    role="button"
-                                    tabindex="0"
-                                >
-                                    <div class="platform-item__info">
-                                        <span class="platform-item__name">{platform.name}</span>
-                                        <span class="platform-item__type">
-                                            {platform.type === 'built-in'
-                                                ? t('platform.type.builtin')
-                                                : t('platform.type.custom')}
-                                        </span>
-                                    </div>
-                                </div>
-                            {/each}
+                        <div class="config__item-control">
+                            <input
+                                class="b3-text-field fn__flex-1"
+                                type="text"
+                                style="width: 100%"
+                                value={opencodeConfig.serverUrl || 'http://localhost:4096'}
+                                on:input={(e) => {
+                                    opencodeConfig.serverUrl = e.currentTarget.value;
+                                    settings.aiProviders = { ...settings.aiProviders };
+                                    debouncedSave();
+                                }}
+                                placeholder="http://localhost:4096"
+                            />
                         </div>
                     </div>
-                </aside>
+                </div>
 
-                <main class="platform-main">
-                    {#if selectedProviderId}
-                        {#key selectedProviderId}
-                            <ProviderConfigPanel
-                                providerId={selectedProviderId}
-                                providerName={selectedProviderName}
-                                defaultApiUrl={builtInProviderDefaultUrls[selectedProviderId]}
-                                websiteUrl={builtInProviderWebsites[selectedProviderId]}
-                                bind:config={settings.aiProviders[selectedProviderId]}
-                                isCustomProvider={false}
-                                on:change={handleProviderChange}
-                            />
-                        {/key}
-                    {:else}
-                        <div class="no-selection">
-                            {t('platform.selectHint') || '请选择一个平台以查看或编辑其配置'}
+                <div class="model-management-panel__toolbar">
+                    <div class="model-management-panel__toolbar-left">
+                        <button
+                            class="b3-button b3-button--outline"
+                            on:click={refreshModels}
+                            disabled={isRefreshingModels}
+                        >
+                            {isRefreshingModels ? t('common.loading') || '加载中...' : (t('common.searchAndAdd') || '刷新模型')}
+                        </button>
+                        <button class="b3-button b3-button--outline" on:click={showAllModels}>
+                            {t('models.showAll') || '全选'}
+                        </button>
+                        <button class="b3-button b3-button--outline" on:click={hideAllModels}>
+                            {t('models.hideAll') || '全取消'}
+                        </button>
+                    </div>
+                    <div class="model-management-panel__count">
+                        {visibleCount} / {totalCount}
+                    </div>
+                </div>
+
+                <div class="model-management-panel__search">
+                    <input
+                        type="text"
+                        class="b3-text-field"
+                        placeholder={t('multiModel.searchModels') || '搜索模型'}
+                        bind:value={modelSearchQuery}
+                        spellcheck="false"
+                    />
+                </div>
+
+                <div class="model-management-panel__list">
+                    {#if filteredModels.length === 0}
+                        <div class="model-management-panel__empty">
+                            {isRefreshingModels
+                                ? (t('models.fetching') || '正在获取模型...')
+                                : (t('multiModel.noResults') || '无匹配结果')}
                         </div>
+                    {:else}
+                        {#each filteredModels as model (model.id)}
+                            <div
+                                class="model-mgmt-item"
+                                class:model-mgmt-item--hidden={model.hidden}
+                            >
+                                <label class="model-mgmt-item__switch">
+                                    <input
+                                        type="checkbox"
+                                        class="b3-switch"
+                                        checked={!model.hidden}
+                                        on:change={() => toggleModelHidden(model.id)}
+                                    />
+                                </label>
+                                <div class="model-mgmt-item__info">
+                                    <div class="model-mgmt-item__name">
+                                        {model.name}{getModelCapabilitiesEmoji(model)}
+                                    </div>
+                                    <div class="model-mgmt-item__id">{model.id}</div>
+                                </div>
+                            </div>
+                        {/each}
                     {/if}
-                </main>
+                </div>
             </div>
         {:else if focusGroup === (t('settings.settingsGroup.sessionManagement') || '会话管理')}
             <div class="session-management-panel">
@@ -488,40 +583,19 @@
                             >
                                 <select
                                     class="b3-select"
-                                    bind:value={settings.autoRenameProvider}
-                                    on:change={() => {
-                                        settings.autoRenameModelId = '';
-                                        saveSettings();
-                                    }}
+                                    bind:value={settings.autoRenameModelId}
+                                    on:change={saveSettings}
                                 >
                                     <option value="">
-                                        {t('settings.autoRenameSession.selectProvider') ||
-                                            '-- 选择平台 --'}
+                                        {t('settings.autoRenameSession.selectModel') ||
+                                            '-- 选择模型 --'}
                                     </option>
-                                    {#each allProviderOptions as provider}
-                                        {#if settings.aiProviders[provider.id]?.models?.length > 0}
-                                            <option value={provider.id}>{provider.name}</option>
-                                        {/if}
+                                    {#each (settings.aiProviders?.opencode?.models || []).filter(m => !m.hidden) as model}
+                                        <option value={model.id}>
+                                            {model.name || model.id}
+                                        </option>
                                     {/each}
                                 </select>
-
-                                {#if settings.autoRenameProvider}
-                                    <select
-                                        class="b3-select"
-                                        bind:value={settings.autoRenameModelId}
-                                        on:change={saveSettings}
-                                    >
-                                        <option value="">
-                                            {t('settings.autoRenameSession.selectModel') ||
-                                                '-- 选择模型 --'}
-                                        </option>
-                                        {#each settings.aiProviders[settings.autoRenameProvider]?.models || [] as model}
-                                            <option value={model.id}>
-                                                {model.name || model.id}
-                                            </option>
-                                        {/each}
-                                    </select>
-                                {/if}
                             </div>
                         </div>
 
@@ -629,114 +703,114 @@
         flex-direction: column;
     }
 
-    .platform-management-layout {
-        display: flex;
-        gap: 16px;
-        flex: 1;
-        min-height: 0;
-        align-items: stretch;
-    }
-
-    .platform-sidebar {
-        width: 260px;
-        flex-shrink: 0;
+    .model-management-panel {
         display: flex;
         flex-direction: column;
-        min-height: 0;
-    }
-
-    .platform-main {
+        gap: 12px;
         flex: 1;
-        min-width: 0;
         min-height: 0;
-        display: flex;
-        flex-direction: column;
+        overflow: hidden;
+        padding: 16px;
     }
 
-    .no-selection {
-        padding: 24px;
-        background: var(--b3-theme-background);
-        border: 1px dashed var(--b3-border-color);
-        border-radius: 6px;
-        color: var(--b3-theme-on-surface-light);
-    }
-
-    .unified-platform-manager {
+    .model-management-panel__section {
         background: var(--b3-theme-surface);
         border-radius: 6px;
-        padding: 16px;
-        display: flex;
-        flex-direction: column;
-        flex: 1;
-        min-height: 0;
+        padding: 12px 16px;
     }
 
-    .manager-header {
+    .model-management-panel__toolbar {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        margin-bottom: 16px;
-
-        h5 {
-            margin: 0;
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--b3-theme-on-surface);
-        }
+        gap: 8px;
+        flex-shrink: 0;
     }
 
-    .platform-list {
+    .model-management-panel__toolbar-left {
         display: flex;
-        flex-direction: column;
         gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .model-management-panel__count {
+        font-size: 12px;
+        color: var(--b3-theme-on-surface-light);
+        white-space: nowrap;
+    }
+
+    .model-management-panel__search {
+        flex-shrink: 0;
+    }
+
+    .model-management-panel__search input {
+        width: 100%;
+        padding: 6px 8px;
+        font-size: 13px;
+    }
+
+    .model-management-panel__list {
         flex: 1;
         overflow-y: auto;
+        content-visibility: auto;
+        contain-intrinsic-size: auto 48px;
         min-height: 0;
     }
 
-    .platform-item {
+    .model-management-panel__empty {
+        padding: 24px;
+        text-align: center;
+        color: var(--b3-theme-on-surface-light);
+        font-size: 13px;
+    }
+
+    .model-mgmt-item {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        padding: 12px;
-        background: var(--b3-theme-background);
-        border-radius: 6px;
-        border: 1px solid var(--b3-border-color);
-        cursor: pointer;
-        transition: all 0.2s;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 4px;
+        transition: background 0.15s;
+        contain: layout style;
 
         &:hover {
             background: var(--b3-theme-surface);
-            border-color: var(--b3-theme-primary);
         }
 
-        &.platform-item--selected {
-            background: var(--b3-theme-primary-lightest);
-            border-color: var(--b3-theme-primary);
+        &--hidden {
+            opacity: 0.45;
         }
     }
 
-    .platform-item__info {
+    .model-mgmt-item__switch {
+        flex-shrink: 0;
         display: flex;
-        flex-direction: column;
-        gap: 2px;
+        align-items: center;
+    }
+
+    .model-mgmt-item__info {
         flex: 1;
         min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
     }
 
-    .platform-item__name {
-        font-size: 14px;
+    .model-mgmt-item__name {
+        font-size: 13px;
         font-weight: 500;
         color: var(--b3-theme-on-background);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
-    .platform-item__type {
+    .model-mgmt-item__id {
         font-size: 11px;
         color: var(--b3-theme-on-surface-light);
-        padding: 2px 6px;
-        background: var(--b3-theme-surface);
-        border-radius: 10px;
-        align-self: flex-start;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .session-management-panel {
@@ -833,19 +907,21 @@
     }
 
     @container settings-panel (max-width: 599px) {
-        .platform-management-layout {
+        .model-management-panel {
+            padding: 8px;
+        }
+
+        .model-management-panel__toolbar {
             flex-direction: column;
-            gap: 12px;
-            overflow-y: auto;
+            align-items: stretch;
         }
 
-        .platform-sidebar {
-            width: 100%;
-            max-height: 42%;
+        .model-management-panel__toolbar-left {
+            justify-content: center;
         }
 
-        .platform-main {
-            min-height: 260px;
+        .model-management-panel__count {
+            text-align: center;
         }
     }
 

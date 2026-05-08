@@ -4,6 +4,7 @@
     import { pushMsg, pushErrMsg } from '../api';
     import type { ProviderConfig, ModelConfig } from '../defaultSettings';
     import { t } from '../utils/i18n';
+    import { getModelCapabilities } from '../utils/modelCapabilities';
 
     export let providerId: string;
     export let providerName: string;
@@ -18,7 +19,7 @@
 
     let isLoadingModels = false;
     let searchQuery = '';
-    let availableModels: { id: string; name: string }[] = [];
+    let availableModels: { id: string; name: string; provider?: string }[] = [];
     let showModelSearchModal = false;
     let showAddModelModal = false;
     let manualModelId = '';
@@ -104,7 +105,7 @@
             const uniqueModelsMap = new Map();
             models.forEach(m => {
                 if (!uniqueModelsMap.has(m.id)) {
-                    uniqueModelsMap.set(m.id, { id: m.id, name: m.name });
+                    uniqueModelsMap.set(m.id, { id: m.id, name: m.name, provider: m.provider });
                 }
             });
             availableModels = Array.from(uniqueModelsMap.values()).sort((a, b) =>
@@ -148,6 +149,7 @@
             return;
         }
 
+        const capabilities = getModelCapabilities(modelId);
         const newModel: ModelConfig = {
             id: modelId,
             name: modelName,
@@ -155,6 +157,7 @@
             maxTokens: -1,
             thinkingEnabled: false,
             thinkingEffort: 'medium',
+            capabilities: Object.keys(capabilities).length > 0 ? capabilities : undefined,
         };
 
         config.models = [...config.models, newModel];
@@ -451,6 +454,9 @@
                                     <div class="model-search-item__info">
                                         <span class="model-search-item__name">
                                             {model.name}
+                                            {#if model.provider && model.provider !== 'OpenCode'}
+                                                <span class="model-search-item__provider">{model.provider}</span>
+                                            {/if}
                                         </span>
                                         <span class="model-search-item__id">{model.id}</span>
                                     </div>
@@ -788,6 +794,21 @@
     .model-search-item__name {
         font-size: 13px;
         color: var(--b3-theme-on-surface);
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .model-search-item__provider {
+        display: inline-block;
+        padding: 1px 4px;
+        background: var(--b3-theme-primary-lightest);
+        color: var(--b3-theme-primary);
+        border-radius: 3px;
+        font-size: 10px;
+        font-weight: 500;
+        line-height: 1.4;
+        white-space: nowrap;
     }
 
     .provider-config__models {

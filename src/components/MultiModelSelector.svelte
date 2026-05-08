@@ -40,15 +40,41 @@
     let wasOpen = false;
 
     function getProviderModels(): Array<ModelConfig & { providerId: string; providerName: string }> {
-        const config = providers['opencode'];
-        if (config && config.models && config.models.length > 0) {
-            return config.models.map((m: ModelConfig) => ({
-                ...m,
-                providerId: 'opencode',
-                providerName: builtInProviderNames['opencode'],
-            }));
+        const allModels: Array<ModelConfig & { providerId: string; providerName: string }> = [];
+        
+        for (const [providerId, providerData] of Object.entries(providers)) {
+            if (providerId === 'customProviders' || providerId === 'disabledBuiltInProviders' || providerId === 'providerOrder') continue;
+            if (Array.isArray(providerData)) continue;
+            const config = providerData as any;
+            if (config && config.models && Array.isArray(config.models)) {
+                const displayName = builtInProviderNames[providerId] || providerId;
+                for (const m of config.models) {
+                    if (m.hidden) continue;
+                    allModels.push({
+                        ...m,
+                        providerId,
+                        providerName: displayName,
+                    });
+                }
+            }
         }
-        return [];
+
+        if (providers.customProviders && Array.isArray(providers.customProviders)) {
+            for (const cp of providers.customProviders) {
+                if (cp && cp.models && Array.isArray(cp.models)) {
+                    for (const m of cp.models) {
+                        if (m.hidden) continue;
+                        allModels.push({
+                            ...m,
+                            providerId: cp.id,
+                            providerName: cp.name || cp.id,
+                        });
+                    }
+                }
+            }
+        }
+
+        return allModels;
     }
 
     // 响应式过滤后的模型列表（支持空格分隔的 AND 搜索）
@@ -95,11 +121,28 @@
         if (builtInProviderNames[providerId]) {
             return builtInProviderNames[providerId];
         }
+        if (providers.customProviders && Array.isArray(providers.customProviders)) {
+            const cp = providers.customProviders.find((p: any) => p.id === providerId);
+            if (cp && cp.name) return cp.name;
+        }
         return providerId;
     }
 
+function findProviderConfig(provider: string): any {
+        if (provider === 'customProviders' || provider === 'disabledBuiltInProviders' || provider === 'providerOrder') {
+            return null;
+        }
+        if (providers[provider] && !Array.isArray(providers[provider])) {
+            return providers[provider];
+        }
+        if (providers.customProviders && Array.isArray(providers.customProviders)) {
+            return providers.customProviders.find((p: any) => p.id === provider);
+        }
+        return null;
+    }
+
     function getModelName(provider: string, modelId: string): string {
-        const providerConfig = providers[provider];
+        const providerConfig = findProviderConfig(provider);
         if (providerConfig && providerConfig.models) {
             const model = providerConfig.models.find((m: any) => m.id === modelId);
             return model ? model.name : modelId;
@@ -108,7 +151,7 @@
     }
 
     function getProviderModelThinkingEnabled(provider: string, modelId: string): boolean {
-        const providerConfig = providers[provider];
+        const providerConfig = findProviderConfig(provider);
         if (providerConfig && providerConfig.models) {
             const model = providerConfig.models.find((m: any) => m.id === modelId);
             return model?.thinkingEnabled || false;
@@ -117,7 +160,7 @@
     }
 
     function getProviderModelThinkingEffort(provider: string, modelId: string): ThinkingEffort {
-        const providerConfig = providers[provider];
+        const providerConfig = findProviderConfig(provider);
         if (providerConfig && providerConfig.models) {
             const model = providerConfig.models.find((m: any) => m.id === modelId);
             return model?.thinkingEffort || 'low';
@@ -126,7 +169,7 @@
     }
 
     function getModelCapabilitiesEmoji(provider: string, modelId: string): string {
-        const providerConfig = providers[provider];
+        const providerConfig = findProviderConfig(provider);
         if (!providerConfig || !providerConfig.models) return '';
         const model = providerConfig.models.find((m: any) => m.id === modelId);
         if (!model?.capabilities) return '';
@@ -138,7 +181,7 @@
         if (model.capabilities.toolCalling) emojis.push('🛠️');
         if (model.capabilities.webSearch) emojis.push('🌐');
 
-        return emojis.length > 0 ? ' ' + emojis.join(' ') : '';
+return emojis.length > 0 ? ' ' + emojis.join(' ') : '';
     }
 
     function toggleModelInstanceThinking(index: number) {
@@ -671,7 +714,10 @@
                                 </span>
                             </div>
                             <span class="multi-model-selector__model-params">
-                                T: {model.temperature} | Max: {model.maxTokens}
+                                {#if model.providerName && model.providerId !== 'opencode'}
+                                    <span class="multi-model-selector__provider-badge">{model.providerName}</span>
+                                {/if}
+                                <span class="multi-model-selector__model-id">{model.id}</span>
                             </span>
                         </div>
                     </div>
@@ -1017,6 +1063,32 @@
     .multi-model-selector__model-params {
         font-size: 11px;
         color: var(--b3-theme-on-surface-light);
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding-left: 12px;
+        flex-wrap: wrap;
+    }
+
+    .multi-model-selector__provider-badge {
+        display: inline-block;
+        padding: 1px 5px;
+        background: var(--b3-theme-primary-lightest);
+        color: var(--b3-theme-primary);
+        border-radius: 3px;
+        font-size: 10px;
+        font-weight: 500;
+        line-height: 1.4;
+        white-space: nowrap;
+    }
+
+    .multi-model-selector__model-id {
+        font-size: 10px;
+        color: var(--b3-theme-on-surface-light);
+        opacity: 0.7;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .multi-model-selector__selected-model-thinking {

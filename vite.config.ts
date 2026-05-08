@@ -109,7 +109,7 @@ export default defineConfig({
                 ])
             ],
 
-            external: ["siyuan", "process"],
+            external: ["siyuan", "process", "child_process", "net", "os"],
 
             output: {
                 entryFileNames: "[name].js",

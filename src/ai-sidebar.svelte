@@ -49,6 +49,7 @@
     import { settingsStore, updateSettings } from './stores/settings';
     import { confirm, Constants, platformUtils } from 'siyuan';
     import { t } from './utils/i18n';
+    import { getModelCapabilities } from './utils/modelCapabilities';
     // Agent 模式工具使用强制规则（统一常量）
     // STUBS: ./tools deleted, safe no-op replacements
     const AVAILABLE_TOOLS: any[] = [];
@@ -1296,12 +1297,16 @@
                 const providerConfig = settings.aiProviders.opencode;
                 const models = await fetchModels('opencode', '', providerConfig?.serverUrl || 'http://localhost:4096');
                 if (models && models.length > 0) {
-                    const modelConfigs = models.map(m => ({
-                        id: m.id,
-                        name: m.name,
-                        temperature: 0.7,
-                        maxTokens: 4096
-                    }));
+                    const modelConfigs = models.map(m => {
+                        const capabilities = getModelCapabilities(m.id);
+                        return {
+                            id: m.id,
+                            name: m.name,
+                            temperature: 0.7,
+                            maxTokens: 4096,
+                            capabilities: Object.keys(capabilities).length > 0 ? capabilities : undefined,
+                        };
+                    });
                     settings.aiProviders.opencode.models = modelConfigs;
                     // Auto-select first model if none selected
                     if (!settings.currentModelId || !modelConfigs.find(m => m.id === settings.currentModelId)) {

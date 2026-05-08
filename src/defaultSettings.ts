@@ -5,18 +5,19 @@ export interface ModelConfig {
     name: string;
     temperature: number;
     maxTokens: number;
-    customBody?: string; // 自定义请求体参数 (JSON string)
+    customBody?: string;
     capabilities?: {
-        thinking?: boolean; // 是否支持思考模式
-        vision?: boolean;   // 是否支持视觉
-        imageGeneration?: boolean; // 是否支持生图
-        toolCalling?: boolean; // 是否支持工具调用
-        webSearch?: boolean; // 是否支持联网搜索
+        thinking?: boolean;
+        vision?: boolean;
+        imageGeneration?: boolean;
+        toolCalling?: boolean;
+        webSearch?: boolean;
     };
-    thinkingEnabled?: boolean; // 用户是否开启思考模式（仅当支持思考时有效）
-    thinkingEffort?: ThinkingEffort; // 思考努力程度（low/medium/high/auto）
-    webSearchEnabled?: boolean; // 用户是否开启联网搜索（仅当支持联网时有效）
-    webSearchMaxUses?: number; // 联网搜索最大次数（默认5次）
+    thinkingEnabled?: boolean;
+    thinkingEffort?: ThinkingEffort;
+    webSearchEnabled?: boolean;
+    webSearchMaxUses?: number;
+    hidden?: boolean;
 };
 
 export interface ProviderConfig {
