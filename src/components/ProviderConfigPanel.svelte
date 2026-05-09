@@ -19,7 +19,7 @@
 
     let isLoadingModels = false;
     let searchQuery = '';
-    let availableModels: { id: string; name: string; provider?: string }[] = [];
+    let availableModels: { id: string; name: string; provider?: string; enableThinking?: boolean; reasoningEffort?: string }[] = [];
     let showModelSearchModal = false;
     let showAddModelModal = false;
     let manualModelId = '';
@@ -105,7 +105,13 @@
             const uniqueModelsMap = new Map();
             models.forEach(m => {
                 if (!uniqueModelsMap.has(m.id)) {
-                    uniqueModelsMap.set(m.id, { id: m.id, name: m.name, provider: m.provider });
+                    uniqueModelsMap.set(m.id, {
+                        id: m.id,
+                        name: m.name,
+                        provider: m.provider,
+                        enableThinking: m.enableThinking,
+                        reasoningEffort: m.reasoningEffort
+                    });
                 }
             });
             availableModels = Array.from(uniqueModelsMap.values()).sort((a, b) =>
@@ -143,13 +149,23 @@
         availableModels = [];
     }
 
-    function addModel(modelId: string, modelName: string) {
+    function addModel(modelId: string, modelName: string, enableThinking?: boolean, reasoningEffort?: string) {
         if (config.models.some(m => m.id === modelId)) {
             pushErrMsg('该模型已添加');
             return;
         }
 
         const capabilities = getModelCapabilities(modelId);
+        if (enableThinking) {
+            capabilities.thinking = true;
+        }
+        const thinker: any = {};
+        if (typeof enableThinking === 'boolean') {
+            thinker.thinkingEnabled = enableThinking;
+        }
+        if (reasoningEffort && ['low', 'medium', 'high', 'auto'].includes(reasoningEffort)) {
+            thinker.thinkingEffort = reasoningEffort;
+        }
         const newModel: ModelConfig = {
             id: modelId,
             name: modelName,
@@ -157,6 +173,7 @@
             maxTokens: -1,
             thinkingEnabled: false,
             thinkingEffort: 'medium',
+            ...thinker,
             capabilities: Object.keys(capabilities).length > 0 ? capabilities : undefined,
         };
 
@@ -195,12 +212,12 @@
         pushMsg('已删除模型');
     }
 
-    function toggleModel(modelId: string, modelName: string) {
+    function toggleModel(modelId: string, modelName: string, enableThinking?: boolean, reasoningEffort?: string) {
         const isAdded = config.models.some(m => m.id === modelId);
         if (isAdded) {
             removeModel(modelId);
         } else {
-            addModel(modelId, modelName);
+            addModel(modelId, modelName, enableThinking, reasoningEffort);
         }
     }
 
@@ -468,7 +485,7 @@
                                         class:b3-button--cancel={config.models.some(
                                             m => m.id === model.id
                                         )}
-                                        on:click={() => toggleModel(model.id, model.name)}
+                                        on:click={() => toggleModel(model.id, model.name, model.enableThinking, model.reasoningEffort)}
                                     >
                                         {config.models.some(m => m.id === model.id)
                                             ? t('models.remove') || '移除'

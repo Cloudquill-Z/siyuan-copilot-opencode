@@ -96,6 +96,7 @@ export interface ChatOptions {
     customBody?: any;
     enableImageGeneration?: boolean;
     onImageGenerated?: (images: GeneratedImageData[]) => void;
+    mode?: 'plan' | 'build';
 }
 
 export interface ModelInfo {
@@ -202,7 +203,8 @@ export async function chat(
             enableThinking: options.enableThinking,
             reasoningEffort: options.reasoningEffort,
             onThinkingChunk: options.onThinkingChunk,
-            onThinkingComplete: options.onThinkingComplete
+            onThinkingComplete: options.onThinkingComplete,
+            mode: options.mode
         },
         { serverUrl }
     );

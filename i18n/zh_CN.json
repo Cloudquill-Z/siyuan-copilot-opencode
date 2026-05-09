@@ -165,10 +165,10 @@
         "unsavedChanges": "有未保存的更改",
         "mode": {
             "label": "模式",
-            "ask": "问答模式",
-            "edit": "编辑模式",
-            "askDescription": "仅进行问答，不修改笔记内容",
-            "editDescription": "AI可以直接编辑思源笔记内容"
+            "plan": "Plan",
+            "build": "Build",
+            "planDescription": "AI 分析和规划，不进行修改",
+            "buildDescription": "AI 对文件进行修改"
         },
         "empty": {
             "title": "开始对话",

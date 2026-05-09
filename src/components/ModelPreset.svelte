@@ -22,7 +22,7 @@
             thinkingEffort?: ThinkingEffort;
         }>,
         enableMultiModel: false,
-        chatMode: 'ask' as 'ask' | 'edit',
+        chatMode: 'plan' as 'plan' | 'build',
     };
     export let plugin: any;
 
@@ -54,7 +54,7 @@
         thinkingEffort?: ThinkingEffort;
     }> = [];
     let tempEnableMultiModel = false;
-    let tempChatMode: 'ask' | 'edit' = 'ask';
+    let tempChatMode: 'plan' | 'build' = 'plan';
 
     // 当前正在编辑的预设ID（空字符串表示新建/默认）
     let editingPresetId = '';
@@ -75,7 +75,7 @@
             thinkingEffort?: ThinkingEffort;
         }>;
         enableMultiModel: boolean;
-        chatMode: 'ask' | 'edit';
+        chatMode: 'plan' | 'build';
         createdAt: number;
     }
 
@@ -109,7 +109,7 @@
             thinkingEffort?: ThinkingEffort;
         }>,
         enableMultiModel: false,
-        chatMode: 'ask' as 'ask' | 'edit',
+        chatMode: 'plan' as 'plan' | 'build',
     };
 
     // 处理MultiModelSelector的选择事件（单模型模式）
@@ -327,7 +327,7 @@
                 modelSelectionEnabled: preset.modelSelectionEnabled ?? false,
                 selectedModels: preset.selectedModels || [],
                 enableMultiModel: preset.enableMultiModel ?? false,
-                chatMode: preset.chatMode || 'ask',
+                chatMode: preset.chatMode || 'plan',
             });
 
             pushMsg(`已应用预设: ${preset.name}`);
@@ -348,7 +348,7 @@
         tempModelSelectionEnabled = preset.modelSelectionEnabled ?? false;
         tempSelectedModels = [...(preset.selectedModels || [])];
         tempEnableMultiModel = preset.enableMultiModel ?? false;
-        tempChatMode = preset.chatMode || 'ask';
+        tempChatMode = preset.chatMode || 'plan';
 
         // 保存初始状态
         saveInitialState();
@@ -535,7 +535,7 @@
         tempModelSelectionEnabled = appliedSettings.modelSelectionEnabled ?? false;
         tempSelectedModels = [...(appliedSettings.selectedModels || [])];
         tempEnableMultiModel = appliedSettings.enableMultiModel ?? false;
-        tempChatMode = appliedSettings.chatMode ?? 'ask';
+        tempChatMode = appliedSettings.chatMode ?? 'plan';
 
         // 检查当前应用的设置是否与某个预设匹配
         const savedPresetId = await loadSelectedPresetId();
@@ -553,7 +553,7 @@
                 areModelsEqual(preset.selectedModels || [], appliedSettings.selectedModels || []) &&
                 (preset.enableMultiModel ?? false) ===
                     (appliedSettings.enableMultiModel ?? false) &&
-                (preset.chatMode || 'ask') === (appliedSettings.chatMode ?? 'ask')
+                (preset.chatMode || 'plan') === (appliedSettings.chatMode ?? 'plan')
             ) {
                 selectedPresetId = savedPresetId;
             } else {
@@ -574,7 +574,7 @@
         tempModelSelectionEnabled = false;
         tempSelectedModels = [];
         tempEnableMultiModel = false;
-        tempChatMode = 'ask';
+        tempChatMode = 'plan';
         editingPresetId = '';
         selectedPresetId = '';
         newPresetName = ''; // 重置预设名称为空
@@ -820,7 +820,7 @@
                         modelSelectionEnabled: preset.modelSelectionEnabled ?? false,
                         selectedModels: [...(preset.selectedModels || [])],
                         enableMultiModel: preset.enableMultiModel ?? false,
-                        chatMode: preset.chatMode || 'ask',
+                        chatMode: preset.chatMode || 'plan',
                     });
                     selectedPresetId = savedPresetId;
                 } else {
@@ -1169,14 +1169,14 @@
                         bind:value={tempChatMode}
                         class="b3-select"
                         on:change={() => {
-                            if (tempChatMode !== 'ask' && tempEnableMultiModel) {
+                            if (tempChatMode !== 'plan' && tempEnableMultiModel) {
                                 tempEnableMultiModel = false;
                             }
                             applySettings();
                         }}
                     >
-                        <option value="ask">{t('aiSidebar.mode.ask') || '问答模式'}</option>
-                        <option value="edit">{t('aiSidebar.mode.edit') || '编辑模式'}</option>
+                        <option value="plan">{t('aiSidebar.mode.plan') || 'Plan'}</option>
+                        <option value="build">{t('aiSidebar.mode.build') || 'Build'}</option>
                     </select>
                     <div class="model-settings-hint">
                         {t('aiSidebar.modelSettings.chatModeHint') ||

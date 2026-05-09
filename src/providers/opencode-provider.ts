@@ -16,6 +16,7 @@ export interface OpenCodeChatOptions {
     reasoningEffort?: 'low' | 'medium' | 'high' | 'auto';
     onThinkingChunk?: (text: string) => void;
     onThinkingComplete?: (thinking: string) => void;
+    mode?: 'plan' | 'build';
 }
 
 export interface OpenCodeModelInfo {
@@ -380,7 +381,8 @@ export async function chatOpenCode(
                 method: 'POST',
                 body: JSON.stringify({
                     model,
-                    parts: [{ type: 'text', text: options.prompt }]
+                    parts: [{ type: 'text', text: options.prompt }],
+                    ...(options.mode ? { mode: options.mode } : {})
                 })
             },
             options.signal

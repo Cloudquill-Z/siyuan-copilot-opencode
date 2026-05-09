@@ -166,10 +166,10 @@
         "unsavedChanges": "Unsaved changes",
         "mode": {
             "label": "Mode",
-            "ask": "Ask Mode",
-            "edit": "Edit Mode",
-            "askDescription": "Q&A only, no modification to note content",
-            "editDescription": "AI can directly edit SiYuan note content"
+            "plan": "Plan",
+            "build": "Build",
+            "planDescription": "AI analyzes and plans without making changes",
+            "buildDescription": "AI makes changes to files"
         },
         "empty": {
             "title": "Start Conversation",

@@ -201,12 +201,12 @@
             thinkingEffort?: ThinkingEffort;
         }>,
         enableMultiModel: false,
-        chatMode: 'ask' as 'ask' | 'edit',
+        chatMode: 'plan' as 'plan' | 'build',
     };
 
     // 对话模式
-    type ChatMode = 'ask' | 'edit';
-    let chatMode: ChatMode = 'ask';
+    type ChatMode = 'plan' | 'build';
+    let chatMode: ChatMode = 'plan';
     let isDiffDialogOpen = false;
     let currentDiffOperation: EditOperation | null = null;
     type DiffViewMode = 'diff' | 'split';
@@ -518,7 +518,7 @@
                 if (doc.type === 'webpage') {
                     // 网页类型：保持原内容不变（已经获取到内容）
                     content = doc.content;
-                } else if (chatMode === 'ask' && userToolCount > 0) {
+                } else if (chatMode === 'plan' && userToolCount > 0) {
                     // agent模式或启用工具的问答模式：文档只保留ID，块获取kramdown
                     if (doc.type === 'doc') {
                         content = ''; // 文档不保存内容，只保留ID
@@ -610,7 +610,7 @@
         for (const doc of userContextDocs) {
             try {
                 let content: string;
-                if (chatMode === 'ask' && userToolCount > 0) {
+                if (chatMode === 'plan' && userToolCount > 0) {
                     if (doc.type === 'doc') {
                         content = '';
                     } else {
@@ -679,8 +679,8 @@
         try {
             // 准备 Agent/Ask 模式的工具列表
             let toolsForAgent: any[] | undefined = undefined;
-            if (chatMode === 'ask' && userToolCount > 0) {
-                const currentSelectedTools = chatMode === 'ask' ? selectedToolsAsk : selectedTools;
+            if (chatMode === 'plan' && userToolCount > 0) {
+                const currentSelectedTools = chatMode === 'plan' ? selectedToolsAsk : selectedTools;
                 const selectedToolDefs = AVAILABLE_TOOLS.filter(tool =>
                     currentSelectedTools.some(t => t.name === tool.function.name)
                 );
@@ -688,7 +688,7 @@
                     tool => tool.function.name !== 'get_siyuan_skills'
                 );
                 const descTool =
-                    chatMode === 'ask'
+                    chatMode === 'plan'
                         ? createGetSiyuanSkillsTool(
                               filteredToolDefs.map(tool => tool.function.name)
                           )
@@ -745,6 +745,7 @@
                             (response.thinkingEnabled ?? modelConfig.thinkingEnabled ?? false),
                         reasoningEffort:
                             response.thinkingEffort ?? modelConfig.thinkingEffort ?? 'low',
+                        mode: chatMode,
                         tools: toolsToPass,
                         onThinkingChunk: async (chunk: string) => {
                             turnThinking += chunk;
@@ -802,7 +803,7 @@
 
                                 // 检查是否自动批准
                                 const currentSelectedTools =
-                                    chatMode === 'ask' ? selectedToolsAsk : selectedTools;
+                                    chatMode === 'plan' ? selectedToolsAsk : selectedTools;
                                 const toolConfig = currentSelectedTools.find(
                                     t => t.name === tc.function.name
                                 );
@@ -1029,7 +1030,7 @@
                     enableThinking:
                         modelConfig.capabilities?.thinking &&
                         (modelConfig.thinkingEnabled || false),
-                    reasoningEffort: modelConfig.thinkingEffort || 'low',
+                    reasoningEffort: modelConfig.thinkingEffort || 'low', mode: chatMode,
                     onThinkingChunk: async (chunk: string) => {
                         thinking += chunk;
                         msg.multiModelResponses[responseIndex].thinking = thinking;
@@ -1188,9 +1189,37 @@
         currentProvider = settings.currentProvider || '';
         currentModelId = settings.currentModelId || '';
 
+        // 补充已有模型缺失的 capabilities（防止旧数据无 thinking 能力标识）
+        for (const [pid, providerData] of Object.entries(providers)) {
+            if (pid === 'customProviders' || pid === 'disabledBuiltInProviders' || pid === 'providerOrder') continue;
+            if (Array.isArray(providerData)) continue;
+            const cfg = providerData as any;
+            if (cfg && cfg.models && Array.isArray(cfg.models)) {
+                let changed = false;
+                for (const m of cfg.models) {
+                    if (!m.capabilities) {
+                        const caps = getModelCapabilities(m.id);
+                        if (Object.keys(caps).length > 0) {
+                            m.capabilities = caps;
+                            changed = true;
+                        }
+                    } else if (!m.capabilities.thinking) {
+                        const caps = getModelCapabilities(m.id);
+                        if (caps.thinking) {
+                            m.capabilities.thinking = true;
+                            changed = true;
+                        }
+                    }
+                }
+                if (changed) {
+                    cfg.models = [...cfg.models];
+                }
+            }
+        }
+
         // 初始化模式
         if (!settings.selectedModelPresetId && settings.lastUsedChatMode) {
-            chatMode = settings.lastUsedChatMode === 'edit' ? 'edit' : 'ask';
+            chatMode = settings.lastUsedChatMode === 'build' ? 'build' : 'plan';
         }
 
         // 初始化多模型选择，过滤掉无效的模型
@@ -1304,27 +1333,44 @@
         // 监听文档总结事件
         window.addEventListener(SUMMARY_EVENT, handleSummarizeDoc as EventListener);
 
-        // Auto-fetch OpenCode models on startup (or clean up old data)
+        // Auto-fetch OpenCode models on startup (merge with existing settings)
         if (settings.aiProviders?.opencode) {
-            const existingModels = settings.aiProviders.opencode.models;
-            const needsCleanup = existingModels && existingModels.length > 100;
-            if (needsCleanup || !existingModels || existingModels.length === 0) {
+            const existingModels = settings.aiProviders.opencode.models || [];
+            const needsCleanup = existingModels.length > 100;
+            const needsFetch = existingModels.length === 0 || needsCleanup;
+            if (needsFetch) {
                 try {
-                    if (needsCleanup) {
-                        console.warn(`[OpenCode] Clearing ${existingModels.length} old models, re-fetching`);
-                        settings.aiProviders.opencode.models = [];
-                    }
                     const providerConfig = settings.aiProviders.opencode;
                     const models = await fetchModels('opencode', '', providerConfig?.serverUrl || 'http://localhost:4096');
                     if (models && models.length > 0) {
+                        // 合并逻辑：保留已有模型的用户设置（hidden/temperature/thinkingEnabled 等）
+                        const existingMap: Record<string, any> = {};
+                        for (const m of existingModels) {
+                            existingMap[m.id] = m;
+                        }
                         const modelConfigs = models.map(m => {
+                            const existing = existingMap[m.id];
                             const capabilities = getModelCapabilities(m.id);
+                            if (m.enableThinking) {
+                                capabilities.thinking = true;
+                            }
+                            if (existing) {
+                                // 保留用户设置，更新 capabilities 和 name
+                                return {
+                                    ...existing,
+                                    name: m.name,
+                                    capabilities: Object.keys(capabilities).length > 0 ? capabilities : existing.capabilities,
+                                };
+                            }
+                            // 新模型：使用默认值
                             return {
                                 id: m.id,
                                 name: m.name,
                                 temperature: 0.7,
                                 maxTokens: 4096,
                                 capabilities: Object.keys(capabilities).length > 0 ? capabilities : undefined,
+                                thinkingEnabled: m.enableThinking ?? false,
+                                thinkingEffort: m.reasoningEffort ?? 'low',
                                 hidden: false,
                             };
                         });
@@ -1906,7 +1952,7 @@
                 thinkingEffort?: ThinkingEffort;
             }>;
             enableMultiModel?: boolean;
-            chatMode?: 'ask' | 'edit';
+            chatMode?: 'plan' | 'build';
         }>
     ) {
         const newSettings = event.detail;
@@ -1935,7 +1981,7 @@
             newSettings.selectedModels.length > 0
         ) {
             // 只有ask模式才能启用多模型
-            if (newSettings.enableMultiModel && newSettings.chatMode === 'ask') {
+            if (newSettings.enableMultiModel && newSettings.chatMode === 'plan') {
                 // 多模型模式
                 enableMultiModel = true;
 
@@ -2157,16 +2203,12 @@
         return modelConfig?.capabilities?.webSearch || false;
     })();
 
-    // 是否显示思考程度选择器（只有 Gemini 和 Claude 模型在启用思考模式时才显示）
+    // 是否显示思考程度选择器（OpenCode 原生支持所有思考模型的 reasoningEffort）
     $: showThinkingEffortSelector = (() => {
         if (!isThinkingModeEnabled || !currentModelId) {
             return false;
         }
-        // 检查是否是支持思考程度设置的模型（Gemini 或 Claude）
-        return (
-            isSupportedThinkingGeminiModel(currentModelId) ||
-            isSupportedThinkingClaudeModel(currentModelId)
-        );
+        return true;
     })();
 
     // 当前模型是否是 Gemini 模型（用于决定是否显示"默认"选项）
@@ -2473,7 +2515,7 @@
             for (const doc of userContextDocuments) {
                 try {
                     let content: string;
-                    if (chatMode === 'ask' && userToolCount > 0) {
+                    if (chatMode === 'plan' && userToolCount > 0) {
                         // agent模式或启用工具的问答模式：文档只保留ID，块获取kramdown
                         if (doc.type === 'doc') {
                             content = '';
@@ -2651,9 +2693,9 @@
 
                 // 准备 Agent/Ask 模式的工具列表
                 let toolsForAgent: any[] | undefined = undefined;
-                if (chatMode === 'ask' && userToolCount > 0) {
+                if (chatMode === 'plan' && userToolCount > 0) {
                     const currentSelectedTools =
-                        chatMode === 'ask' ? selectedToolsAsk : selectedTools;
+                        chatMode === 'plan' ? selectedToolsAsk : selectedTools;
                     const selectedToolDefs = AVAILABLE_TOOLS.filter(tool =>
                         currentSelectedTools.some(t => t.name === tool.function.name)
                     );
@@ -2661,7 +2703,7 @@
                         tool => tool.function.name !== 'get_siyuan_skills'
                     );
                     const descTool =
-                        chatMode === 'ask'
+                        chatMode === 'plan'
                             ? createGetSiyuanSkillsTool(
                                   filteredToolDefs.map(tool => tool.function.name)
                               )
@@ -2719,6 +2761,7 @@
                             // 使用模型实例的 thinkingEffort 值，如果没有则使用 modelConfig 中的默认值
                             reasoningEffort:
                                 model.thinkingEffort ?? modelConfig.thinkingEffort ?? 'low',
+                            mode: chatMode,
                             tools: toolsToPass,
                             customBody,
                             onThinkingChunk: async (chunk: string) => {
@@ -2784,7 +2827,7 @@
 
                                     // 检查是否自动批准
                                     const currentSelectedTools =
-                                        chatMode === 'ask' ? selectedToolsAsk : selectedTools;
+                                        chatMode === 'plan' ? selectedToolsAsk : selectedTools;
                                     const toolConfig = currentSelectedTools.find(
                                         t => t.name === tc.function.name
                                     );
@@ -3112,7 +3155,7 @@
 
                             // agent模式或启用工具的问答模式：文档块只传递ID，不传递内容
                             if (
-                                chatMode === 'ask' &&
+                                chatMode === 'plan' &&
                                 userToolCount > 0 &&
                                 doc.type === 'doc'
                             ) {
@@ -3355,7 +3398,7 @@
 
                                 // agent模式或启用工具的问答模式：文档块只传递ID，不传递内容
                                 if (
-                                    chatMode === 'ask' &&
+                                    chatMode === 'plan' &&
                                     userToolCount > 0 &&
                                     doc.type === 'doc'
                                 ) {
@@ -3388,7 +3431,7 @@
         // Agent/Ask 模式带有工具时，添加工具使用强制规则
         let hasToolInstruction = false;
         let hasSoulEnabled = false;
-        if (chatMode === 'ask' && userToolCount > 0) {
+        if (chatMode === 'plan' && userToolCount > 0) {
             // 如果已有基础提示词，添加换行后追加工具说明；否则直接使用工具说明
             if (baseSystemPrompt.trim()) {
             } else {
@@ -3396,7 +3439,7 @@
             hasToolInstruction = true;
 
             // 检查是否启用了SOUL工具
-            const currentSelectedTools = chatMode === 'ask' ? selectedToolsAsk : selectedTools;
+            const currentSelectedTools = chatMode === 'plan' ? selectedToolsAsk : selectedTools;
             hasSoulEnabled = currentSelectedTools.some(t => t.name === 'soul');
         }
 
@@ -3741,7 +3784,7 @@
         }
 
         // 如果启用了多模型模式且在问答模式
-        if (enableMultiModel && chatMode === 'ask' && selectedMultiModels.length > 0) {
+        if (enableMultiModel && chatMode === 'plan' && selectedMultiModels.length > 0) {
             try {
                 await sendMultiModelMessage();
             } finally {
@@ -3760,7 +3803,7 @@
                 try {
                     let content: string;
 
-                    if (chatMode === 'ask' && userToolCount > 0) {
+                    if (chatMode === 'plan' && userToolCount > 0) {
                         // agent模式或启用工具的问答模式：文档只传递ID
                         if (doc.type === 'doc') {
                             content = '';
@@ -3850,7 +3893,7 @@
 
         // DeepSeek 思考模式：开启新一轮对话前清理历史消息中的 reasoning_content，保留工具调用链
         if (
-            chatMode === 'ask' &&
+            chatMode === 'plan' &&
             userToolCount > 0 &&
             currentProvider === 'deepseek'
         ) {
@@ -3864,7 +3907,7 @@
         }
 
         const isDeepseekThinkingAgent =
-            chatMode === 'ask' &&
+            chatMode === 'plan' &&
             userToolCount > 0 &&
             modelConfig.capabilities?.thinking &&
             (modelConfig.thinkingEnabled || false);
@@ -3947,7 +3990,7 @@
 
                             // agent模式或启用工具的问答模式：文档块只传递ID，不传递内容
                             if (
-                                chatMode === 'ask' &&
+                                chatMode === 'plan' &&
                                 userToolCount > 0 &&
                                 doc.type === 'doc'
                             ) {
@@ -4113,7 +4156,7 @@
 
                                 // agent模式或启用工具的问答模式：文档块只传递ID，不传递内容
                                 if (
-                                    chatMode === 'ask' &&
+                                    chatMode === 'plan' &&
                                     userToolCount > 0 &&
                                     doc.type === 'doc'
                                 ) {
@@ -4197,7 +4240,7 @@
 
                                 // agent模式或启用工具的问答模式：文档块只传递ID，不传递内容
                                 if (
-                                    chatMode === 'ask' &&
+                                    chatMode === 'plan' &&
                                     userToolCount > 0 &&
                                     doc.type === 'doc'
                                 ) {
@@ -4222,7 +4265,7 @@
         }
 
         // 根据模式添加系统提示词
-        if (chatMode === 'ask' && userToolCount > 0) {
+        if (chatMode === 'plan' && userToolCount > 0) {
             // Agent 模式或启用工具的问答模式下添加工具使用强制规则
             let baseSystemPrompt = settings.aiSystemPrompt || '';
             if (baseSystemPrompt.trim()) {
@@ -4311,9 +4354,9 @@
 
             // 准备工具列表
             let toolsForAgent: any[] | undefined = undefined;
-            if (chatMode === 'ask' && userToolCount > 0) {
+            if (chatMode === 'plan' && userToolCount > 0) {
                 // 根据选中的工具名称筛选出对应的工具定义
-                const currentSelectedTools = chatMode === 'ask' ? selectedToolsAsk : selectedTools;
+                const currentSelectedTools = chatMode === 'plan' ? selectedToolsAsk : selectedTools;
                 const selectedToolDefs = AVAILABLE_TOOLS.filter(tool =>
                     currentSelectedTools.some(t => t.name === tool.function.name)
                 );
@@ -4321,7 +4364,7 @@
                     tool => tool.function.name !== 'get_siyuan_skills'
                 );
                 const descTool =
-                    chatMode === 'ask'
+                    chatMode === 'plan'
                         ? createGetSiyuanSkillsTool(
                               filteredToolDefs.map(tool => tool.function.name)
                           )
@@ -4362,7 +4405,7 @@
 
             // Agent 模式或启用工具的问答模式使用循环调用
             if (
-                chatMode === 'ask' &&
+                chatMode === 'plan' &&
                 toolsForAgent &&
                 toolsForAgent.length > 0
             ) {
@@ -4395,7 +4438,7 @@
                             stream: true,
                             signal: abortController.signal,
                             enableThinking,
-                            reasoningEffort: modelConfig.thinkingEffort || 'low',
+                            reasoningEffort: modelConfig.thinkingEffort || 'low', mode: chatMode,
                             tools: toolsForAgent,
                             customBody,
                             onThinkingChunk: enableThinking
@@ -4491,7 +4534,7 @@
                                 // 处理每个工具调用
                                 for (const toolCall of toolCalls) {
                                     const currentSelectedToolsInLoop =
-                                        chatMode === 'ask' ? selectedToolsAsk : selectedTools;
+                                        chatMode === 'plan' ? selectedToolsAsk : selectedTools;
                                     const toolConfig = currentSelectedToolsInLoop.find(
                                         t => t.name === toolCall.function.name
                                     );
@@ -4826,7 +4869,7 @@
                         stream: true,
                         signal: abortController.signal,
                         enableThinking,
-                        reasoningEffort: modelConfig.thinkingEffort || 'low',
+                        reasoningEffort: modelConfig.thinkingEffort || 'low', mode: chatMode,
                         tools: webSearchTools, // 传递联网搜索工具
                         customBody,
                         enableImageGeneration,
@@ -8869,7 +8912,7 @@
         // 情况1：之前使用了多模型，且用户当前启用了多模型，优先使用当前用户设置的模型列表
         // 情况2：用户当前启用了多模型，使用当前选择的多模型
         // 情况3：用户关闭了多模型，使用单模型
-        if (chatMode === 'ask') {
+        if (chatMode === 'plan') {
             // 检查是否应该使用多模型
             let shouldUseMultiModel = false;
             let modelsToUse: Array<{ provider: string; modelId: string }> = [];
@@ -8975,7 +9018,7 @@
 
         // DeepSeek 思考模式：开启新一轮对话前清理历史消息中的 reasoning_content，保留工具调用链
         if (
-            chatMode === 'ask' &&
+            chatMode === 'plan' &&
             userToolCount > 0 &&
             currentProvider === 'deepseek'
         ) {
@@ -8989,7 +9032,7 @@
         }
 
         const isDeepseekThinkingAgent =
-            chatMode === 'ask' &&
+            chatMode === 'plan' &&
             userToolCount > 0 &&
             modelConfig &&
             modelConfig.capabilities?.thinking &&
@@ -9072,7 +9115,7 @@
                                       : '块';
                             // agent模式或启用工具的问答模式：文档块只传递ID，不传递内容
                             if (
-                                chatMode === 'ask' &&
+                                chatMode === 'plan' &&
                                 userToolCount > 0 &&
                                 doc.type === 'doc'
                             ) {
@@ -9343,7 +9386,7 @@
 
         // Agent/Ask 模式带有工具时，添加工具使用强制规则
         let hasToolInstruction = false;
-        if (chatMode === 'ask' && userToolCount > 0) {
+        if (chatMode === 'plan' && userToolCount > 0) {
             if (baseSystemPrompt.trim()) {
             } else {
             }
@@ -9383,9 +9426,9 @@
 
             // 准备工具列表
             let toolsForAgent: any[] | undefined = undefined;
-            if (chatMode === 'ask' && userToolCount > 0) {
+            if (chatMode === 'plan' && userToolCount > 0) {
                 // 根据选中的工具名称筛选出对应的工具定义
-                const currentSelectedTools = chatMode === 'ask' ? selectedToolsAsk : selectedTools;
+                const currentSelectedTools = chatMode === 'plan' ? selectedToolsAsk : selectedTools;
                 const selectedToolDefs = AVAILABLE_TOOLS.filter(tool =>
                     currentSelectedTools.some(t => t.name === tool.function.name)
                 );
@@ -9393,7 +9436,7 @@
                     tool => tool.function.name !== 'get_siyuan_skills'
                 );
                 const descTool =
-                    chatMode === 'ask'
+                    chatMode === 'plan'
                         ? createGetSiyuanSkillsTool(
                               filteredToolDefs.map(tool => tool.function.name)
                           )
@@ -9406,7 +9449,7 @@
 
             // Agent 模式或问答模式启用工具使用循环调用
             if (
-                chatMode === 'ask' &&
+                chatMode === 'plan' &&
                 toolsForAgent &&
                 toolsForAgent.length > 0
             ) {
@@ -9439,7 +9482,7 @@
                             stream: true,
                             signal: abortController.signal,
                             enableThinking,
-                            reasoningEffort: modelConfig.thinkingEffort || 'low',
+                            reasoningEffort: modelConfig.thinkingEffort || 'low', mode: chatMode,
                             tools: toolsForAgent,
                             customBody,
                             onThinkingChunk: enableThinking
@@ -9552,7 +9595,7 @@
                                 // 处理每个工具调用
                                 for (const toolCall of toolCalls) {
                                     const currentSelectedToolsInLoop =
-                                        chatMode === 'ask' ? selectedToolsAsk : selectedTools;
+                                        chatMode === 'plan' ? selectedToolsAsk : selectedTools;
                                     const toolConfig = currentSelectedToolsInLoop.find(
                                         t => t.name === toolCall.function.name
                                     );
@@ -9886,7 +9929,7 @@
                         signal: abortController.signal,
                         customBody,
                         enableThinking,
-                        reasoningEffort: modelConfig.thinkingEffort || 'low',
+                        reasoningEffort: modelConfig.thinkingEffort || 'low', mode: chatMode,
                         enableImageGeneration,
                         onThinkingChunk: enableThinking
                             ? async (chunk: string) => {
@@ -11843,7 +11886,7 @@
             </div>
         {/each}
 
-        {#if isLoading && !(enableMultiModel && chatMode === 'ask' && selectedMultiModels.length > 0)}
+        {#if isLoading && !(enableMultiModel && chatMode === 'plan' && selectedMultiModels.length > 0)}
             <div
                 class="ai-message ai-message--assistant ai-message--streaming"
                 on:contextmenu={e => {
@@ -12810,12 +12853,13 @@
                 class="b3-select ai-sidebar__mode-select"
                 bind:value={chatMode}
             >
-                <option value="ask">{t('aiSidebar.mode.ask')}</option>
+                <option value="plan">{t('aiSidebar.mode.plan') || 'Plan'}</option>
+                <option value="build">{t('aiSidebar.mode.build') || 'Build'}</option>
             </select>
 
 
             <!-- 模型选择器（问答模式：支持单选/多选切换；其他模式：仅单选） -->
-            {#if chatMode === 'ask'}
+            {#if chatMode === 'plan'}
                 <div class="ai-sidebar__multi-model-selector-wrapper">
                     {#if !enableMultiModel && (showThinkingToggle || showWebSearchToggle)}
                         <div class="ai-sidebar__thinking-toggle-container">
