@@ -24,6 +24,25 @@ function getNodeModule(moduleName: string): any {
     return null;
 }
 
+function getIsWin(): boolean {
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent.toLowerCase() : '';
+    const plat = typeof process !== 'undefined' ? process.platform : '';
+    return ua.includes('win') || plat === 'win32';
+}
+
+function expandPathForMacOS(env: Record<string, string>): Record<string, string> {
+    if (getIsWin()) return env;
+    const home = env.HOME || '';
+    const extraPaths = [
+        ...(home ? [`${home}/.opencode/bin`] : []),
+        '/usr/local/bin',
+        '/opt/homebrew/bin',
+        ...(home ? [`${home}/.local/bin`, `${home}/bin`] : []),
+    ].filter(Boolean);
+    const existingPath = env.PATH || '';
+    return { ...env, PATH: [...extraPaths, existingPath].filter(Boolean).join(':') };
+}
+
 export interface OpenCodeRunnerOptions {
     cliPath?: string;
     port?: number;
@@ -102,11 +121,13 @@ export function startServe(options?: OpenCodeRunnerOptions): OpenCodeRunnerResul
         ...(options?.env || {}),
     };
 
+    const isWin = getIsWin();
+    const expandedEnv = expandPathForMacOS(env);
+
     try {
-        const isWin = navigator.userAgent.toLowerCase().includes('win') || process.platform === 'win32';
         serveProcess = childProcess.spawn(cliPath, args, {
             cwd: workingDir,
-            env,
+            env: expandedEnv,
             shell: isWin,
             windowsHide: true,
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -153,7 +174,7 @@ export function startServe(options?: OpenCodeRunnerOptions): OpenCodeRunnerResul
 export function stopServe(): void {
     if (serveProcess && !serveProcess.killed) {
         try {
-            if (navigator.userAgent.toLowerCase().includes('win') || process.platform === 'win32') {
+            if (getIsWin()) {
                 const childProcess = getNodeModule('child_process');
                 if (childProcess) {
                     childProcess.spawn('taskkill', ['/T', '/F', '/PID', String(serveProcess.pid)], {
@@ -222,12 +243,18 @@ export async function detectOpenCodeCLI(): Promise<{ found: boolean; path?: stri
     }
 
     return new Promise((resolve) => {
-        const isWin = navigator.userAgent.toLowerCase().includes('win') || process.platform === 'win32';
+        const isWin = getIsWin();
         const cmd = isWin ? 'where' : 'which';
+        const expandedEnv = expandPathForMacOS(
+            typeof process !== 'undefined' && process.env
+                ? (process.env as Record<string, string>)
+                : {}
+        );
         const child = childProcess.spawn(cmd, [DEFAULT_CLI_CMD], {
             shell: true,
             windowsHide: true,
             stdio: ['ignore', 'pipe', 'pipe'],
+            env: expandedEnv,
         });
 
         let stdout = '';
