@@ -2,7 +2,7 @@
   "name": "siyuan-copilot-opencode",
   "author": "Achuan-2",
   "url": "https://github.com/zzl793780096-creator/siyuan-copilot-opencode",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "minAppVersion": "3.6.0",
   "backends": [
     "all"
