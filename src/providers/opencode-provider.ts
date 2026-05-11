@@ -4,6 +4,17 @@ export interface OpenCodeProviderConfig {
     serverUrl: string;
 }
 
+export interface OpenCodeToolPartUpdate {
+    partId: string;
+    callID: string;
+    toolName: string;
+    status: 'pending' | 'running' | 'completed' | 'error';
+    input?: any;
+    output?: string;
+    error?: string;
+    title?: string;
+}
+
 export interface OpenCodeChatOptions {
     prompt: string;
     sessionId?: string;
@@ -16,6 +27,7 @@ export interface OpenCodeChatOptions {
     reasoningEffort?: 'low' | 'medium' | 'high' | 'auto';
     onThinkingChunk?: (text: string) => void;
     onThinkingComplete?: (thinking: string) => void;
+    onToolPartUpdate?: (update: OpenCodeToolPartUpdate) => void;
     mode?: 'plan' | 'build';
 }
 
@@ -28,6 +40,7 @@ export interface OpenCodeModelInfo {
 }
 
 const DEFAULT_SERVER_URL = 'http://localhost:4096';
+const IDLE_TIMEOUT_MS = 300_000;
 
 const MODEL_CACHE_TTL = 5 * 60 * 1000;
 const modelCache = new Map<string, { models: OpenCodeModelInfo[]; timestamp: number }>();
@@ -91,7 +104,7 @@ async function openCodeFetch(
     path: string,
     options: RequestInit = {},
     signal?: AbortSignal
-): Promise<Response> {
+): Promise<{ response: Response; resetTimeout: () => void }> {
     const url = `${normalizeServerUrl(serverUrl)}${path}`;
 
     if (signal?.aborted) {
@@ -99,7 +112,12 @@ async function openCodeFetch(
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 120000);
+    let timeout = setTimeout(() => controller.abort(), IDLE_TIMEOUT_MS);
+
+    const resetTimeout = () => {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => controller.abort(), IDLE_TIMEOUT_MS);
+    };
 
     const cleanup = signal
         ? (() => {
@@ -121,13 +139,13 @@ async function openCodeFetch(
                 ...(options.headers || {})
             }
         });
-        return response;
+        return { response, resetTimeout };
     } catch (err: any) {
         if (err.name === 'AbortError') {
             if (signal?.aborted) {
                 throw new Error('Request aborted');
             }
-            throw new Error('OpenCode request timed out (120s). The server may be overloaded or not responding.');
+            throw new Error('OpenCode request timed out (no activity for 5 minutes). The server may be overloaded or not responding.');
         }
         if (isConnectionError(err)) {
             throw new Error(
@@ -143,11 +161,160 @@ async function openCodeFetch(
     }
 }
 
+// ─── Real-time Event Stream Client ───────────────────────────────────────────
+
+interface EventStreamCallbacks {
+    onTextDelta?: (delta: string, partId: string) => void;
+    onReasoningDelta?: (delta: string, partId: string) => void;
+    onToolPartUpdate?: (part: any) => void;
+    onSessionIdle?: () => void;
+    onSessionError?: (error: any) => void;
+}
+
+class EventStreamClient {
+    private controller: AbortController | null = null;
+    private serverUrl: string;
+    private targetSessionId: string;
+
+    constructor(serverUrl: string, sessionId: string) {
+        this.serverUrl = normalizeServerUrl(serverUrl);
+        this.targetSessionId = sessionId;
+    }
+
+    async connect(callbacks: EventStreamCallbacks, signal?: AbortSignal): Promise<void> {
+        this.controller = new AbortController();
+
+        const outerCleanup = signal
+            ? (() => {
+                  const listen = () => this.controller?.abort();
+                  signal.addEventListener('abort', listen);
+                  return () => signal.removeEventListener('abort', listen);
+              })()
+            : null;
+
+        const url = `${this.serverUrl}/event`;
+        let response: Response;
+        try {
+            response = await fetch(url, { signal: this.controller.signal });
+        } catch (err: any) {
+            outerCleanup?.();
+            if (err.name === 'AbortError') return;
+            throw err;
+        }
+
+        if (!response.ok) {
+            outerCleanup?.();
+            throw new Error(`Event stream connection failed: ${response.status}`);
+        }
+
+        const reader = response.body?.getReader();
+        if (!reader) {
+            outerCleanup?.();
+            throw new Error('Event stream body is not readable');
+        }
+
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let currentEvent = '';
+
+        const processLine = (line: string) => {
+            const trimmed = line.trim();
+            if (!trimmed) {
+                currentEvent = '';
+                return;
+            }
+            if (trimmed.startsWith(':')) return;
+
+            if (trimmed.startsWith('event:')) {
+                currentEvent = trimmed.slice(6).trim();
+                return;
+            }
+
+            if (!trimmed.startsWith('data:')) return;
+
+            const jsonStr = trimmed.startsWith('data: ') ? trimmed.slice(6) : trimmed.slice(5);
+            if (!jsonStr) return;
+
+            let parsed: any;
+            try {
+                parsed = JSON.parse(jsonStr);
+            } catch {
+                return;
+            }
+
+            const payload = parsed?.payload;
+            if (!payload) return;
+
+            const eventType = payload.type || currentEvent;
+            const props = payload.properties || {};
+
+            if (eventType === 'message.part.updated') {
+                const part = props.part;
+                const delta = props.delta;
+                if (!part) return;
+
+                if (part.sessionID && part.sessionID !== this.targetSessionId) return;
+
+                if (part.type === 'text' && delta && callbacks.onTextDelta) {
+                    callbacks.onTextDelta(delta, part.id);
+                } else if (part.type === 'reasoning' && delta && callbacks.onReasoningDelta) {
+                    callbacks.onReasoningDelta(delta, part.id);
+                } else if (part.type === 'tool' && callbacks.onToolPartUpdate) {
+                    callbacks.onToolPartUpdate(part);
+                }
+            } else if (eventType === 'session.idle') {
+                const sid = props.sessionID;
+                if (!sid || sid === this.targetSessionId) {
+                    callbacks.onSessionIdle?.();
+                }
+            } else if (eventType === 'session.error') {
+                const sid = props.sessionID;
+                if (!sid || sid === this.targetSessionId) {
+                    callbacks.onSessionError?.(props.error || 'Unknown session error');
+                }
+            }
+        };
+
+        (async () => {
+            try {
+                while (true) {
+                    if (this.controller?.signal.aborted) break;
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
+                    for (const line of lines) {
+                        processLine(line);
+                    }
+                }
+            } catch (err: any) {
+                if (err.name !== 'AbortError') {
+                    console.warn('[OpenCode] Event stream read error:', err);
+                }
+            } finally {
+                reader.releaseLock();
+                outerCleanup?.();
+            }
+        })();
+    }
+
+    close(): void {
+        this.controller?.abort();
+        this.controller = null;
+    }
+}
+
+// ─── SSE Stream Parser (for /session/:id/message SSE responses) ──────────────
+
 async function parseSSEStream(
     response: Response,
     onChunk: (text: string) => void,
     signal?: AbortSignal,
-    onThinkingChunk?: (text: string) => void
+    onThinkingChunk?: (text: string) => void,
+    resetTimeout?: () => void
 ): Promise<string> {
     const reader = response.body?.getReader();
     if (!reader) {
@@ -167,6 +334,8 @@ async function parseSSEStream(
 
             const { done, value } = await reader.read();
             if (done) break;
+
+            resetTimeout?.();
 
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
@@ -218,6 +387,8 @@ async function parseSSEStream(
     return fullText;
 }
 
+// ─── Public API ──────────────────────────────────────────────────────────────
+
 export async function fetchOpenCodeModels(config: OpenCodeProviderConfig): Promise<OpenCodeModelInfo[]> {
     const serverUrl = normalizeServerUrl(config.serverUrl);
     const cached = modelCache.get(serverUrl);
@@ -226,7 +397,7 @@ export async function fetchOpenCodeModels(config: OpenCodeProviderConfig): Promi
     }
 
     try {
-        const response = await openCodeFetch(
+        const { response } = await openCodeFetch(
             config.serverUrl,
             '/provider',
             { method: 'GET' }
@@ -313,7 +484,7 @@ export async function deleteOpenCodeSession(
     sessionId: string
 ): Promise<void> {
     try {
-        const response = await openCodeFetch(
+        const { response } = await openCodeFetch(
             config.serverUrl,
             `/session/${encodeURIComponent(sessionId)}`,
             { method: 'DELETE' }
@@ -336,7 +507,7 @@ export async function chatOpenCode(
 
     try {
         if (!sessionId) {
-            const createRes = await openCodeFetch(
+            const { response: createRes } = await openCodeFetch(
                 serverUrl,
                 '/session',
                 {
@@ -374,7 +545,43 @@ export async function chatOpenCode(
             model.reasoningEffort = options.reasoningEffort;
         }
 
-        const response = await openCodeFetch(
+        // Try real-time event stream for thinking/tool updates
+        let eventStream: EventStreamClient | null = null;
+        const wantRealtime = !!(options.onThinkingChunk || options.onToolPartUpdate);
+
+        if (wantRealtime) {
+            try {
+                eventStream = new EventStreamClient(serverUrl, sessionId);
+                await eventStream.connect({
+                    onTextDelta: (delta) => options.onChunk?.(delta),
+                    onReasoningDelta: (delta) => options.onThinkingChunk?.(delta),
+                    onToolPartUpdate: (part) => {
+                        if (!options.onToolPartUpdate) return;
+                        const state = part.state || {};
+                        options.onToolPartUpdate({
+                            partId: part.id,
+                            callID: part.callID || part.id,
+                            toolName: part.tool || 'unknown',
+                            status: state.status || 'pending',
+                            input: state.input,
+                            output: state.output,
+                            error: state.error,
+                            title: state.title,
+                        });
+                    },
+                    onSessionError: (error) => {
+                        options.onError?.(new Error(formatErrorMessage(error)));
+                    },
+                }, options.signal);
+            } catch (streamErr) {
+                console.warn('[OpenCode] Failed to connect event stream, falling back to sync mode:', streamErr);
+                eventStream?.close();
+                eventStream = null;
+            }
+        }
+
+        // Send the message
+        const { response, resetTimeout } = await openCodeFetch(
             serverUrl,
             `/session/${encodeURIComponent(sessionId)}/message`,
             {
@@ -397,6 +604,7 @@ export async function chatOpenCode(
         let fullText = '';
 
         if (contentType.includes('text/event-stream')) {
+            // SSE response from POST /message
             let accumulatedThinking = '';
             try {
                 fullText = await parseSSEStream(response, (text) => {
@@ -404,7 +612,7 @@ export async function chatOpenCode(
                 }, options.signal, (thinking) => {
                     accumulatedThinking += thinking;
                     options.onThinkingChunk?.(thinking);
-                });
+                }, resetTimeout);
             } catch (streamErr) {
                 if (fullText) {
                     options.onComplete?.(fullText);
@@ -412,6 +620,7 @@ export async function chatOpenCode(
                 if (accumulatedThinking) {
                     options.onThinkingComplete?.(accumulatedThinking);
                 }
+                eventStream?.close();
                 throw streamErr;
             }
             options.onComplete?.(fullText);
@@ -419,7 +628,10 @@ export async function chatOpenCode(
                 options.onThinkingComplete?.(accumulatedThinking);
             }
         } else {
+            // Synchronous JSON response
+            resetTimeout();
             const responseText = await response.text();
+            resetTimeout();
             let data: any;
             try {
                 data = responseText ? JSON.parse(responseText) : {};
@@ -428,6 +640,7 @@ export async function chatOpenCode(
                     fullText = responseText;
                     options.onChunk?.(fullText);
                     options.onComplete?.(fullText);
+                    eventStream?.close();
                     return { sessionId: sessionId! };
                 }
                 data = {};
@@ -441,12 +654,31 @@ export async function chatOpenCode(
             const parts = data?.parts || [];
             fullText = extractTextFromParts(parts);
 
+            // Extract thinking from final response (fallback if event stream didn't deliver)
             const thinkingText = extractThinkingFromParts(parts);
             if (thinkingText && options.onThinkingChunk) {
                 options.onThinkingChunk(thinkingText);
             }
             if (thinkingText && options.onThinkingComplete) {
                 options.onThinkingComplete(thinkingText);
+            }
+
+            // Extract tool parts from final response (fallback)
+            if (options.onToolPartUpdate) {
+                for (const part of parts) {
+                    if (part?.type === 'tool' && part?.state) {
+                        options.onToolPartUpdate({
+                            partId: part.id,
+                            callID: part.callID || part.id,
+                            toolName: part.tool || 'unknown',
+                            status: part.state.status || 'completed',
+                            input: part.state.input,
+                            output: part.state.output,
+                            error: part.state.error,
+                            title: part.state.title,
+                        });
+                    }
+                }
             }
 
             if (options.onChunk && fullText) {
@@ -460,6 +692,7 @@ export async function chatOpenCode(
             options.onComplete?.(fullText);
         }
 
+        eventStream?.close();
         return { sessionId: sessionId! };
     } catch (error) {
         const err = error as Error;

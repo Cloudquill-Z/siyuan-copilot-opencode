@@ -2,7 +2,7 @@
  * AI Chat API 调用模块
  * 仅支持 OpenCode 提供商
  */
-import { chatOpenCode, fetchOpenCodeModels, deleteOpenCodeSession, invalidateModelCache } from './providers/opencode-provider';
+import { chatOpenCode, fetchOpenCodeModels, deleteOpenCodeSession, invalidateModelCache, type OpenCodeToolPartUpdate } from './providers/opencode-provider';
 
 export interface MessageAttachment {
     type: 'image' | 'file';
@@ -93,6 +93,7 @@ export interface ChatOptions {
     reasoningEffort?: ThinkingEffort;
     onThinkingChunk?: (chunk: string) => void;
     onThinkingComplete?: (thinking: string) => void;
+    onToolPartUpdate?: (update: OpenCodeToolPartUpdate) => void;
     customBody?: any;
     enableImageGeneration?: boolean;
     onImageGenerated?: (images: GeneratedImageData[]) => void;
@@ -204,6 +205,7 @@ export async function chat(
             reasoningEffort: options.reasoningEffort,
             onThinkingChunk: options.onThinkingChunk,
             onThinkingComplete: options.onThinkingComplete,
+            onToolPartUpdate: options.onToolPartUpdate,
             mode: options.mode
         },
         { serverUrl }
