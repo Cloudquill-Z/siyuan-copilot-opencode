@@ -20,6 +20,7 @@ import {
 import { appendBlock, deleteBlock, setBlockAttrs, getBlockAttrs, pushMsg, pushErrMsg, sql, renderSprig, getChildBlocks, insertBlock, renameDocByID, prependBlock, updateBlock, createDocWithMd, getBlockKramdown, getBlockDOM, putFile, getFileBlob, readDir } from "./api";
 import { saveAsset, base64ToBlob } from "./utils/assets";
 import { ensureServerRunning, stopServe, detectOpenCodeCLI, getServedPort, isServeRunning } from "./opencode-runner";
+import { startHealthPoll, stopHealthPoll } from "./stores/connectionStatus";
 import "@/index.scss";
 
 import SettingPanel from "./SettingsPannel.svelte";
@@ -1944,6 +1945,7 @@ export default class PluginSample extends Plugin {
                 console.warn(`[OpenCode] ${available.error}`);
             } else {
                 console.log(`[OpenCode] Server ready at ${hostname}:${port}`);
+                startHealthPoll(serverUrl);
             }
         } catch (err) {
             console.warn('[OpenCode] Failed to auto-start server:', err);
@@ -1958,6 +1960,7 @@ export default class PluginSample extends Plugin {
 
         // Stop OpenCode serve if we started it
         stopServe();
+        stopHealthPoll();
 
         console.log(`${PLUGIN_BRAND_NAME} onunload`);
     }

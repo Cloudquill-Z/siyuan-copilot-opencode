@@ -9,6 +9,9 @@
         type ContextDocument,
     type ThinkingEffort,
     fetchModels,
+    executeCommand,
+    sendStillPrompt,
+    sessionInit,
 } from './ai-chat';
     import type { MessageContent } from './ai-chat';
     import { getActiveEditor, openTab } from 'siyuan';
@@ -41,10 +44,11 @@
         fetchWithWebView,
         parseWebPageToMarkdown,
     } from './utils/webParser';
-    import MultiModelSelector from './components/MultiModelSelector.svelte';
     import SessionManager from './components/SessionManager.svelte';
         import ModelPresetButton from './components/ModelPreset.svelte';
+    import MultiModelSelector from './components/MultiModelSelector.svelte';
     import WebAppManager from './components/WebAppManager.svelte';
+    import ConnectionStatus from './components/ConnectionStatus.svelte';
     import type { ProviderConfig } from './defaultSettings';
     import { settingsStore, updateSettings } from './stores/settings';
     import { confirm, Constants, platformUtils } from 'siyuan';
@@ -95,6 +99,8 @@
     let currentInput = '';
     let isLoading = false;
     let streamingMessage = '';
+    let streamingThinkingCollapsed = false;
+    let streamingToolCallsCollapsed = false;
     let streamingThinking = ''; // 流式思考内容
     let isThinkingPhase = false; // 是否在思考阶段
     let settings: any = {};
@@ -111,6 +117,22 @@
     let editingMessageIndex: number | null = null;
     let editingMessageContent = '';
     let isEditDialogOpen = false;
+
+    // 命令自动补全
+    let showCommandPalette = false;
+    let commandPaletteFilter = '';
+    let commandPaletteIndex = 0;
+    const BUILTIN_COMMANDS = [
+        { name: 'still', desc: '让 AI 继续生成', args: '[提示词]' },
+        { name: 'init', desc: '初始化项目，创建 AGENTS.md', args: '' },
+        { name: 'clear', desc: '清除当前会话', args: '' },
+        { name: 'undo', desc: '撤销上次修改', args: '' },
+        { name: 'redo', desc: '重做上次撤销', args: '' },
+        { name: 'compact', desc: '压缩会话上下文', args: '' },
+        { name: 'share', desc: '分享当前会话', args: '' },
+        { name: 'diff', desc: '查看文件差异', args: '' },
+        { name: 'status', desc: '查看 Git 状态', args: '' },
+    ];
 
     // 右键菜单状态
     let contextMenuVisible = false;
@@ -134,9 +156,44 @@
     let webLinkInput = '';
     let isFetchingWebContent = false;
 
-    // 中断控制
+    // 中断控制 — 每个会话独立的 AbortController
+    let sessionControllers = new Map<string, AbortController>();
+    let sessionIsAborted = new Map<string, boolean>();
+    let activeSessions = new Set<string>();
+
+    // 兼容旧代码的全局代理变量——始终反映当前会话状态
     let abortController: AbortController | null = null;
-    let isAborted = false; // 标记是否已中断，防止中断后 onComplete 重复添加消息
+    let isAborted = false;
+
+    function syncFromCurrentSession() {
+        abortController = sessionControllers.get(currentSessionId) || null;
+        isAborted = sessionIsAborted.get(currentSessionId) || false;
+    }
+
+    function setController(sid: string, ctrl: AbortController | null) {
+        if (ctrl) {
+            sessionControllers.set(sid, ctrl);
+            activeSessions.add(sid);
+        } else {
+            sessionControllers.delete(sid);
+            activeSessions.delete(sid);
+            sessionIsAborted.delete(sid);
+        }
+        if (sid === currentSessionId) {
+            abortController = ctrl;
+        }
+    }
+
+    function setIsAborted(sid: string, val: boolean) {
+        if (val) sessionIsAborted.set(sid, true);
+        else sessionIsAborted.delete(sid);
+        if (sid === currentSessionId) {
+            isAborted = val;
+        }
+    }
+    // 当切换当前会话时，同步全局代理变量
+    $: currentSessionId, syncFromCurrentSession();
+
 
     // 自动滚动控制
     let autoScroll = true;
@@ -1101,6 +1158,105 @@
     let toolCallsInProgress: Set<string> = new Set(); // 正在执行的工具调用ID
     let toolCallsExpanded: Record<string, boolean> = {}; // 工具调用是否展开，默认折叠
     let toolCallResultsExpanded: Record<string, boolean> = {}; // 工具结果是否展开，默认折叠
+    let openCodeToolParts: any[] = []; // OpenCode 工具调用实时状态
+
+    function getOpenCodeToolPartKey(part: any): string {
+        return part?.callID || part?.partId || part?.toolName || 'opencode-tool';
+    }
+
+    function getOpenCodeToolStatusIcon(status: string): string {
+        if (status === 'completed') return '✅';
+        if (status === 'error') return '❌';
+        if (status === 'running') return '⏳';
+        return '…';
+    }
+
+    function getOpenCodeToolStatusText(status: string): string {
+        if (status === 'completed') return '完成';
+        if (status === 'error') return '失败';
+        if (status === 'running') return '执行中';
+        return '等待中';
+    }
+
+    function formatOpenCodeToolValue(value: any): string {
+        if (value === undefined || value === null || value === '') return '';
+        if (typeof value === 'string') return value;
+        try {
+            return JSON.stringify(value, null, 2);
+        } catch {
+            return String(value);
+        }
+    }
+
+    async function appendStreamingThinking(chunk: string) {
+        if (!chunk) return;
+        isThinkingPhase = true;
+        streamingThinking += chunk;
+        if (!streamingThinkingCollapsed) {
+            await scrollToBottom();
+        }
+    }
+
+    function finishStreamingThinking(collapseKey?: string | number) {
+        isThinkingPhase = false;
+        if (collapseKey !== undefined) {
+            thinkingCollapsed = {
+                ...thinkingCollapsed,
+                [collapseKey]: true,
+            };
+        }
+    }
+
+    function updateOpenCodeToolPart(update: any) {
+        if (!update) return;
+
+        const updateKey = getOpenCodeToolPartKey(update);
+        const existingIndex = openCodeToolParts.findIndex(
+            (part: any) => getOpenCodeToolPartKey(part) === updateKey
+        );
+
+        if (existingIndex >= 0) {
+            const next = [...openCodeToolParts];
+            next[existingIndex] = { ...next[existingIndex], ...update };
+            openCodeToolParts = next;
+        } else {
+            openCodeToolParts = [...openCodeToolParts, update];
+            toolCallsExpanded = {
+                ...toolCallsExpanded,
+                [updateKey]: true,
+            };
+        }
+
+        if (!streamingToolCallsCollapsed) {
+            scrollToBottom();
+        }
+    }
+
+    function handleOpenCodePermissionAsked(req: any) {
+        activePermissionRequest = {
+            permissionID: req.permissionID,
+            sessionID: req.sessionID,
+            tool: req.tool,
+            input: req.input || req.description || '',
+            description: req.description || '',
+        };
+    }
+
+    // 权限确认对话框
+    let activePermissionRequest: { permissionID: string; sessionID: string; tool: string; input: string; description: string } | null = null;
+
+    async function handlePermissionResponse(response: 'once' | 'always' | 'reject') {
+        if (!activePermissionRequest) return;
+        const req = activePermissionRequest;
+        activePermissionRequest = null;
+        try {
+            const serverUrl = settings?.aiProviders?.opencode?.serverUrl || 'http://localhost:4096';
+            const { respondToPermission } = await import('./ai-chat');
+            await respondToPermission(serverUrl, req.sessionID, req.permissionID, response);
+        } catch (err) {
+            console.warn('[Permission] Failed to respond:', err);
+        }
+    }
     type PendingDocDiff = {
         docId: string;
         docTitle: string;
@@ -1121,7 +1277,7 @@
     let thinkingBeforeToolCalls: string = ''; // 工具调用前的思考内容
 
     // 多模型对话
-    let enableMultiModel = false; // 是否启用多模型模式
+    let enableMultiModel = false; // 多模型已禁用
     let selectedMultiModels: Array<{
         provider: string;
         modelId: string;
@@ -1886,7 +2042,14 @@
 
     // 处理多模型选择变化
     function handleMultiModelChange(
-        event: CustomEvent<Array<{ provider: string; modelId: string }>>
+        event: CustomEvent<
+            Array<{
+                provider: string;
+                modelId: string;
+                thinkingEnabled?: boolean;
+                thinkingEffort?: ThinkingEffort;
+            }>
+        >
     ) {
         selectedMultiModels = event.detail;
 
@@ -2659,7 +2822,7 @@
         });
 
         // 创建新的 AbortController
-        abortController = new AbortController();
+        setController(currentSessionId, new AbortController());
 
         // 标记是否已经创建了助手消息（用于多模型第一次返回时保存会话）
         let assistantMessageCreated = false;
@@ -3069,7 +3232,7 @@
         await Promise.all(promises);
 
         isLoading = false;
-        abortController = null;
+        setController(currentSessionId, null);
     }
 
     // 准备发送给AI的消息（提取为独立函数以便复用）
@@ -3733,8 +3896,63 @@
     }
 
     // 发送消息
+    async function handleOpenCodeCommand(input: string) {
+        isLoading = true;
+        const parts = input.slice(1).split(/\s+/);
+        const command = parts[0];
+        const args = parts.slice(1).join(' ');
+
+        try {
+            const serverUrl = settings?.aiProviders?.opencode?.serverUrl || 'http://localhost:4096';
+
+            if (command === 'still' || command === 'continue') {
+                const prompt = args || 'Continue.';
+                await sendStillPrompt(serverUrl, currentSessionId, prompt, currentModelId);
+                pushMsg('已发送继续指令');
+            }
+            else if (command === 'init') {
+                const ok = await sessionInit(serverUrl, currentSessionId, currentModelId);
+                pushMsg(ok ? '项目初始化已启动' : '项目初始化失败');
+            }
+            else {
+                const result = await executeCommand(serverUrl, currentSessionId, command, args, currentModelId);
+                if (result.parts && result.parts.length > 0) {
+                    const textParts = result.parts
+                        .filter((p: any) => p?.type === 'text' && p?.text)
+                        .map((p: any) => p.text)
+                        .join('\n');
+                    if (textParts) {
+                        const converted = convertLatexToMarkdown(textParts);
+                        messages = [...messages, { role: 'assistant', content: converted }];
+                        hasUnsavedChanges = true;
+                        await saveCurrentSession(true);
+                    }
+                } else {
+                    pushMsg(`命令 /${command} 已执行`);
+                }
+            }
+        } catch (err: any) {
+            pushErrMsg(`命令执行失败: ${err.message}`);
+            messages = [...messages, {
+                role: 'assistant',
+                content: `❌ 命令 /${command} 执行失败: ${err.message}`
+            }];
+            hasUnsavedChanges = true;
+        } finally {
+            currentInput = '';
+            isLoading = false;
+        }
+    }
+
     async function sendMessage() {
-        if ((!currentInput.trim() && currentAttachments.length === 0) || isLoading) return;
+        const trimmedInput = currentInput.trim();
+        if ((!trimmedInput && currentAttachments.length === 0) || isLoading) return;
+
+        // OpenCode 指令检测：以 / 开头的内容作为命令执行
+        if (trimmedInput.startsWith('/') && currentSessionId) {
+            await handleOpenCodeCommand(trimmedInput);
+            return;
+        }
 
         // 【修复】立即设置加载状态，防止并发点击触发多次发送
         isLoading = true;
@@ -3863,6 +4081,9 @@
         isAborted = false; // 重置中断标志
         streamingMessage = '';
         streamingThinking = '';
+        openCodeToolParts = [];
+        streamingThinkingCollapsed = false;
+        streamingToolCallsCollapsed = false;
         thinkingBeforeToolCalls = ''; // 重置工具调用前的思考内容
         isThinkingPhase = false;
         hasUnsavedChanges = true;
@@ -4345,7 +4566,7 @@
         messagesToSend = [...systemMessages, ...limitedMessagesWithToolFix];
 
         // 创建新的 AbortController
-        abortController = new AbortController();
+        setController(currentSessionId, new AbortController());
 
         try {
             // 检查是否启用思考模式
@@ -4441,22 +4662,10 @@
                             reasoningEffort: modelConfig.thinkingEffort || 'low', mode: chatMode,
                             tools: toolsForAgent,
                             customBody,
-                            onThinkingChunk: enableThinking
-                                ? async (chunk: string) => {
-                                      isThinkingPhase = true;
-                                      streamingThinking += chunk;
-                                      await scrollToBottom();
-                                  }
-                                : undefined,
-                            onThinkingComplete: enableThinking
-                                ? (thinking: string) => {
-                                      isThinkingPhase = false;
-                                      thinkingCollapsed = {
-                                          ...thinkingCollapsed,
-                                          [messages.length]: true,
-                                      };
-                                  }
-                                : undefined,
+                            onThinkingChunk: appendStreamingThinking,
+                            onThinkingComplete: () => finishStreamingThinking(messages.length),
+                            onToolPartUpdate: updateOpenCodeToolPart,
+                            onPermissionAsked: handleOpenCodePermissionAsked,
                             onToolCallComplete: async (toolCalls: ToolCall[]) => {
                                 receivedToolCalls = true;
 
@@ -4788,7 +4997,7 @@
                                             content: convertedText,
                                         };
 
-                                        if (enableThinking && streamingThinking) {
+                                        if (streamingThinking) {
                                             assistantMessage.thinking = streamingThinking;
                                             if (isDeepseekThinkingAgent) {
                                                 assistantMessage.reasoning_content =
@@ -4806,7 +5015,7 @@
                                     streamingThinking = '';
                                     isThinkingPhase = false;
                                     isLoading = false;
-                                    abortController = null;
+                                    setController(currentSessionId, null);
                                     hasUnsavedChanges = true;
 
                                     await saveCurrentSession(true);
@@ -4835,7 +5044,7 @@
                                 streamingMessage = '';
                                 streamingThinking = '';
                                 isThinkingPhase = false;
-                                abortController = null;
+                                setController(currentSessionId, null);
 
                                 // 通知完成（错误时也要结束等待）
                                 toolExecutionComplete?.();
@@ -4894,22 +5103,10 @@
                                 })
                             );
                         },
-                        onThinkingChunk: enableThinking
-                            ? async (chunk: string) => {
-                                  isThinkingPhase = true;
-                                  streamingThinking += chunk;
-                                  await scrollToBottom();
-                              }
-                            : undefined,
-                        onThinkingComplete: enableThinking
-                            ? (thinking: string) => {
-                                  isThinkingPhase = false;
-                                  thinkingCollapsed = {
-                                      ...thinkingCollapsed,
-                                      [messages.length]: true,
-                                  };
-                              }
-                            : undefined,
+                        onThinkingChunk: appendStreamingThinking,
+                        onThinkingComplete: () => finishStreamingThinking(messages.length),
+                        onToolPartUpdate: updateOpenCodeToolPart,
+                        onPermissionAsked: handleOpenCodePermissionAsked,
                         onChunk: async (chunk: string) => {
                             streamingMessage += chunk;
                             await scrollToBottom();
@@ -4932,8 +5129,20 @@
                             };
 
                             // 如果有思考内容，添加到消息中
-                            if (enableThinking && streamingThinking) {
+                            if (streamingThinking) {
                                 assistantMessage.thinking = streamingThinking;
+                            }
+
+                            if (openCodeToolParts.length > 0) {
+                                assistantMessage.openCodeToolParts = openCodeToolParts.map(part => ({
+                                    ...part,
+                                }));
+                            }
+
+                            if (openCodeToolParts.length > 0) {
+                                assistantMessage.openCodeToolParts = openCodeToolParts.map(part => ({
+                                    ...part,
+                                }));
                             }
 
                             // 如果有生成的图片，保存到消息中
@@ -4960,9 +5169,10 @@
                             messages = [...messages, assistantMessage];
                             streamingMessage = '';
                             streamingThinking = '';
+                            openCodeToolParts = [];
                             isThinkingPhase = false;
                             isLoading = false;
-                            abortController = null;
+                            setController(currentSessionId, null);
                             hasUnsavedChanges = true;
 
                             // AI 回复完成后，自动保存当前会话
@@ -4985,8 +5195,9 @@
                             isLoading = false;
                             streamingMessage = '';
                             streamingThinking = '';
+                            openCodeToolParts = [];
                             isThinkingPhase = false;
-                            abortController = null;
+                            setController(currentSessionId, null);
                         },
                     },
                     providerConfig.customApiUrl,
@@ -5014,9 +5225,10 @@
                 isLoading = false;
                 streamingMessage = '';
                 streamingThinking = '';
+                openCodeToolParts = [];
                 isThinkingPhase = false;
             }
-            abortController = null;
+            setController(currentSessionId, null);
         }
     }
 
@@ -5024,7 +5236,7 @@
     function abortMessage() {
         if (abortController) {
             abortController.abort();
-            isAborted = true; // 设置中断标志，防止 onComplete 再次添加消息
+            setIsAborted(currentSessionId, true); // 设置中断标志，防止 onComplete 再次添加消息
 
             // 如果是多模型模式且正在等待选择答案
             if (isWaitingForAnswerSelection && multiModelResponses.length > 0) {
@@ -5073,19 +5285,21 @@
                 selectedAnswerIndex = null;
                 selectedTabIndex = 0;
                 isLoading = false;
-                abortController = null;
+                setController(currentSessionId, null);
                 return;
             }
 
             // 单模型模式：如果有已生成的部分，将其保存为消息
-            if (streamingMessage || streamingThinking) {
+            if (streamingMessage || streamingThinking || openCodeToolParts.length > 0) {
                 // 先保存到临时变量
                 const tempStreamingMessage = streamingMessage;
                 const tempStreamingThinking = streamingThinking;
+                const tempOpenCodeToolParts = openCodeToolParts.map(part => ({ ...part }));
 
                 // 立即清空流式消息和状态，避免重复渲染
                 streamingMessage = '';
                 streamingThinking = '';
+                openCodeToolParts = [];
                 isThinkingPhase = false;
                 isLoading = false;
 
@@ -5099,15 +5313,19 @@
                 if (tempStreamingThinking) {
                     message.thinking = tempStreamingThinking;
                 }
+                if (tempOpenCodeToolParts.length > 0) {
+                    message.openCodeToolParts = tempOpenCodeToolParts;
+                }
                 messages = [...messages, message];
                 hasUnsavedChanges = true;
             } else {
                 streamingMessage = '';
                 streamingThinking = '';
+                openCodeToolParts = [];
                 isThinkingPhase = false;
                 isLoading = false;
             }
-            abortController = null;
+            setController(currentSessionId, null);
         }
     }
 
@@ -5213,12 +5431,42 @@
 
     // 处理键盘事件
     function handleKeydown(e: KeyboardEvent) {
+        // 命令面板键盘导航
+        if (showCommandPalette) {
+            const commands = getFilteredCommands();
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                commandPaletteIndex = Math.min(commandPaletteIndex + 1, commands.length - 1);
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                commandPaletteIndex = Math.max(commandPaletteIndex - 1, 0);
+                return;
+            }
+            if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault();
+                if (commands[commandPaletteIndex]) {
+                    applyCommand(commands[commandPaletteIndex].name);
+                }
+                return;
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                showCommandPalette = false;
+                return;
+            }
+        }
+
         const sendMode = settings.sendMessageShortcut || 'ctrl+enter';
 
         if (sendMode === 'ctrl+enter') {
-            // Ctrl+Enter 发送模式
             if (e.key === 'Enter' && e.ctrlKey) {
                 e.preventDefault();
+                if (showCommandPalette && getFilteredCommands().length > 0) {
+                    applyCommand(getFilteredCommands()[commandPaletteIndex].name);
+                    return;
+                }
                 if (isLoading) {
                     abortMessage();
                 } else {
@@ -5227,9 +5475,12 @@
                 return;
             }
         } else {
-            // Enter 发送模式（Shift+Enter 换行）
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
+                if (showCommandPalette && getFilteredCommands().length > 0) {
+                    applyCommand(getFilteredCommands()[commandPaletteIndex].name);
+                    return;
+                }
                 if (isLoading) {
                     abortMessage();
                 } else {
@@ -5237,6 +5488,39 @@
                 }
                 return;
             }
+        }
+    }
+
+    function getFilteredCommands() {
+        return BUILTIN_COMMANDS.filter(c =>
+            c.name.includes(commandPaletteFilter.toLowerCase())
+        );
+    }
+
+    function applyCommand(cmdName: string) {
+        if (cmdName === 'clear') {
+            clearChat();
+        } else {
+            currentInput = `/${cmdName} `;
+        }
+        showCommandPalette = false;
+        commandPaletteFilter = '';
+        commandPaletteIndex = 0;
+        textareaElement?.focus();
+    }
+
+    function handleInput() {
+        const val = currentInput;
+        if (val.startsWith('/') && !val.includes(' ') && val.length > 1) {
+            commandPaletteFilter = val.slice(1);
+            commandPaletteIndex = 0;
+            showCommandPalette = true;
+        } else if (val === '/') {
+            commandPaletteFilter = '';
+            commandPaletteIndex = 0;
+            showCommandPalette = true;
+        } else {
+            showCommandPalette = false;
         }
     }
 
@@ -7274,12 +7558,8 @@
     }
 
     async function loadSession(sessionId: string) {
-        // 如果消息正在生成，先中断
-        if (isLoading && abortController) {
-            abortMessage();
-        }
-
-        // 如果有未选择的多模型响应，先保存它们
+        // 多任务模式：切换会话时不再中断上一个会话的后台任务
+        // 如果有未保存的更改，先提示保存
         if (isWaitingForAnswerSelection && multiModelResponses.length > 0) {
             const firstSuccessIndex = multiModelResponses.findIndex(r => !r.error && !r.isLoading);
 
@@ -7587,12 +7867,7 @@
     }
 
     async function newSession() {
-        // 如果消息正在生成，先中断
-        if (isLoading && abortController) {
-            abortMessage();
-        }
-
-        // 如果有未选择的多模型响应，保存它们
+        // 多任务模式：新建会话不再中断其他会话的后台任务
         if (isWaitingForAnswerSelection && multiModelResponses.length > 0) {
             // 找到第一个成功的响应作为默认选择（如果所有都失败则不保存）
             const firstSuccessIndex = multiModelResponses.findIndex(r => !r.error && !r.isLoading);
@@ -9399,7 +9674,7 @@
         }
 
         // 创建新的 AbortController
-        abortController = new AbortController();
+        setController(currentSessionId, new AbortController());
 
         if (!providerConfig || !modelConfig) {
             pushErrMsg(t('aiSidebar.errors.noProvider'));
@@ -9485,22 +9760,10 @@
                             reasoningEffort: modelConfig.thinkingEffort || 'low', mode: chatMode,
                             tools: toolsForAgent,
                             customBody,
-                            onThinkingChunk: enableThinking
-                                ? async (chunk: string) => {
-                                      isThinkingPhase = true;
-                                      streamingThinking += chunk;
-                                      await scrollToBottom();
-                                  }
-                                : undefined,
-                            onThinkingComplete: enableThinking
-                                ? (thinking: string) => {
-                                      isThinkingPhase = false;
-                                      thinkingCollapsed = {
-                                          ...thinkingCollapsed,
-                                          [messages.length]: true,
-                                      };
-                                  }
-                                : undefined,
+                            onThinkingChunk: appendStreamingThinking,
+                            onThinkingComplete: () => finishStreamingThinking(messages.length),
+                            onToolPartUpdate: updateOpenCodeToolPart,
+                            onPermissionAsked: handleOpenCodePermissionAsked,
                             onToolCallComplete: async (toolCalls: ToolCall[]) => {
                                 receivedToolCalls = true;
 
@@ -9850,7 +10113,7 @@
                                             content: convertedText,
                                         };
 
-                                        if (enableThinking && streamingThinking) {
+                                        if (streamingThinking) {
                                             assistantMessage.thinking = streamingThinking;
                                             if (isDeepseekThinkingAgent) {
                                                 assistantMessage.reasoning_content =
@@ -9868,7 +10131,7 @@
                                     streamingThinking = '';
                                     isThinkingPhase = false;
                                     isLoading = false;
-                                    abortController = null;
+                                    setController(currentSessionId, null);
                                     hasUnsavedChanges = true;
 
                                     await saveCurrentSession(true);
@@ -9897,7 +10160,7 @@
                                 streamingMessage = '';
                                 streamingThinking = '';
                                 isThinkingPhase = false;
-                                abortController = null;
+                                setController(currentSessionId, null);
 
                                 // 通知完成（错误时也要结束等待）
                                 toolExecutionComplete?.();
@@ -9931,19 +10194,10 @@
                         enableThinking,
                         reasoningEffort: modelConfig.thinkingEffort || 'low', mode: chatMode,
                         enableImageGeneration,
-                        onThinkingChunk: enableThinking
-                            ? async (chunk: string) => {
-                                  isThinkingPhase = true;
-                                  streamingThinking += chunk;
-                                  await scrollToBottom();
-                              }
-                            : undefined,
-                        onThinkingComplete: enableThinking
-                            ? (thinking: string) => {
-                                  isThinkingPhase = false;
-                                  thinkingCollapsed[messages.length] = true;
-                              }
-                            : undefined,
+                        onThinkingChunk: appendStreamingThinking,
+                        onThinkingComplete: () => finishStreamingThinking(messages.length),
+                        onToolPartUpdate: updateOpenCodeToolPart,
+                        onPermissionAsked: handleOpenCodePermissionAsked,
                         onImageGenerated: async (images: any[]) => {
                             // 立即保存生成的图片到 SiYuan 资源文件夹并转换为 blob URL
                             generatedImages = await Promise.all(
@@ -9986,7 +10240,7 @@
                                 content: processedContent,
                             };
 
-                            if (enableThinking && streamingThinking) {
+                            if (streamingThinking) {
                                 assistantMessage.thinking = streamingThinking;
                             }
 
@@ -10014,9 +10268,10 @@
                             messages = [...messages, assistantMessage];
                             streamingMessage = '';
                             streamingThinking = '';
+                            openCodeToolParts = [];
                             isThinkingPhase = false;
                             isLoading = false;
-                            abortController = null;
+                            setController(currentSessionId, null);
                             hasUnsavedChanges = true;
 
                             // AI 回复完成后，自动保存当前会话
@@ -10035,8 +10290,9 @@
                             isLoading = false;
                             streamingMessage = '';
                             streamingThinking = '';
+                            openCodeToolParts = [];
                             isThinkingPhase = false;
-                            abortController = null;
+                            setController(currentSessionId, null);
                         },
                     },
                     providerConfig.customApiUrl,
@@ -10065,7 +10321,7 @@
                 streamingThinking = '';
                 isThinkingPhase = false;
             }
-            abortController = null;
+            setController(currentSessionId, null);
         }
     }
 
@@ -10128,6 +10384,7 @@
 </script>
 
 <div class="ai-sidebar" class:ai-sidebar--fullscreen={isFullscreen} bind:this={sidebarContainer}>
+    <ConnectionStatus showVersion={false} showRetry={true} />
     <div class="ai-sidebar__header">
         <h3 class="ai-sidebar__title">
             <div class="ai-sidebar__webapp-menu-container">
@@ -10642,6 +10899,77 @@
                                                                 <pre
                                                                     class="ai-message__tool-call-code">{toolResult.content}</pre>
                                                             {/if}
+                                                        </div>
+                                                    {/if}
+                                                </div>
+                                            {/if}
+                                        </div>
+                                    {/each}
+                                </div>
+                            {/if}
+
+                            {#if message.role === 'assistant' && message.openCodeToolParts && message.openCodeToolParts.length > 0 && !(message.multiModelResponses && message.multiModelResponses.length > 0)}
+                                <div class="ai-message__tool-calls">
+                                    <div class="ai-message__tool-calls-title">
+                                        🔧 工具执行 ({message.openCodeToolParts.length})
+                                    </div>
+                                    {#each message.openCodeToolParts as toolPart (getOpenCodeToolPartKey(toolPart))}
+                                        {@const toolPartKey = getOpenCodeToolPartKey(toolPart)}
+                                        {@const toolPartCollapsed = !toolCallsExpanded[toolPartKey]}
+                                        {@const toolPartInput = formatOpenCodeToolValue(toolPart.input)}
+                                        {@const toolPartOutput = formatOpenCodeToolValue(toolPart.output)}
+                                        {@const toolPartError = formatOpenCodeToolValue(toolPart.error)}
+                                        <div
+                                            class="ai-message__tool-call"
+                                            class:ai-message__tool-call--error={toolPart.status === 'error'}
+                                        >
+                                            <div
+                                                class="ai-message__tool-call-header"
+                                                on:click={() => {
+                                                    toolCallsExpanded[toolPartKey] =
+                                                        !toolCallsExpanded[toolPartKey];
+                                                    toolCallsExpanded = { ...toolCallsExpanded };
+                                                }}
+                                            >
+                                                <div class="ai-message__tool-call-name">
+                                                    <svg
+                                                        class="ai-message__tool-call-icon"
+                                                        class:collapsed={toolPartCollapsed}
+                                                    >
+                                                        <use xlink:href="#iconRight"></use>
+                                                    </svg>
+                                                    <span>{toolPart.title || toolPart.toolName}</span>
+                                                    <span class="ai-message__tool-call-status">
+                                                        {getOpenCodeToolStatusIcon(toolPart.status)}
+                                                        {getOpenCodeToolStatusText(toolPart.status)}
+                                                    </span>
+                                                </div>
+                                            </div>
+
+                                            {#if !toolPartCollapsed && (toolPartInput || toolPartOutput || toolPartError)}
+                                                <div class="ai-message__tool-call-details">
+                                                    {#if toolPartInput}
+                                                        <div class="ai-message__tool-call-params">
+                                                            <div class="ai-message__tool-call-section-header">
+                                                                <strong>输入</strong>
+                                                            </div>
+                                                            <pre class="ai-message__tool-call-code">{toolPartInput}</pre>
+                                                        </div>
+                                                    {/if}
+                                                    {#if toolPartOutput}
+                                                        <div class="ai-message__tool-call-result">
+                                                            <div class="ai-message__tool-call-section-header">
+                                                                <strong>{t('tools.result')}</strong>
+                                                            </div>
+                                                            <pre class="ai-message__tool-call-code">{toolPartOutput}</pre>
+                                                        </div>
+                                                    {/if}
+                                                    {#if toolPartError}
+                                                        <div class="ai-message__tool-call-result">
+                                                            <div class="ai-message__tool-call-section-header">
+                                                                <strong>错误</strong>
+                                                            </div>
+                                                            <pre class="ai-message__tool-call-code">{toolPartError}</pre>
                                                         </div>
                                                     {/if}
                                                 </div>
@@ -11901,26 +12229,124 @@
                 <!-- 显示流式思考过程 -->
                 {#if streamingThinking}
                     <div class="ai-message__thinking">
-                        <div class="ai-message__thinking-header">
-                            <svg class="ai-message__thinking-icon">
+                        <div
+                            class="ai-message__thinking-header"
+                            on:click={() => {
+                                streamingThinkingCollapsed = !streamingThinkingCollapsed;
+                            }}
+                            title={streamingThinkingCollapsed ? 'Expand thinking' : 'Collapse thinking'}
+                        >
+                            <svg
+                                class="ai-message__thinking-icon"
+                                class:collapsed={streamingThinkingCollapsed}
+                            >
                                 <use xlink:href="#iconRight"></use>
                             </svg>
                             <span class="ai-message__thinking-title">
                                 💭 思考中{isThinkingPhase ? '...' : ' (已完成)'}
                             </span>
                         </div>
-                        {#if !isThinkingPhase}
-                            {@const streamThinkingDisplay = getDisplayContent(streamingThinking)}
-                            <div class="ai-message__thinking-content b3-typography">
-                                {@html streamThinkingDisplay}
-                            </div>
-                        {:else}
-                            {@const streamThinkingDisplay2 = getDisplayContent(streamingThinking)}
-                            <div
-                                class="ai-message__thinking-content ai-message__thinking-content--streaming b3-typography"
+                        {#if !streamingThinkingCollapsed}
+                            {#if !isThinkingPhase}
+                                {@const streamThinkingDisplay = getDisplayContent(streamingThinking)}
+                                <div class="ai-message__thinking-content b3-typography">
+                                    {@html streamThinkingDisplay}
+                                </div>
+                            {:else}
+                                {@const streamThinkingDisplay2 = getDisplayContent(streamingThinking)}
+                                <div
+                                    class="ai-message__thinking-content ai-message__thinking-content--streaming b3-typography"
+                                >
+                                    {@html streamThinkingDisplay2}
+                                </div>
+                            {/if}
+                        {/if}
+                    </div>
+                {/if}
+
+                {#if openCodeToolParts.length > 0}
+                    <div class="ai-message__tool-calls ai-message__tool-calls--streaming">
+                        <div
+                            class="ai-message__tool-calls-title ai-message__tool-calls-title--clickable"
+                            on:click={() => {
+                                streamingToolCallsCollapsed = !streamingToolCallsCollapsed;
+                            }}
+                            title={streamingToolCallsCollapsed ? 'Expand tool calls' : 'Collapse tool calls'}
+                        >
+                            <svg
+                                class="ai-message__tool-call-icon"
+                                class:collapsed={streamingToolCallsCollapsed}
                             >
-                                {@html streamThinkingDisplay2}
+                                <use xlink:href="#iconRight"></use>
+                            </svg>
+                            🔧 工具执行 ({openCodeToolParts.length})
+                        </div>
+                        {#if !streamingToolCallsCollapsed}
+                            {#each openCodeToolParts as toolPart (getOpenCodeToolPartKey(toolPart))}
+                            {@const toolPartKey = getOpenCodeToolPartKey(toolPart)}
+                            {@const toolPartCollapsed = !toolCallsExpanded[toolPartKey]}
+                            {@const toolPartInput = formatOpenCodeToolValue(toolPart.input)}
+                            {@const toolPartOutput = formatOpenCodeToolValue(toolPart.output)}
+                            {@const toolPartError = formatOpenCodeToolValue(toolPart.error)}
+                            <div
+                                class="ai-message__tool-call"
+                                class:ai-message__tool-call--running={toolPart.status === 'running' ||
+                                    toolPart.status === 'pending'}
+                                class:ai-message__tool-call--error={toolPart.status === 'error'}
+                            >
+                                <div
+                                    class="ai-message__tool-call-header"
+                                    on:click={() => {
+                                        toolCallsExpanded[toolPartKey] =
+                                            !toolCallsExpanded[toolPartKey];
+                                        toolCallsExpanded = { ...toolCallsExpanded };
+                                    }}
+                                >
+                                    <div class="ai-message__tool-call-name">
+                                        <svg
+                                            class="ai-message__tool-call-icon"
+                                            class:collapsed={toolPartCollapsed}
+                                        >
+                                            <use xlink:href="#iconRight"></use>
+                                        </svg>
+                                        <span>{toolPart.title || toolPart.toolName}</span>
+                                        <span class="ai-message__tool-call-status">
+                                            {getOpenCodeToolStatusIcon(toolPart.status)}
+                                            {getOpenCodeToolStatusText(toolPart.status)}
+                                        </span>
+                                    </div>
+                                </div>
+
+                                {#if !toolPartCollapsed && (toolPartInput || toolPartOutput || toolPartError)}
+                                    <div class="ai-message__tool-call-details">
+                                        {#if toolPartInput}
+                                            <div class="ai-message__tool-call-params">
+                                                <div class="ai-message__tool-call-section-header">
+                                                    <strong>输入</strong>
+                                                </div>
+                                                <pre class="ai-message__tool-call-code">{toolPartInput}</pre>
+                                            </div>
+                                        {/if}
+                                        {#if toolPartOutput}
+                                            <div class="ai-message__tool-call-result">
+                                                <div class="ai-message__tool-call-section-header">
+                                                    <strong>{t('tools.result')}</strong>
+                                                </div>
+                                                <pre class="ai-message__tool-call-code">{toolPartOutput}</pre>
+                                            </div>
+                                        {/if}
+                                        {#if toolPartError}
+                                            <div class="ai-message__tool-call-result">
+                                                <div class="ai-message__tool-call-section-header">
+                                                    <strong>错误</strong>
+                                                </div>
+                                                <pre class="ai-message__tool-call-code">{toolPartError}</pre>
+                                            </div>
+                                        {/if}
+                                    </div>
+                                {/if}
                             </div>
+                            {/each}
                         {/if}
                     </div>
                 {/if}
@@ -12835,6 +13261,36 @@
             </div>
         </div>
     {/if}
+    {#if activePermissionRequest}
+        <div class="permission-dialog">
+            <div class="permission-dialog__header">
+                <svg class="permission-dialog__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                <span class="permission-dialog__title">OpenCode 请求权限</span>
+            </div>
+            <div class="permission-dialog__body">
+                <div class="permission-dialog__tool">
+                    <code>{activePermissionRequest.tool}</code>
+                </div>
+                {#if activePermissionRequest.input}
+                    <pre class="permission-dialog__input">{activePermissionRequest.input}</pre>
+                {/if}
+                {#if activePermissionRequest.description && activePermissionRequest.description !== activePermissionRequest.input}
+                    <p class="permission-dialog__desc">{activePermissionRequest.description}</p>
+                {/if}
+            </div>
+            <div class="permission-dialog__actions">
+                <button class="permission-dialog__btn permission-dialog__btn--once" on:click={() => handlePermissionResponse('once')}>
+                    允许一次
+                </button>
+                <button class="permission-dialog__btn permission-dialog__btn--always" on:click={() => handlePermissionResponse('always')}>
+                    始终允许
+                </button>
+                <button class="permission-dialog__btn permission-dialog__btn--reject" on:click={() => handlePermissionResponse('reject')}>
+                    拒绝
+                </button>
+            </div>
+        </div>
+    {/if}
     <div
         class="ai-sidebar__input-container"
         class:ai-sidebar__input-container--drag-over={isDragOver && contextDocuments.length === 0}
@@ -12912,15 +13368,14 @@
                     {/if}
                     <MultiModelSelector
                         {providers}
-                        {currentProvider}
-                        {currentModelId}
+                        selectedModels={selectedMultiModels}
+                        enableMultiModel={enableMultiModel}
+                        currentProvider={currentProvider}
+                        currentModelId={currentModelId}
                         {chatMode}
-                        bind:selectedModels={selectedMultiModels}
-                        bind:enableMultiModel
                         on:select={handleModelSelect}
                         on:change={handleMultiModelChange}
                         on:toggleEnable={handleToggleMultiModel}
-                        on:toggleThinking={handleToggleModelThinking}
                     />
                 </div>
             {:else}
@@ -12976,11 +13431,11 @@
                     {/if}
                     <MultiModelSelector
                         {providers}
-                        {currentProvider}
-                        {currentModelId}
-                        {chatMode}
                         selectedModels={[]}
                         enableMultiModel={false}
+                        currentProvider={currentProvider}
+                        currentModelId={currentModelId}
+                        {chatMode}
                         on:select={handleModelSelect}
                     />
                 </div>
@@ -12988,10 +13443,29 @@
         </div>
         <div class="ai-sidebar__input-row">
             <div class="ai-sidebar__input-wrapper">
+                {#if showCommandPalette}
+                    <div class="command-palette">
+                        {#each getFilteredCommands() as cmd, i}
+                            <button
+                                class="command-palette__item"
+                                class:command-palette__item--active={i === commandPaletteIndex}
+                                on:click={() => applyCommand(cmd.name)}
+                                on:mouseenter={() => { commandPaletteIndex = i; }}
+                            >
+                                <span class="command-palette__name">/{cmd.name}</span>
+                                {#if cmd.args}
+                                    <span class="command-palette__args">{cmd.args}</span>
+                                {/if}
+                                <span class="command-palette__desc">{cmd.desc}</span>
+                            </button>
+                        {/each}
+                    </div>
+                {/if}
                 <textarea
                     bind:this={textareaElement}
                     bind:value={currentInput}
                     on:keydown={handleKeydown}
+                    on:input={handleInput}
                     on:paste={handlePaste}
                     placeholder={t('aiSidebar.input.placeholder')}
                     class="ai-sidebar__input"
@@ -13873,6 +14347,18 @@
 </div>
 
 <style lang="scss">
+    // ── OpenCode Design System ─────────────────────────────────────
+    $primary: #2563EB;
+    $primary-light: #3B82F6;
+    $primary-dark: #1D4ED8;
+    $accent: #F97316;
+    $success: #22C55E;
+    $error: #EF4444;
+    $warning: #F59E0B;
+    $radius: 12px;
+    $radius-sm: 6px;
+    $transition: 200ms ease-out;
+
     .ai-sidebar {
         display: flex;
         flex-direction: column;
@@ -14341,7 +14827,8 @@
         cursor: pointer;
         user-select: none;
         background: var(--b3-theme-surface);
-        transition: background 0.2s;
+        border-radius: $radius-sm;
+        transition: background $transition;
 
         &:hover {
             background: var(--b3-theme-background);
@@ -14388,6 +14875,11 @@
         border-radius: 8px;
         overflow: hidden;
         background: var(--b3-theme-surface);
+        margin-bottom: 12px;
+
+        &--streaming {
+            border-color: var(--b3-theme-primary-light);
+        }
     }
 
     .ai-message__tool-calls-title {
@@ -14397,6 +14889,14 @@
         color: var(--b3-theme-on-surface);
         background: var(--b3-theme-surface);
         border-bottom: 1px solid var(--b3-border-color);
+
+        &--clickable {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            user-select: none;
+        }
     }
 
     .ai-message__tool-call {
@@ -14404,6 +14904,14 @@
 
         &:last-child {
             border-bottom: none;
+        }
+
+        &--running .ai-message__tool-call-status {
+            color: var(--b3-theme-primary);
+        }
+
+        &--error .ai-message__tool-call-status {
+            color: var(--b3-theme-error);
         }
     }
 
@@ -14415,10 +14923,11 @@
         cursor: pointer;
         user-select: none;
         background: var(--b3-theme-background);
-        transition: background 0.2s;
+        border-radius: $radius-sm;
+        transition: background $transition;
 
         &:hover {
-            background: var(--b3-theme-primary-lightest);
+            background: rgba($primary, 0.06);
         }
     }
 
@@ -14446,6 +14955,9 @@
     .ai-message__tool-call-status {
         font-size: 14px;
         margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
     }
 
     .ai-message__tool-call-details {
@@ -14530,14 +15042,14 @@
     }
 
     .ai-message__content {
-        padding: 10px 12px;
-        border-radius: 8px;
+        padding: 10px 14px;
+        border-radius: $radius;
         line-height: 1.6;
         word-wrap: break-word;
         overflow-x: auto;
-        user-select: text; // 允许鼠标选择文本进行复制
-        cursor: text; // 显示文本选择光标
-        box-shadow: 0 0 0 1px var(--b3-border-color);
+        user-select: text;
+        cursor: text;
+        font-size: 14px;
     }
 
     .ai-message__waiting-placeholder {
@@ -14553,10 +15065,12 @@
         }
 
         .ai-message__content {
-            background: var(--b3-theme-primary-lightest);
-            color: var(--b3-theme-on-background);
+            background: linear-gradient(135deg, $primary, $primary-dark);
+            color: #fff;
             margin-left: auto;
             max-width: 85%;
+            border-bottom-right-radius: 4px;
+            box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25);
         }
 
         .ai-message__actions {
@@ -14570,9 +15084,11 @@
         }
 
         .ai-message__content {
-            background: var(--b3-theme-background);
-            color: var(--b3-theme-on-background);
+            background: var(--b3-theme-surface);
+            color: var(--b3-theme-on-surface);
             max-width: 90%;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
         }
 
         .ai-message__actions {
@@ -14584,12 +15100,11 @@
         display: flex;
         flex-direction: column;
         gap: 6px;
-        padding: 8px 12px;
+        padding: 10px 14px;
         border-top: 1px solid var(--b3-border-color);
-        background: var(--b3-theme-background);
+        background: var(--b3-theme-surface);
         flex-shrink: 0;
         position: relative;
-        transition: background-color 0.2s;
     }
 
     .ai-sidebar__mode-selector {
@@ -14653,6 +15168,12 @@
         gap: 8px;
         flex: 1;
         justify-content: flex-end;
+        min-width: 0;
+
+        :global(.multi-model-selector) {
+            min-width: 0;
+            max-width: 100%;
+        }
     }
 
     .ai-sidebar__input-row {
@@ -14682,21 +15203,24 @@
     .ai-sidebar__input {
         flex: 1;
         resize: none;
-        border: none;
-        border-radius: 12px;
-        padding: 12px 16px;
-        padding-right: 48px; /* 为发送按钮留出空间 */
+        border: 1px solid var(--b3-border-color);
+        border-radius: $radius;
+        padding: 10px 14px;
+        padding-right: 48px;
         font-family: var(--b3-font-family);
         font-size: 14px;
         line-height: 1.5;
-        background: transparent;
+        background: var(--b3-theme-background);
         color: var(--b3-theme-on-background);
-        min-height: 44px;
+        min-height: 42px;
         max-height: 200px;
         overflow-y: auto;
+        transition: border-color $transition, box-shadow $transition;
 
         &:focus {
             outline: none;
+            border-color: $primary;
+            box-shadow: 0 0 0 2px rgba($primary, 0.15);
         }
 
         &:disabled {
@@ -14803,6 +15327,11 @@
         max-width: 100%;
 
         /* 只对模型选择器按钮内的文本应用省略处理，避免影响弹窗显示 */
+        :global(.multi-model-selector) {
+            min-width: 0;
+            max-width: 100%;
+        }
+
         :global(.model-selector__button) {
             min-width: 0;
             max-width: 100%;
@@ -17199,5 +17728,170 @@
         &:hover {
             opacity: 0.9;
         }
+    }
+
+    // ── Command Palette ──────────────────────────────────────────
+    .command-palette {
+        position: absolute;
+        bottom: 100%;
+        left: 0;
+        right: 0;
+        margin-bottom: 4px;
+        background: var(--b3-theme-surface);
+        border: 1px solid var(--b3-border-color);
+        border-radius: $radius-sm;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+        max-height: 240px;
+        overflow-y: auto;
+        z-index: 200;
+    }
+
+    .command-palette__item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        width: 100%;
+        border: none;
+        background: none;
+        text-align: left;
+        cursor: pointer;
+        font-size: 13px;
+        transition: background $transition;
+
+        &:hover,
+        &--active {
+            background: rgba($primary, 0.08);
+        }
+    }
+
+    .command-palette__name {
+        font-weight: 600;
+        color: $primary;
+        font-family: var(--b3-font-family-code);
+        flex-shrink: 0;
+        min-width: 60px;
+    }
+
+    .command-palette__args {
+        color: var(--b3-theme-on-surface-light);
+        font-size: 11px;
+        font-family: var(--b3-font-family-code);
+        flex-shrink: 0;
+    }
+
+    .command-palette__desc {
+        color: var(--b3-theme-on-surface-light);
+        font-size: 12px;
+        margin-left: auto;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    // ── Permission Dialog ────────────────────────────────────────
+    .permission-dialog {
+        margin: 8px 12px;
+        padding: 12px;
+        background: var(--b3-theme-surface);
+        border: 1px solid $warning;
+        border-radius: $radius;
+        box-shadow: 0 4px 16px rgba($warning, 0.15);
+        animation: permissionIn 200ms ease-out;
+    }
+
+    .permission-dialog__header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 10px;
+    }
+
+    .permission-dialog__icon {
+        width: 18px;
+        height: 18px;
+        color: $warning;
+        flex-shrink: 0;
+    }
+
+    .permission-dialog__title {
+        font-weight: 600;
+        font-size: 13px;
+        color: var(--b3-theme-on-surface);
+    }
+
+    .permission-dialog__body {
+        margin-bottom: 12px;
+    }
+
+    .permission-dialog__tool {
+        margin-bottom: 6px;
+        code {
+            background: rgba($warning, 0.1);
+            color: $accent;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+    }
+
+    .permission-dialog__input {
+        background: var(--b3-theme-background);
+        padding: 8px 10px;
+        border-radius: $radius-sm;
+        font-size: 12px;
+        line-height: 1.4;
+        max-height: 120px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+        margin: 0;
+    }
+
+    .permission-dialog__desc {
+        font-size: 12px;
+        color: var(--b3-theme-on-surface-light);
+        margin: 6px 0 0;
+    }
+
+    .permission-dialog__actions {
+        display: flex;
+        gap: 8px;
+    }
+
+    .permission-dialog__btn {
+        flex: 1;
+        padding: 8px 12px;
+        border: none;
+        border-radius: $radius-sm;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all $transition;
+
+        &--once {
+            background: $primary;
+            color: #fff;
+            &:hover { background: $primary-dark; }
+        }
+
+        &--always {
+            background: $success;
+            color: #fff;
+            &:hover { background: darken($success, 8%); }
+        }
+
+        &--reject {
+            background: transparent;
+            color: var(--b3-theme-on-surface-light);
+            border: 1px solid var(--b3-border-color);
+            &:hover { background: var(--b3-theme-background); }
+        }
+    }
+
+    @keyframes permissionIn {
+        from { opacity: 0; transform: translateY(-6px); }
+        to { opacity: 1; transform: translateY(0); }
     }
 </style>

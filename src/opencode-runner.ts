@@ -226,6 +226,69 @@ export async function ensureServerRunning(options?: OpenCodeRunnerOptions): Prom
     };
 }
 
+export interface SessionStatusInfo {
+    sessionId: string;
+    status: 'idle' | 'running' | 'error';
+}
+
+export async function fetchSessionStatuses(
+    host: string = DEFAULT_HOSTNAME,
+    port: number = DEFAULT_PORT
+): Promise<SessionStatusInfo[]> {
+    try {
+        const url = `http://${host}:${port}/session/status`;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 5000);
+
+        let response: Response;
+        try {
+            response = await fetch(url, { signal: controller.signal });
+        } finally {
+            clearTimeout(timer);
+        }
+
+        if (!response.ok) return [];
+
+        const data = await response.json();
+        if (!data || typeof data !== 'object') return [];
+
+        return Object.entries(data).map(([sessionId, status]: [string, any]) => ({
+            sessionId,
+            status: status?.status || 'idle',
+        }));
+    } catch {
+        return [];
+    }
+}
+
+export async function checkServerHealth(
+    host: string = DEFAULT_HOSTNAME,
+    port: number = DEFAULT_PORT,
+    timeoutMs: number = 5000
+): Promise<{ healthy: boolean; version: string }> {
+    try {
+        const url = `http://${host}:${port}/global/health`;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+        let response: Response;
+        try {
+            response = await fetch(url, { signal: controller.signal });
+        } finally {
+            clearTimeout(timer);
+        }
+
+        if (response.ok) {
+            let data: any = {};
+            try { data = await response.json(); } catch {}
+            return { healthy: true, version: data?.version || '' };
+        }
+        return { healthy: false, version: '' };
+    } catch {
+        return { healthy: false, version: '' };
+    }
+}
+
 export async function detectOpenCodeCLI(): Promise<{ found: boolean; path?: string; error?: string }> {
     if (!isElectron()) {
         return {

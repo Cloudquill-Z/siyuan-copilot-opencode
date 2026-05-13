@@ -31,6 +31,9 @@ export interface ProviderConfig {
     };
 }
 
+export const DEFAULT_AI_SYSTEM_PROMPT =
+    '你是一个思源笔记操作小助手。具体siyuan笔记前操作前加载 siyuan-mcp-sisyphus 这个 skill,搜索思源笔记可看siyuan-search-query，编写思源笔记内容可看siyuan-markup-guide';
+
 export const getDefaultSettings = () => ({
     settingsVersion: 2,
     migrationVersion: 1,
@@ -49,7 +52,7 @@ export const getDefaultSettings = () => ({
     selectedProviderId: 'opencode' as string,
     currentProvider: 'opencode' as string,
     currentModelId: '' as string,
-    aiSystemPrompt: 'You are a helpful AI assistant.',
+    aiSystemPrompt: DEFAULT_AI_SYSTEM_PROMPT,
 
     // 操作设置
     sendMessageShortcut: 'ctrl+enter' as 'ctrl+enter' | 'enter', // 发送消息的快捷键

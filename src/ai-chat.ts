@@ -2,7 +2,7 @@
  * AI Chat API 调用模块
  * 仅支持 OpenCode 提供商
  */
-import { chatOpenCode, fetchOpenCodeModels, deleteOpenCodeSession, invalidateModelCache, type OpenCodeToolPartUpdate } from './providers/opencode-provider';
+import { chatOpenCode, fetchOpenCodeModels, deleteOpenCodeSession, invalidateModelCache, type OpenCodeToolPartUpdate, listCommands as fetchOpenCodeCommands, executeCommand as execOpenCodeCommand, sendPromptAsync as sendOpenCodePromptAsync, initSession as initOpenCodeSession, type OpenCodeCommand, respondToPermission as respondOpenCodePermission, type PermissionRequest } from './providers/opencode-provider';
 
 export interface MessageAttachment {
     type: 'image' | 'file';
@@ -51,6 +51,7 @@ export interface Message {
     attachments?: MessageAttachment[];
     contextDocuments?: ContextDocument[];
     thinking?: string;
+    openCodeToolParts?: OpenCodeToolPartUpdate[];
     editOperations?: EditOperation[];
     multiModelResponses?: Array<{
         provider: string;
@@ -94,6 +95,7 @@ export interface ChatOptions {
     onThinkingChunk?: (chunk: string) => void;
     onThinkingComplete?: (thinking: string) => void;
     onToolPartUpdate?: (update: OpenCodeToolPartUpdate) => void;
+    onPermissionAsked?: (req: import('./providers/opencode-provider').PermissionRequest) => void;
     customBody?: any;
     enableImageGeneration?: boolean;
     onImageGenerated?: (images: GeneratedImageData[]) => void;
@@ -206,6 +208,7 @@ export async function chat(
             onThinkingChunk: options.onThinkingChunk,
             onThinkingComplete: options.onThinkingComplete,
             onToolPartUpdate: options.onToolPartUpdate,
+            onPermissionAsked: options.onPermissionAsked,
             mode: options.mode
         },
         { serverUrl }
@@ -276,4 +279,71 @@ export async function generateImage(
 
 export function isImageGenerationSupported(_provider: string, _modelId: string): boolean {
     return false;
+}
+
+// ─── Command API ────────────────────────────────────────────────────────────────
+
+export type { OpenCodeCommand } from './providers/opencode-provider';
+
+export async function listCommands(serverUrl: string = 'http://localhost:4096'): Promise<OpenCodeCommand[]> {
+    return fetchOpenCodeCommands({ serverUrl });
+}
+
+export async function executeCommand(
+    serverUrl: string,
+    sessionId: string,
+    command: string,
+    args?: string,
+    modelId?: string
+): Promise<{ success: boolean; sessionId: string; parts?: any[] }> {
+    let model: { providerID: string; modelID: string } | undefined;
+    if (modelId?.includes('/')) {
+        const parts = modelId.split('/');
+        const mid = parts.pop() || '';
+        const pid = parts.join('/');
+        if (pid && mid) model = { providerID: pid, modelID: mid };
+    }
+    return execOpenCodeCommand({ serverUrl }, sessionId, command, args, model);
+}
+
+export async function sendStillPrompt(
+    serverUrl: string,
+    sessionId: string,
+    prompt: string = 'Continue.',
+    modelId?: string
+): Promise<void> {
+    let model: { providerID: string; modelID: string } | undefined;
+    if (modelId?.includes('/')) {
+        const parts = modelId.split('/');
+        const mid = parts.pop() || '';
+        const pid = parts.join('/');
+        if (pid && mid) model = { providerID: pid, modelID: mid };
+    }
+    return sendOpenCodePromptAsync({ serverUrl }, sessionId, prompt, model);
+}
+
+export async function sessionInit(
+    serverUrl: string,
+    sessionId: string,
+    modelId?: string
+): Promise<boolean> {
+    let model: { providerID: string; modelID: string } | undefined;
+    if (modelId?.includes('/')) {
+        const parts = modelId.split('/');
+        const mid = parts.pop() || '';
+        const pid = parts.join('/');
+        if (pid && mid) model = { providerID: pid, modelID: mid };
+    }
+    return initOpenCodeSession({ serverUrl }, sessionId, undefined, model);
+}
+
+export { type PermissionRequest } from './providers/opencode-provider';
+
+export async function respondToPermission(
+    serverUrl: string,
+    sessionId: string,
+    permissionID: string,
+    response: 'once' | 'always' | 'reject'
+): Promise<boolean> {
+    return respondOpenCodePermission({ serverUrl }, sessionId, permissionID, response);
 }

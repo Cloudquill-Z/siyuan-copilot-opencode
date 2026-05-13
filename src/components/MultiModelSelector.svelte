@@ -15,6 +15,7 @@
     export let enableMultiModel = false;
     export let currentProvider = '';
     export let currentModelId = '';
+    export let chatMode: 'plan' | 'build' = 'plan';
 
     const dispatch = createEventDispatcher();
 
@@ -114,6 +115,11 @@
     }
 
     function toggleEnableMultiModel() {
+        if (chatMode !== 'plan') {
+            enableMultiModel = false;
+            dispatch('toggleEnable', false);
+            return;
+        }
         dispatch('toggleEnable', enableMultiModel);
     }
 
@@ -488,25 +494,27 @@ return emojis.length > 0 ? ' ' + emojis.join(' ') : '';
                         ? t('multiModel.selectModels')
                         : t('models.selectPlaceholder')}
                 </div>
-                <div
-                    class="multi-model-selector__toggle"
-                    on:click|stopPropagation
-                    role="button"
-                    tabindex="0"
-                    on:keydown={e => e.key === 'Enter' && toggleEnableMultiModel()}
-                >
-                    <label>
-                        <input
-                            type="checkbox"
-                            class="b3-switch"
-                            bind:checked={enableMultiModel}
-                            on:change={toggleEnableMultiModel}
-                        />
-                        <span class="multi-model-selector__toggle-label">
-                            {t('multiModel.enable')}
-                        </span>
-                    </label>
-                </div>
+                {#if chatMode === 'plan'}
+                    <div
+                        class="multi-model-selector__toggle"
+                        on:click|stopPropagation
+                        role="button"
+                        tabindex="0"
+                        on:keydown={e => e.key === 'Enter' && toggleEnableMultiModel()}
+                    >
+                        <label>
+                            <input
+                                type="checkbox"
+                                class="b3-switch"
+                                bind:checked={enableMultiModel}
+                                on:change={toggleEnableMultiModel}
+                            />
+                            <span class="multi-model-selector__toggle-label">
+                                {t('multiModel.enable')}
+                            </span>
+                        </label>
+                    </div>
+                {/if}
             </div>
 
             {#if enableMultiModel}
@@ -740,6 +748,8 @@ return emojis.length > 0 ? ' ' + emojis.join(' ') : '';
         font-size: 12px;
         border-radius: 4px;
         transition: all 0.2s;
+        max-width: 100%;
+        min-width: 0;
 
         &--active {
             background: var(--b3-theme-primary-lightest);
@@ -749,6 +759,9 @@ return emojis.length > 0 ? ' ' + emojis.join(' ') : '';
 
     .multi-model-selector__label {
         white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
     }
 
     .multi-model-selector__dropdown {

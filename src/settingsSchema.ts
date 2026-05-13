@@ -1,4 +1,8 @@
-import { getDefaultSettings } from "./defaultSettings";
+import { DEFAULT_AI_SYSTEM_PROMPT, getDefaultSettings } from "./defaultSettings";
+
+const LEGACY_DEFAULT_AI_SYSTEM_PROMPTS = new Set([
+    '你是一个思源笔记操作小助手。具体思源笔记操作前加载 siyuan-mcp-sisyphus 这个 skill，搜索思源笔记可看 siyuan-search-query，编写思源笔记内容可看 siyuan-markup-guide。请基于以上技能提供思源笔记相关的帮助。',
+]);
 
 function isPlainObject(value: unknown): value is Record<string, any> {
     return !!value && typeof value === "object" && !Array.isArray(value);
@@ -62,6 +66,19 @@ export function normalizeSettings(rawSettings: any) {
     }
     if (!Array.isArray(merged.aiProviders.opencode.models)) {
         merged.aiProviders.opencode.models = [];
+    }
+
+    const rawSystemPrompt =
+        typeof rawSettings?.aiSystemPrompt === "string" ? rawSettings.aiSystemPrompt.trim() : "";
+    const mergedSystemPrompt =
+        typeof merged.aiSystemPrompt === "string" ? merged.aiSystemPrompt.trim() : "";
+    if (
+        !rawSystemPrompt ||
+        !mergedSystemPrompt ||
+        LEGACY_DEFAULT_AI_SYSTEM_PROMPTS.has(rawSystemPrompt) ||
+        LEGACY_DEFAULT_AI_SYSTEM_PROMPTS.has(mergedSystemPrompt)
+    ) {
+        merged.aiSystemPrompt = DEFAULT_AI_SYSTEM_PROMPT;
     }
 
     return merged;
