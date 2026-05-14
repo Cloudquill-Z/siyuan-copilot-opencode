@@ -115,6 +115,23 @@ function isToolPart(part: any): boolean {
     return type === 'tool' || type === 'tool-invocation' || type === 'tool-result';
 }
 
+function getPartRole(part: any, props: any = {}): string {
+    return String(
+        props?.role ||
+        props?.message?.role ||
+        props?.message?.type ||
+        part?.role ||
+        part?.message?.role ||
+        part?.message?.type ||
+        ''
+    ).toLowerCase();
+}
+
+function isUserAuthoredPart(part: any, props: any = {}): boolean {
+    const role = getPartRole(part, props);
+    return role === 'user' || role === 'input' || role === 'prompt';
+}
+
 function getPartCacheKey(part: any, fallbackType: string): string {
     return `${fallbackType}:${part?.id || part?.partID || part?.callID || part?.tool || 'unknown'}`;
 }
@@ -281,7 +298,7 @@ function isConnectionError(err: Error): boolean {
         msg.includes('networkerror') ||
         msg.includes('network request failed') ||
         msg.includes('err_connection_refused') ||
-        msg.includes('err_connection_refused') ||
+        msg.includes('err_ssl_protocol_error') ||
         msg.includes('econnrefused') ||
         msg.includes('econnreset') ||
         msg.includes('fetch error')
@@ -293,7 +310,7 @@ async function openCodeFetch(
     path: string,
     options: RequestInit = {},
     signal?: AbortSignal
-): Promise<{ response: Response; resetTimeout: () => void }> {
+): Promise<{ response: Response; resetTimeout: () => void; clearTimeout: () => void }> {
     const url = `${normalizeServerUrl(serverUrl)}${path}`;
 
     if (signal?.aborted) {
@@ -301,14 +318,26 @@ async function openCodeFetch(
     }
 
     const controller = new AbortController();
-    let timeout = setTimeout(() => controller.abort(), IDLE_TIMEOUT_MS);
+    let timeout: ReturnType<typeof setTimeout> | null = setTimeout(() => controller.abort(), IDLE_TIMEOUT_MS);
+    let handedOff = false;
+    let cleanupSignal: (() => void) | null = null;
+
+    const clearIdleTimeout = () => {
+        if (timeout) {
+            globalThis.clearTimeout(timeout);
+            timeout = null;
+        }
+        cleanupSignal?.();
+        cleanupSignal = null;
+    };
 
     const resetTimeout = () => {
-        clearTimeout(timeout);
+        if (!timeout) return;
+        globalThis.clearTimeout(timeout);
         timeout = setTimeout(() => controller.abort(), IDLE_TIMEOUT_MS);
     };
 
-    const cleanup = signal
+    cleanupSignal = signal
         ? (() => {
               const s = signal;
               const listen = () => {
@@ -328,7 +357,8 @@ async function openCodeFetch(
                 ...(options.headers || {})
             }
         });
-        return { response, resetTimeout };
+        handedOff = true;
+        return { response, resetTimeout, clearTimeout: clearIdleTimeout };
     } catch (err: any) {
         if (err.name === 'AbortError') {
             if (signal?.aborted) {
@@ -345,8 +375,9 @@ async function openCodeFetch(
         }
         throw err;
     } finally {
-        clearTimeout(timeout);
-        cleanup?.();
+        if (!handedOff) {
+            clearIdleTimeout();
+        }
     }
 }
 
@@ -375,6 +406,7 @@ class EventStreamClient {
     private serverUrl: string;
     private targetSessionId: string;
     private partTextCache = new Map<string, string>();
+    private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
     constructor(serverUrl: string, sessionId: string) {
         this.serverUrl = normalizeServerUrl(serverUrl);
@@ -417,6 +449,7 @@ class EventStreamClient {
             outerCleanup?.();
             throw new Error('Event stream body is not readable');
         }
+        this.reader = reader;
 
         const decoder = new TextDecoder();
         let buffer = '';
@@ -464,7 +497,7 @@ class EventStreamClient {
                     console.log(`[OpenCode] EventStream: part.updated #${eventCount}, type=${part.type}, delta=${(delta || '').slice(0, 50)}`);
                 }
 
-                if (isTextPart(part) && callbacks.onTextDelta) {
+                if (isTextPart(part) && callbacks.onTextDelta && !isUserAuthoredPart(part, props)) {
                     const textDelta = getPartDelta(part, delta, this.partTextCache, 'text');
                     if (textDelta) callbacks.onTextDelta(textDelta, part.id);
                 } else if (isReasoningPart(part) && callbacks.onReasoningDelta) {
@@ -532,7 +565,14 @@ class EventStreamClient {
                 }
             } finally {
                 console.log('[OpenCode] EventStream: closed, received', eventCount, 'events');
-                reader.releaseLock();
+                try {
+                    reader.releaseLock();
+                } catch {
+                    // Reader may already be released after an explicit close.
+                }
+                if (this.reader === reader) {
+                    this.reader = null;
+                }
                 outerCleanup?.();
             }
         })();
@@ -540,6 +580,8 @@ class EventStreamClient {
 
     close(): void {
         this.controller?.abort();
+        this.reader?.cancel().catch(() => {});
+        this.reader = null;
         this.controller = null;
     }
 }
@@ -611,7 +653,7 @@ async function parseSSEStream(
                             const part = properties.part;
                             const delta = properties.delta;
                             if (part) {
-                                if (isTextPart(part)) {
+                                if (isTextPart(part) && !isUserAuthoredPart(part, properties)) {
                                     const textDelta = getPartDelta(part, delta, partTextCache, 'text');
                                     if (textDelta) {
                                         fullText += textDelta;
@@ -674,12 +716,15 @@ export async function fetchOpenCodeModels(config: OpenCodeProviderConfig): Promi
         return cached.models;
     }
 
+    let clearFetchTimeout: (() => void) | null = null;
     try {
-        const { response } = await openCodeFetch(
+        const fetchResult = await openCodeFetch(
             config.serverUrl,
             '/provider',
             { method: 'GET' }
         );
+        const { response } = fetchResult;
+        clearFetchTimeout = fetchResult.clearTimeout;
 
         if (!response.ok) {
             throw new Error(`Failed to fetch models: ${response.status} ${response.statusText}`);
@@ -745,6 +790,8 @@ export async function fetchOpenCodeModels(config: OpenCodeProviderConfig): Promi
             throw new Error('Request timed out while fetching models');
         }
         throw err;
+    } finally {
+        clearFetchTimeout?.();
     }
 }
 
@@ -764,7 +811,7 @@ export async function respondToPermission(
     response: 'once' | 'always' | 'reject'
 ): Promise<boolean> {
     try {
-        const { response: res } = await openCodeFetch(
+        const fetchResult = await openCodeFetch(
             config.serverUrl,
             `/session/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(permissionID)}`,
             {
@@ -772,7 +819,11 @@ export async function respondToPermission(
                 body: JSON.stringify({ response }),
             }
         );
-        return res.ok;
+        try {
+            return fetchResult.response.ok;
+        } finally {
+            fetchResult.clearTimeout();
+        }
     } catch {
         return false;
     }
@@ -783,14 +834,16 @@ export async function deleteOpenCodeSession(
     sessionId: string
 ): Promise<void> {
     try {
-        const { response } = await openCodeFetch(
+        const fetchResult = await openCodeFetch(
             config.serverUrl,
             `/session/${encodeURIComponent(sessionId)}`,
             { method: 'DELETE' }
         );
+        const { response } = fetchResult;
         if (!response.ok && response.status !== 404) {
             console.warn(`[OpenCode] Session cleanup returned ${response.status}`);
         }
+        fetchResult.clearTimeout();
     } catch (err) {
         console.warn('[OpenCode] Session cleanup failed:', err);
     }
@@ -807,7 +860,7 @@ export async function chatOpenCode(
 
     try {
         if (!sessionId) {
-            const { response: createRes } = await openCodeFetch(
+            const createFetchResult = await openCodeFetch(
                 serverUrl,
                 '/session',
                 {
@@ -816,7 +869,9 @@ export async function chatOpenCode(
                 },
                 options.signal
             );
+            const createRes = createFetchResult.response;
 
+            try {
             if (!createRes.ok) {
                 const errText = await createRes.text().catch(() => '');
                 throw new Error(`Failed to create session: ${createRes.status} ${createRes.statusText}${errText ? ' — ' + errText : ''}`);
@@ -832,6 +887,9 @@ export async function chatOpenCode(
             sessionId = session?.id;
             if (!sessionId) {
                 throw new Error('Failed to create session: no session ID returned');
+            }
+            } finally {
+                createFetchResult.clearTimeout();
             }
             sessionCreated = true;
         }
@@ -849,18 +907,12 @@ export async function chatOpenCode(
 
         // Try real-time event stream for thinking/tool updates
         const wantRealtime = !!(options.onThinkingChunk || options.onToolPartUpdate);
-        let realtimeText = '';
         let realtimeThinking = '';
 
         if (wantRealtime) {
             try {
                 eventStream = new EventStreamClient(serverUrl, sessionId);
                 await eventStream.connect({
-                    onTextDelta: (delta) => {
-                        console.log('[OpenCode] EventStream onTextDelta:', delta.slice(0, 50));
-                        realtimeText += delta;
-                        options.onChunk?.(delta);
-                    },
                     onReasoningDelta: (delta) => {
                         console.log('[OpenCode] EventStream onReasoningDelta:', delta.slice(0, 50));
                         realtimeThinking += delta;
@@ -885,7 +937,7 @@ export async function chatOpenCode(
         }
 
         // Send the message
-        const { response, resetTimeout } = await openCodeFetch(
+        const messageFetchResult = await openCodeFetch(
             serverUrl,
             `/session/${encodeURIComponent(sessionId)}/message`,
             {
@@ -898,7 +950,9 @@ export async function chatOpenCode(
             },
             options.signal
         );
+        const { response, resetTimeout } = messageFetchResult;
 
+        try {
         if (!response.ok) {
             const errText = await response.text().catch(() => '');
             throw new Error(`OpenCode request failed: ${response.status} ${response.statusText}${errText ? ' — ' + errText : ''}`);
@@ -913,9 +967,7 @@ export async function chatOpenCode(
             let accumulatedThinking = '';
             try {
                 fullText = await parseSSEStream(response, (text) => {
-                    if (!realtimeText) {
-                        options.onChunk?.(text);
-                    }
+                    options.onChunk?.(text);
                 }, options.signal, (thinking) => {
                     accumulatedThinking += thinking;
                     if (!realtimeThinking) {
@@ -923,7 +975,7 @@ export async function chatOpenCode(
                     }
                 }, options.onToolPartUpdate, resetTimeout);
             } catch (streamErr) {
-                const partialText = fullText || realtimeText;
+                const partialText = fullText;
                 const partialThinking = accumulatedThinking || realtimeThinking;
                 if (partialText) {
                     options.onComplete?.(partialText);
@@ -934,7 +986,7 @@ export async function chatOpenCode(
                 eventStream?.close();
                 throw streamErr;
             }
-            const finalText = fullText || realtimeText;
+            const finalText = fullText;
             const finalThinking = accumulatedThinking || realtimeThinking;
             options.onComplete?.(finalText);
             if (finalThinking) {
@@ -951,10 +1003,8 @@ export async function chatOpenCode(
             } catch {
                 if (responseText.trim()) {
                     fullText = responseText;
-                    if (!realtimeText) {
-                        options.onChunk?.(fullText);
-                    }
-                    options.onComplete?.(fullText || realtimeText);
+                    options.onChunk?.(fullText);
+                    options.onComplete?.(fullText);
                     eventStream?.close();
                     return { sessionId: sessionId! };
                 }
@@ -988,7 +1038,7 @@ export async function chatOpenCode(
                 }
             }
 
-            if (options.onChunk && fullText && !realtimeText) {
+            if (options.onChunk && fullText) {
                 const chunkSize = Math.max(1, Math.ceil(fullText.length / 100));
                 for (let i = 0; i < fullText.length; i += chunkSize) {
                     if (options.signal?.aborted) throw new Error('Request aborted');
@@ -996,11 +1046,14 @@ export async function chatOpenCode(
                 }
             }
 
-            options.onComplete?.(fullText || realtimeText);
+            options.onComplete?.(fullText);
         }
 
         eventStream?.close();
         return { sessionId: sessionId! };
+        } finally {
+            messageFetchResult.clearTimeout();
+        }
     } catch (error) {
         eventStream?.close();
         const err = error as Error;
@@ -1033,12 +1086,17 @@ export interface OpenCodeCommand {
 
 export async function listCommands(config: OpenCodeProviderConfig): Promise<OpenCodeCommand[]> {
     try {
-        const { response } = await openCodeFetch(config.serverUrl, '/command', { method: 'GET' });
-        if (!response.ok) return [];
-        const data = await response.json();
-        if (Array.isArray(data)) return data;
-        if (Array.isArray(data?.commands)) return data.commands;
-        return [];
+        const fetchResult = await openCodeFetch(config.serverUrl, '/command', { method: 'GET' });
+        try {
+            const { response } = fetchResult;
+            if (!response.ok) return [];
+            const data = await response.json();
+            if (Array.isArray(data)) return data;
+            if (Array.isArray(data?.commands)) return data.commands;
+            return [];
+        } finally {
+            fetchResult.clearTimeout();
+        }
     } catch {
         return [];
     }
@@ -1059,7 +1117,7 @@ export async function executeCommand(
     model?: { providerID: string; modelID: string },
     agent?: string
 ): Promise<CommandResult> {
-    const { response } = await openCodeFetch(
+    const fetchResult = await openCodeFetch(
         config.serverUrl,
         `/session/${encodeURIComponent(sessionId)}/command`,
         {
@@ -1072,19 +1130,24 @@ export async function executeCommand(
             }),
         }
     );
+    const { response } = fetchResult;
 
-    if (!response.ok) {
-        const errText = await response.text().catch(() => '');
-        throw new Error(`Command failed: ${response.status} ${errText}`);
+    try {
+        if (!response.ok) {
+            const errText = await response.text().catch(() => '');
+            throw new Error(`Command failed: ${response.status} ${errText}`);
+        }
+
+        const data = await response.json();
+        return {
+            success: true,
+            sessionId: data?.sessionID || sessionId,
+            parts: data?.parts,
+            info: data?.info,
+        };
+    } finally {
+        fetchResult.clearTimeout();
     }
-
-    const data = await response.json();
-    return {
-        success: true,
-        sessionId: data?.sessionID || sessionId,
-        parts: data?.parts,
-        info: data?.info,
-    };
 }
 
 export async function sendPromptAsync(
@@ -1093,7 +1156,7 @@ export async function sendPromptAsync(
     prompt: string,
     model?: { providerID: string; modelID: string }
 ): Promise<void> {
-    const { response } = await openCodeFetch(
+    const fetchResult = await openCodeFetch(
         config.serverUrl,
         `/session/${encodeURIComponent(sessionId)}/prompt_async`,
         {
@@ -1104,8 +1167,12 @@ export async function sendPromptAsync(
             }),
         }
     );
-    if (response.status !== 204) {
-        console.warn(`[OpenCode] prompt_async returned ${response.status}`);
+    try {
+        if (fetchResult.response.status !== 204) {
+            console.warn(`[OpenCode] prompt_async returned ${fetchResult.response.status}`);
+        }
+    } finally {
+        fetchResult.clearTimeout();
     }
 }
 
@@ -1115,7 +1182,7 @@ export async function initSession(
     messageId?: string,
     model?: { providerID: string; modelID: string }
 ): Promise<boolean> {
-    const { response } = await openCodeFetch(
+    const fetchResult = await openCodeFetch(
         config.serverUrl,
         `/session/${encodeURIComponent(sessionId)}/init`,
         {
@@ -1126,5 +1193,9 @@ export async function initSession(
             }),
         }
     );
-    return response.ok;
+    try {
+        return fetchResult.response.ok;
+    } finally {
+        fetchResult.clearTimeout();
+    }
 }

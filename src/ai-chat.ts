@@ -224,7 +224,8 @@ export async function cleanupSession(serverUrl: string, sessionId: string): Prom
 export function estimateTokens(text: string): number {
     const chineseChars = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
     const englishWords = (text.match(/[a-zA-Z]+/g) || []).length;
-    const otherChars = text.length - chineseChars - text.match(/[a-zA-Z\s]/g)?.length || 0;
+    const englishAndWhitespaceChars = (text.match(/[a-zA-Z\s]/g) || []).length;
+    const otherChars = Math.max(0, text.length - chineseChars - englishAndWhitespaceChars);
 
     return Math.ceil(chineseChars * 1.5 + englishWords + otherChars * 0.5);
 }

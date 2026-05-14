@@ -73,6 +73,8 @@ interface WebViewHistory {
 export default class PluginSample extends Plugin {
     private aiSidebarApp: AISidebar;
     private chatDialogs: Map<string, { dialog: Dialog; app: ChatDialog }> = new Map();
+    private settingDialog: Dialog | null = null;
+    private settingPanel: SettingPanel | null = null;
     private webApps: Map<string, any> = new Map(); // 存储待打开的小程序数据
     private webViewHistory: WebViewHistory[] = []; // WebView 历史记录
     private openMenuDoctreeBindThis = this.openMenuDoctree.bind(this);
@@ -436,8 +438,11 @@ export default class PluginSample extends Plugin {
         // 设置i18n插件实例
         setPluginInstance(this);
 
+        // Load settings before auto-starting OpenCode so custom serverUrl/port is honored.
+        const settings = await this.loadSettings();
+
         // Auto-start OpenCode serve if not running
-        this.initOpenCodeServer();
+        this.initOpenCodeServer(settings);
 
         // 注册文档树右键菜单
         this.eventBus.on("open-menu-doctree", this.openMenuDoctreeBindThis);
@@ -451,7 +456,6 @@ export default class PluginSample extends Plugin {
         this.webViewHistory = await this.loadWebViewHistory();
 
         // 加载设置
-        await this.loadSettings();
         this.addIcons(`
     <symbol id="${MAIN_ICON_ID}" viewBox="0 0 24 24">
       <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-4 9h-2v2h2v-2zm-4 0H8v2h2v-2z" fill="currentColor"/>
@@ -1519,8 +1523,8 @@ export default class PluginSample extends Plugin {
                             const script = `
                                 (function() {
                                     // 注入一次即可，防止重复 (使用新标记 v3 避免缓存问题)
-                                    if (window.${WEBVIEW_INJECTED_FLAG}) return;
-                                    window.${WEBVIEW_INJECTED_FLAG} = true;
+                                    if (!window.${WEBVIEW_INJECTED_FLAG}) {
+                                        window.${WEBVIEW_INJECTED_FLAG} = true;
 
                                     // 键盘事件监听
                                     document.addEventListener('keydown', function(e) {
@@ -1599,6 +1603,7 @@ export default class PluginSample extends Plugin {
                                     document.addEventListener('click', handleLinkClick, true);
                                     // 监听辅助点击事件 (如中键)
                                     document.addEventListener('auxclick', handleLinkClick, true);
+                                    }
                                 })();
                             `;
                             webview.executeJavaScript(script);
@@ -1921,9 +1926,9 @@ export default class PluginSample extends Plugin {
         this.chatDialogs.set(dialogId, { dialog, app: chatApp });
     }
 
-    private async initOpenCodeServer() {
+    private async initOpenCodeServer(settingsOverride?: any) {
         try {
-            const settings = await getSettings();
+            const settings = settingsOverride || await getSettings();
             const serverUrl = settings?.aiProviders?.opencode?.serverUrl || 'http://localhost:4096';
             const url = new URL(serverUrl);
             const port = parseInt(url.port) || 4096;
@@ -2072,22 +2077,31 @@ export default class PluginSample extends Plugin {
      */
     // 重写 openSetting 方法
     async openSetting() {
-        let dialog = new Dialog({
+        this.settingDialog?.destroy();
+
+        let pannel: SettingPanel | null = null;
+        const dialog = new Dialog({
             title: t("settings.settingsPanel"),
             content: `<div id="SettingPanel" style="height: 100%;"></div>`,
             width: "800px",
             height: "700px",
             destroyCallback: () => {
-                pannel.$destroy();
+                pannel?.$destroy();
+                if (this.settingDialog === dialog) {
+                    this.settingDialog = null;
+                    this.settingPanel = null;
+                }
             }
         });
 
-        let pannel = new SettingPanel({
+        pannel = new SettingPanel({
             target: dialog.element.querySelector("#SettingPanel"),
             props: {
                 plugin: this
             }
         });
+        this.settingDialog = dialog;
+        this.settingPanel = pannel;
     }
     /**
      * 加载设置

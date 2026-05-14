@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+import { get, writable } from 'svelte/store';
 import type { Writable } from 'svelte/store';
 
 // 创建一个可写的 store 来存储设置
@@ -11,10 +11,5 @@ export function updateSettings(newSettings: any) {
 
 // 获取当前设置的辅助函数
 export function getSettings(): Promise<any> {
-    return new Promise((resolve) => {
-        const unsubscribe = settingsStore.subscribe((value) => {
-            resolve(value);
-            unsubscribe();
-        });
-    });
+    return Promise.resolve(get(settingsStore));
 }

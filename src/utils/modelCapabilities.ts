@@ -11,6 +11,9 @@ export interface ModelCapabilities {
     webSearch?: boolean;       // 是否支持联网搜索
 }
 
+const OPENAI_O_SERIES_PATTERN = /\bo[1-4](?:-[\w-]+)?\b/;
+const OPENAI_O_TOOL_VISION_PATTERN = /\bo[134](?:-[\w-]+)?\b/;
+
 /**
  * 根据模型名称判断是否支持思考模式（Reasoning）
  */
@@ -18,7 +21,7 @@ function isThinkingModel(modelId: string): boolean {
     const id = modelId.toLowerCase();
 
     // OpenAI o 系列
-    if (/\bo[1-4](?:-[\w-]+)?/.test(id)) return true;
+    if (OPENAI_O_SERIES_PATTERN.test(id)) return true;
 
     // 包含 reasoning/reasoner/thinking/think 关键词
     if (/\b(reasoning|reasoner|thinking|think)\b/.test(id)) return true;
@@ -81,7 +84,7 @@ function isVisionModel(modelId: string): boolean {
     if (/chatgpt-4o/.test(id)) return true;
 
     // o1, o3, o4 系列（排除 mini 和 preview）
-    if (/o[134]/.test(id) && !/mini|preview/.test(id)) return true;
+    if (OPENAI_O_TOOL_VISION_PATTERN.test(id) && !/mini|preview/.test(id)) return true;
 
     // Claude 3/4 系列
     if (/claude-[34]/.test(id)) return true;
@@ -162,7 +165,7 @@ function isToolCallingModel(modelId: string): boolean {
     if (/gpt-(4|4o|4\.5|5)/.test(id)) return true;
 
     // o1, o3, o4 系列
-    if (/o[134]/.test(id)) return true;
+    if (OPENAI_O_TOOL_VISION_PATTERN.test(id)) return true;
 
     // Claude 系列
     if (/claude/.test(id)) return true;

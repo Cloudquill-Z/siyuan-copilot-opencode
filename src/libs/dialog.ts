@@ -109,12 +109,12 @@ export const confirmDialog = (args: IConfirmDialogArgs) => {
 
 
 export const confirmDialogSync = async (args: IConfirmDialogArgs) => {
-    return new Promise<HTMLElement>((resolve) => {
+    return new Promise<HTMLElement | null>((resolve) => {
         let newargs = {
             ...args, confirm: (ele: HTMLElement) => {
                 resolve(ele);
             }, cancel: (ele: HTMLElement) => {
-                resolve(ele);
+                resolve(null);
             }
         };
         confirmDialog(newargs);
