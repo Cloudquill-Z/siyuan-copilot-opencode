@@ -32,6 +32,8 @@ export interface OpenCodeChatOptions {
     onThinkingChunk?: (text: string) => void;
     onThinkingComplete?: (thinking: string) => void;
     onToolPartUpdate?: (update: OpenCodeToolPartUpdate) => void;
+    tools?: any;
+    customBody?: any;
     onPermissionAsked?: (req: PermissionRequest) => void;
     mode?: 'plan' | 'build';
 }
@@ -107,12 +109,12 @@ function isTextPart(part: any): boolean {
 
 function isReasoningPart(part: any): boolean {
     const type = getPartType(part);
-    return type === 'reasoning' || type === 'thinking';
+    return type === 'reasoning' || type === 'thinking' || type.includes('reasoning') || type.includes('thinking');
 }
 
 function isToolPart(part: any): boolean {
     const type = getPartType(part);
-    return type === 'tool' || type === 'tool-invocation' || type === 'tool-result';
+    return type === 'tool' || type === 'tool-invocation' || type === 'tool-result' || type.includes('tool');
 }
 
 function getPartRole(part: any, props: any = {}): string {
@@ -127,9 +129,9 @@ function getPartRole(part: any, props: any = {}): string {
     ).toLowerCase();
 }
 
-function isUserAuthoredPart(part: any, props: any = {}): boolean {
+function isAssistantAuthoredPart(part: any, props: any = {}): boolean {
     const role = getPartRole(part, props);
-    return role === 'user' || role === 'input' || role === 'prompt';
+    return role === 'assistant';
 }
 
 function getPartCacheKey(part: any, fallbackType: string): string {
@@ -140,6 +142,8 @@ function getPartText(part: any): string {
     if (typeof part?.text === 'string') return part.text;
     if (typeof part?.content === 'string') return part.content;
     if (typeof part?.message === 'string') return part.message;
+    if (typeof part?.reasoning === 'string') return part.reasoning;
+    if (typeof part?.thinking === 'string') return part.thinking;
     return '';
 }
 
@@ -254,12 +258,23 @@ function toolEventToUpdate(eventType: string, props: any): OpenCodeToolPartUpdat
     if (!tool && !callID) return null;
 
     const error = props?.error || props?.call?.error;
-    const isAfter = eventType.endsWith('.after') || eventType.endsWith('.updated');
+    const normalizedEventType = eventType.toLowerCase();
+    const isRunning =
+        normalizedEventType.endsWith('.before') ||
+        normalizedEventType.includes('start') ||
+        normalizedEventType.includes('running') ||
+        normalizedEventType.includes('progress');
+    const isAfter =
+        normalizedEventType.endsWith('.after') ||
+        normalizedEventType.endsWith('.updated') ||
+        normalizedEventType.includes('complete') ||
+        normalizedEventType.includes('finish') ||
+        normalizedEventType.includes('done');
     return {
         partId: callID || tool || 'opencode-tool',
         callID: callID || tool || 'opencode-tool',
         toolName: tool || 'unknown',
-        status: eventType.endsWith('.before')
+        status: isRunning
             ? 'running'
             : error
               ? 'error'
@@ -277,6 +292,139 @@ function toolEventToUpdate(eventType: string, props: any): OpenCodeToolPartUpdat
         error: stringifyToolValue(error),
         title: props?.title || props?.description,
     };
+}
+
+function normalizeOpenCodeTools(tools: any): Record<string, boolean> | undefined {
+    if (!tools) return undefined;
+    if (!Array.isArray(tools) && typeof tools === 'object') {
+        return tools;
+    }
+    if (!Array.isArray(tools)) return undefined;
+
+    const normalized: Record<string, boolean> = {};
+    for (const tool of tools) {
+        const name =
+            tool?.function?.name ||
+            tool?.name ||
+            tool?.id ||
+            tool?.tool;
+        if (name) normalized[name] = true;
+    }
+    return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function buildPromptBody(options: OpenCodeChatOptions, model: any): any {
+    const rawCustomBody = options.customBody && typeof options.customBody === 'object'
+        ? { ...options.customBody }
+        : {};
+    const customBody: any = {};
+    for (const key of ['messageID', 'agent', 'noReply', 'tools', 'format', 'system', 'variant']) {
+        if (rawCustomBody[key] !== undefined) {
+            customBody[key] = rawCustomBody[key];
+        }
+    }
+
+    const tools = normalizeOpenCodeTools(options.tools ?? rawCustomBody.tools);
+    if (tools) {
+        customBody.tools = tools;
+    }
+
+    return {
+        ...customBody,
+        model,
+        parts: [{ type: 'text', text: options.prompt }],
+        ...(options.mode ? { agent: options.mode === 'plan' ? 'plan' : 'build' } : {})
+    };
+}
+
+function waitForRealtimeIdle(idlePromise: Promise<void>, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(new Error('Request aborted'));
+            return;
+        }
+
+        const timeout = setTimeout(() => {
+            cleanup();
+            reject(new Error(`OpenCode request timed out (no session idle event for ${Math.round(IDLE_TIMEOUT_MS / 60000)} minutes). The server may be overloaded or not responding.`));
+        }, IDLE_TIMEOUT_MS);
+        const onAbort = () => {
+            cleanup();
+            reject(new Error('Request aborted'));
+        };
+        const cleanup = () => {
+            clearTimeout(timeout);
+            signal?.removeEventListener('abort', onAbort);
+        };
+
+        signal?.addEventListener('abort', onAbort);
+        idlePromise.then(() => {
+            cleanup();
+            resolve();
+        }, (err) => {
+            cleanup();
+            reject(err);
+        });
+    });
+}
+
+function getEventParts(props: any): any[] {
+    const candidates = [
+        props?.part,
+        props?.message?.part,
+        props?.data?.part,
+        props?.payload?.part,
+    ].filter(Boolean);
+
+    for (const parts of [props?.parts, props?.message?.parts, props?.data?.parts, props?.payload?.parts]) {
+        if (Array.isArray(parts)) {
+            candidates.push(...parts);
+        }
+    }
+
+    return candidates;
+}
+
+function getPartSessionId(part: any, props: any): string | undefined {
+    return props?.sessionID || props?.sessionId || props?.message?.sessionID || props?.message?.sessionId || part?.sessionID || part?.sessionId;
+}
+
+function getPartMessageId(part: any, props: any): string | undefined {
+    return part?.messageID || part?.messageId || props?.messageID || props?.messageId || props?.info?.id || props?.message?.id;
+}
+
+function processRealtimePart(
+    part: any,
+    props: any,
+    delta: any,
+    partTextCache: Map<string, string>,
+    callbacks: {
+        onTextDelta?: (delta: string, partId: string) => void;
+        onReasoningDelta?: (delta: string, partId: string) => void;
+        onToolPartUpdate?: (part: any) => void;
+    }
+): boolean {
+    if (!part) return false;
+    const partId = part.id || part.partID || part.callID || part.toolCallID || 'unknown';
+
+    if (isTextPart(part) && callbacks.onTextDelta && isAssistantAuthoredPart(part, props)) {
+        const textDelta = getPartDelta(part, delta, partTextCache, 'text');
+        if (textDelta) callbacks.onTextDelta(textDelta, partId);
+        return !!textDelta;
+    }
+
+    if (isReasoningPart(part) && callbacks.onReasoningDelta) {
+        const reasoningDelta = getPartDelta(part, delta, partTextCache, 'reasoning');
+        if (reasoningDelta) callbacks.onReasoningDelta(reasoningDelta, partId);
+        return !!reasoningDelta;
+    }
+
+    if (isToolPart(part) && callbacks.onToolPartUpdate) {
+        callbacks.onToolPartUpdate(part);
+        return true;
+    }
+
+    return false;
 }
 
 function formatErrorMessage(error: any): string {
@@ -309,7 +457,8 @@ async function openCodeFetch(
     serverUrl: string,
     path: string,
     options: RequestInit = {},
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    idleTimeoutMs: number | null = IDLE_TIMEOUT_MS
 ): Promise<{ response: Response; resetTimeout: () => void; clearTimeout: () => void }> {
     const url = `${normalizeServerUrl(serverUrl)}${path}`;
 
@@ -318,7 +467,8 @@ async function openCodeFetch(
     }
 
     const controller = new AbortController();
-    let timeout: ReturnType<typeof setTimeout> | null = setTimeout(() => controller.abort(), IDLE_TIMEOUT_MS);
+    let timeout: ReturnType<typeof setTimeout> | null =
+        idleTimeoutMs === null ? null : setTimeout(() => controller.abort(), idleTimeoutMs);
     let handedOff = false;
     let cleanupSignal: (() => void) | null = null;
 
@@ -332,9 +482,11 @@ async function openCodeFetch(
     };
 
     const resetTimeout = () => {
-        if (!timeout) return;
-        globalThis.clearTimeout(timeout);
-        timeout = setTimeout(() => controller.abort(), IDLE_TIMEOUT_MS);
+        if (idleTimeoutMs === null) return;
+        if (timeout) {
+            globalThis.clearTimeout(timeout);
+        }
+        timeout = setTimeout(() => controller.abort(), idleTimeoutMs);
     };
 
     cleanupSignal = signal
@@ -364,7 +516,8 @@ async function openCodeFetch(
             if (signal?.aborted) {
                 throw new Error('Request aborted');
             }
-            throw new Error('OpenCode request timed out (no activity for 5 minutes). The server may be overloaded or not responding.');
+            const minutes = idleTimeoutMs ? Math.round(idleTimeoutMs / 60_000) : 0;
+            throw new Error(`OpenCode request timed out${minutes ? ` (no activity for ${minutes} minutes)` : ''}. The server may be overloaded or not responding.`);
         }
         if (isConnectionError(err)) {
             throw new Error(
@@ -406,6 +559,8 @@ class EventStreamClient {
     private serverUrl: string;
     private targetSessionId: string;
     private partTextCache = new Map<string, string>();
+    private partsById = new Map<string, any>();
+    private messageRoles = new Map<string, string>();
     private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
     constructor(serverUrl: string, sessionId: string) {
@@ -424,7 +579,7 @@ class EventStreamClient {
               })()
             : null;
 
-        const url = `${this.serverUrl}/event`;
+        const url = `${this.serverUrl}/global/event`;
         console.log('[OpenCode] EventStream: connecting to', url);
         let response: Response;
         try {
@@ -484,29 +639,46 @@ class EventStreamClient {
             const { type: eventType, properties: props } = getEventPayload(parsed, currentEvent);
             if (!eventType) return;
 
-            if (eventType === 'message.part.updated') {
-                const part = props.part;
-                const delta = props.delta;
-                if (!part) return;
+            if (eventType === 'message.updated' && props?.info?.id) {
+                this.messageRoles.set(props.info.id, String(props.info.role || '').toLowerCase());
+            }
 
-                const partSessionId = props.sessionID || part.sessionID || part.sessionId;
-                if (partSessionId && partSessionId !== this.targetSessionId) return;
+            const eventParts = getEventParts(props);
+            if (eventParts.length > 0) {
+                for (const part of eventParts) {
+                    const partSessionId = getPartSessionId(part, props);
+                    if (partSessionId && partSessionId !== this.targetSessionId) continue;
+                    const messageId = getPartMessageId(part, props);
+                    const partId = part.id || part.partID || part.partId;
+                    const role = messageId ? this.messageRoles.get(messageId) : undefined;
+                    const partWithRole = role ? { ...part, role } : part;
+                    if (partId) {
+                        this.partsById.set(partId, { ...(this.partsById.get(partId) || {}), ...partWithRole });
+                    }
 
-                eventCount++;
-                if (eventCount <= 5 || eventCount % 20 === 0) {
-                    console.log(`[OpenCode] EventStream: part.updated #${eventCount}, type=${part.type}, delta=${(delta || '').slice(0, 50)}`);
+                    eventCount++;
+                    if (eventCount <= 5 || eventCount % 20 === 0) {
+                        console.log(`[OpenCode] EventStream: part #${eventCount}, event=${eventType}, type=${part.type}, delta=${(props.delta || '').slice(0, 50)}`);
+                    }
+
+                    processRealtimePart(partWithRole, props, props.delta, this.partTextCache, callbacks);
                 }
+                return;
+            }
 
-                if (isTextPart(part) && callbacks.onTextDelta && !isUserAuthoredPart(part, props)) {
-                    const textDelta = getPartDelta(part, delta, this.partTextCache, 'text');
-                    if (textDelta) callbacks.onTextDelta(textDelta, part.id);
-                } else if (isReasoningPart(part) && callbacks.onReasoningDelta) {
-                    const reasoningDelta = getPartDelta(part, delta, this.partTextCache, 'reasoning');
-                    if (reasoningDelta) callbacks.onReasoningDelta(reasoningDelta, part.id);
-                } else if (isToolPart(part) && callbacks.onToolPartUpdate) {
-                    callbacks.onToolPartUpdate(part);
+            if (eventType === 'message.part.delta') {
+                const sid = props.sessionID || props.sessionId;
+                if (sid && sid !== this.targetSessionId) return;
+
+                const partId = props.partID || props.partId || props.id;
+                const cachedPart = partId ? this.partsById.get(partId) : null;
+                if (cachedPart) {
+                    processRealtimePart(cachedPart, props, props.delta, this.partTextCache, callbacks);
+                    return;
                 }
-            } else if (eventType.startsWith('tool.execute.') && callbacks.onToolPartUpdate) {
+            }
+
+            if ((eventType.startsWith('tool.execute.') || eventType.toLowerCase().includes('tool')) && callbacks.onToolPartUpdate) {
                 const sid = props.sessionID || props.sessionId || props.call?.sessionID;
                 if (sid && sid !== this.targetSessionId) return;
 
@@ -518,6 +690,12 @@ class EventStreamClient {
                 const sid = props.sessionID;
                 if (!sid || sid === this.targetSessionId) {
                     console.log('[OpenCode] EventStream: session.idle');
+                    callbacks.onSessionIdle?.();
+                }
+            } else if (eventType === 'session.status') {
+                const sid = props.sessionID;
+                if ((!sid || sid === this.targetSessionId) && props?.status?.type === 'idle') {
+                    console.log('[OpenCode] EventStream: session.status idle');
                     callbacks.onSessionIdle?.();
                 }
             } else if (eventType === 'session.error') {
@@ -558,6 +736,11 @@ class EventStreamClient {
                     for (const line of lines) {
                         processLine(line);
                     }
+                }
+
+                if (buffer.trim()) {
+                    processLine(buffer);
+                    buffer = '';
                 }
             } catch (err: any) {
                 if (err.name !== 'AbortError') {
@@ -649,29 +832,26 @@ async function parseSSEStream(
                         }
 
                         const { type: eventType, properties } = getEventPayload(parsed, currentEvent);
-                        if (eventType === 'message.part.updated') {
-                            const part = properties.part;
-                            const delta = properties.delta;
-                            if (part) {
-                                if (isTextPart(part) && !isUserAuthoredPart(part, properties)) {
-                                    const textDelta = getPartDelta(part, delta, partTextCache, 'text');
-                                    if (textDelta) {
+                        const eventParts = getEventParts(properties);
+                        if (eventParts.length > 0) {
+                            for (const part of eventParts) {
+                                processRealtimePart(part, properties, properties.delta, partTextCache, {
+                                    onTextDelta: (textDelta) => {
                                         fullText += textDelta;
                                         onChunk(textDelta);
+                                    },
+                                    onReasoningDelta: (reasoningDelta) => {
+                                        onThinkingChunk?.(reasoningDelta);
+                                    },
+                                    onToolPartUpdate: (toolPart) => {
+                                        onToolPartUpdate?.(toolPartToUpdate(toolPart));
                                     }
-                                } else if (isReasoningPart(part) && onThinkingChunk) {
-                                    const reasoningDelta = getPartDelta(part, delta, partTextCache, 'reasoning');
-                                    if (reasoningDelta) {
-                                        onThinkingChunk(reasoningDelta);
-                                    }
-                                } else if (isToolPart(part) && onToolPartUpdate) {
-                                    onToolPartUpdate(toolPartToUpdate(part));
-                                }
+                                });
                             }
                             continue;
                         }
 
-                        if (eventType.startsWith('tool.execute.') && onToolPartUpdate) {
+                        if ((eventType.startsWith('tool.execute.') || eventType.toLowerCase().includes('tool')) && onToolPartUpdate) {
                             const update = toolEventToUpdate(eventType, properties);
                             if (update) {
                                 onToolPartUpdate(update);
@@ -696,6 +876,38 @@ async function parseSSEStream(
                             continue;
                         }
                         throw parseErr;
+                    }
+                }
+            }
+        }
+
+        if (buffer.trim()) {
+            const line = buffer;
+            buffer = '';
+            const trimmed = line.trim();
+            if (trimmed.startsWith('data:')) {
+                const data = trimmed.startsWith('data: ') ? trimmed.slice(6) : trimmed.slice(5);
+                if (data !== '[DONE]') {
+                    try {
+                        const parsed = JSON.parse(data);
+                        const { properties } = getEventPayload(parsed, currentEvent);
+                        const eventParts = getEventParts(properties);
+                        for (const part of eventParts) {
+                            processRealtimePart(part, properties, properties.delta, partTextCache, {
+                                onTextDelta: (textDelta) => {
+                                    fullText += textDelta;
+                                    onChunk(textDelta);
+                                },
+                                onReasoningDelta: (reasoningDelta) => {
+                                    onThinkingChunk?.(reasoningDelta);
+                                },
+                                onToolPartUpdate: (toolPart) => {
+                                    onToolPartUpdate?.(toolPartToUpdate(toolPart));
+                                }
+                            });
+                        }
+                    } catch {
+                        // Incomplete trailing SSE frames are ignored.
                     }
                 }
             }
@@ -907,12 +1119,24 @@ export async function chatOpenCode(
 
         // Try real-time event stream for thinking/tool updates
         const wantRealtime = !!(options.onThinkingChunk || options.onToolPartUpdate);
+        let realtimeText = '';
         let realtimeThinking = '';
+        let resolveRealtimeIdle: (() => void) | null = null;
+        let rejectRealtimeIdle: ((error: Error) => void) | null = null;
+        const realtimeIdle = new Promise<void>((resolve, reject) => {
+            resolveRealtimeIdle = resolve;
+            rejectRealtimeIdle = reject;
+        });
 
         if (wantRealtime) {
             try {
                 eventStream = new EventStreamClient(serverUrl, sessionId);
                 await eventStream.connect({
+                    onTextDelta: (delta) => {
+                        console.log('[OpenCode] EventStream onTextDelta:', delta.slice(0, 50));
+                        realtimeText += delta;
+                        options.onChunk?.(delta);
+                    },
                     onReasoningDelta: (delta) => {
                         console.log('[OpenCode] EventStream onReasoningDelta:', delta.slice(0, 50));
                         realtimeThinking += delta;
@@ -922,8 +1146,13 @@ export async function chatOpenCode(
                         if (!options.onToolPartUpdate) return;
                         options.onToolPartUpdate(isOpenCodeToolPartUpdate(part) ? part : toolPartToUpdate(part));
                     },
+                    onSessionIdle: () => {
+                        resolveRealtimeIdle?.();
+                    },
                     onSessionError: (error) => {
-                        options.onError?.(new Error(formatErrorMessage(error)));
+                        const err = new Error(formatErrorMessage(error));
+                        options.onError?.(err);
+                        rejectRealtimeIdle?.(err);
                     },
                     onPermissionAsked: (req) => {
                         options.onPermissionAsked?.(req);
@@ -936,19 +1165,47 @@ export async function chatOpenCode(
             }
         }
 
+        const promptBody = buildPromptBody(options, model);
+
+        if (eventStream) {
+            const asyncFetchResult = await openCodeFetch(
+                serverUrl,
+                `/session/${encodeURIComponent(sessionId)}/prompt_async`,
+                {
+                    method: 'POST',
+                    body: JSON.stringify(promptBody)
+                },
+                options.signal,
+                IDLE_TIMEOUT_MS
+            );
+            try {
+                if (!asyncFetchResult.response.ok) {
+                    const errText = await asyncFetchResult.response.text().catch(() => '');
+                    throw new Error(`OpenCode async request failed: ${asyncFetchResult.response.status} ${asyncFetchResult.response.statusText}${errText ? ' - ' + errText : ''}`);
+                }
+
+                await waitForRealtimeIdle(realtimeIdle, options.signal);
+                options.onComplete?.(realtimeText);
+                if (realtimeThinking) {
+                    options.onThinkingComplete?.(realtimeThinking);
+                }
+                eventStream.close();
+                return { sessionId: sessionId! };
+            } finally {
+                asyncFetchResult.clearTimeout();
+            }
+        }
+
         // Send the message
         const messageFetchResult = await openCodeFetch(
             serverUrl,
             `/session/${encodeURIComponent(sessionId)}/message`,
             {
                 method: 'POST',
-                body: JSON.stringify({
-                    model,
-                    parts: [{ type: 'text', text: options.prompt }],
-                    ...(options.mode ? { mode: options.mode } : {})
-                })
+                body: JSON.stringify(promptBody)
             },
-            options.signal
+            options.signal,
+            eventStream ? null : IDLE_TIMEOUT_MS
         );
         const { response, resetTimeout } = messageFetchResult;
 
@@ -967,7 +1224,9 @@ export async function chatOpenCode(
             let accumulatedThinking = '';
             try {
                 fullText = await parseSSEStream(response, (text) => {
-                    options.onChunk?.(text);
+                    if (!realtimeText) {
+                        options.onChunk?.(text);
+                    }
                 }, options.signal, (thinking) => {
                     accumulatedThinking += thinking;
                     if (!realtimeThinking) {
@@ -975,7 +1234,7 @@ export async function chatOpenCode(
                     }
                 }, options.onToolPartUpdate, resetTimeout);
             } catch (streamErr) {
-                const partialText = fullText;
+                const partialText = fullText || realtimeText;
                 const partialThinking = accumulatedThinking || realtimeThinking;
                 if (partialText) {
                     options.onComplete?.(partialText);
@@ -986,7 +1245,7 @@ export async function chatOpenCode(
                 eventStream?.close();
                 throw streamErr;
             }
-            const finalText = fullText;
+            const finalText = fullText || realtimeText;
             const finalThinking = accumulatedThinking || realtimeThinking;
             options.onComplete?.(finalText);
             if (finalThinking) {
@@ -1003,8 +1262,10 @@ export async function chatOpenCode(
             } catch {
                 if (responseText.trim()) {
                     fullText = responseText;
-                    options.onChunk?.(fullText);
-                    options.onComplete?.(fullText);
+                    if (!realtimeText) {
+                        options.onChunk?.(fullText);
+                    }
+                    options.onComplete?.(fullText || realtimeText);
                     eventStream?.close();
                     return { sessionId: sessionId! };
                 }
@@ -1038,7 +1299,7 @@ export async function chatOpenCode(
                 }
             }
 
-            if (options.onChunk && fullText) {
+            if (options.onChunk && fullText && !realtimeText) {
                 const chunkSize = Math.max(1, Math.ceil(fullText.length / 100));
                 for (let i = 0; i < fullText.length; i += chunkSize) {
                     if (options.signal?.aborted) throw new Error('Request aborted');
@@ -1046,7 +1307,7 @@ export async function chatOpenCode(
                 }
             }
 
-            options.onComplete?.(fullText);
+            options.onComplete?.(fullText || realtimeText);
         }
 
         eventStream?.close();

@@ -1211,6 +1211,7 @@
         if (!update) return;
 
         const updateKey = getOpenCodeToolPartKey(update);
+        const isTerminalStatus = update.status === 'completed' || update.status === 'error';
         const existingIndex = openCodeToolParts.findIndex(
             (part: any) => getOpenCodeToolPartKey(part) === updateKey
         );
@@ -1221,6 +1222,14 @@
             openCodeToolParts = next;
         } else {
             openCodeToolParts = [...openCodeToolParts, update];
+        }
+
+        if (isTerminalStatus) {
+            toolCallsExpanded = {
+                ...toolCallsExpanded,
+                [updateKey]: false,
+            };
+        } else if (toolCallsExpanded[updateKey] === undefined) {
             toolCallsExpanded = {
                 ...toolCallsExpanded,
                 [updateKey]: true,
@@ -3245,6 +3254,7 @@
     ) {
         // 过滤掉空的 assistant 消息，防止某些 Provider（例如 Kimi）报错
         // 但保留有生图的 assistant 消息
+        const includeHistoricalContext = false;
         let messagesToSend = messages
             .filter(msg => {
                 if (msg.role === 'system') return false;
@@ -3298,6 +3308,7 @@
 
                 const isLastMessage = index === array.length - 1;
                 if (
+                    includeHistoricalContext &&
                     !isLastMessage &&
                     msg.role === 'user' &&
                     msg.contextDocuments &&
@@ -3594,6 +3605,7 @@
         // Agent/Ask 模式带有工具时，添加工具使用强制规则
         let hasToolInstruction = false;
         let hasSoulEnabled = false;
+        const hasSoulDoc = !!settings.soulDocId?.trim();
         if (chatMode === 'plan' && userToolCount > 0) {
             // 如果已有基础提示词，添加换行后追加工具说明；否则直接使用工具说明
             if (baseSystemPrompt.trim()) {
@@ -3607,7 +3619,7 @@
         }
 
         // 如果启用了SOUL工具，自动获取SOUL文档内容并追加到系统提示词
-        if (hasSoulEnabled) {
+        if (hasSoulEnabled || hasSoulDoc) {
             try {
                 const soulResult = await soul({ operation: 'getDoc' });
                 if (soulResult.success && soulResult.content) {

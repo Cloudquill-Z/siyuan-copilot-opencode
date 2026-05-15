@@ -95,6 +95,8 @@ export interface ChatOptions {
     onThinkingChunk?: (chunk: string) => void;
     onThinkingComplete?: (thinking: string) => void;
     onToolPartUpdate?: (update: OpenCodeToolPartUpdate) => void;
+    tools?: any;
+    onToolCallComplete?: (toolCalls: any[]) => void;
     onPermissionAsked?: (req: import('./providers/opencode-provider').PermissionRequest) => void;
     customBody?: any;
     enableImageGeneration?: boolean;
@@ -208,6 +210,8 @@ export async function chat(
             onThinkingChunk: options.onThinkingChunk,
             onThinkingComplete: options.onThinkingComplete,
             onToolPartUpdate: options.onToolPartUpdate,
+            tools: options.tools,
+            customBody: options.customBody,
             onPermissionAsked: options.onPermissionAsked,
             mode: options.mode
         },

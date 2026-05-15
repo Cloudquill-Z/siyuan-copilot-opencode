@@ -23,7 +23,7 @@ import { ensureServerRunning, stopServe, detectOpenCodeCLI, getServedPort, isSer
 import { startHealthPoll, stopHealthPoll } from "./stores/connectionStatus";
 import "@/index.scss";
 
-import SettingPanel from "./SettingsPannel.svelte";
+import SettingPanel from "./SettingsPanel.svelte";
 import { getDefaultSettings } from "./defaultSettings";
 import { normalizeSettings } from "./settingsSchema";
 import { setPluginInstance, t, getCurrentLanguage } from "./utils/i18n";
@@ -60,6 +60,25 @@ import {
 export const SETTINGS_FILE = "settings.json";
 const WEBVIEW_HISTORY_FILE = "webview-history.json";
 const MAX_HISTORY_COUNT = 200;
+const OPENCODE_STOP_DELAY_MS = 15_000;
+const OPENCODE_STOP_TIMER_KEY = "__siyuanCopilotOpenCodeStopTimer";
+
+function clearPendingOpenCodeStop() {
+    const win = window as any;
+    if (win[OPENCODE_STOP_TIMER_KEY]) {
+        window.clearTimeout(win[OPENCODE_STOP_TIMER_KEY]);
+        win[OPENCODE_STOP_TIMER_KEY] = null;
+    }
+}
+
+function scheduleOpenCodeStop() {
+    const win = window as any;
+    clearPendingOpenCodeStop();
+    win[OPENCODE_STOP_TIMER_KEY] = window.setTimeout(() => {
+        win[OPENCODE_STOP_TIMER_KEY] = null;
+        stopServe();
+    }, OPENCODE_STOP_DELAY_MS);
+}
 
 interface WebViewHistory {
     url: string;
@@ -238,13 +257,14 @@ export default class PluginSample extends Plugin {
     private isLikelyUrl(input: string): boolean {
         if (!input) return false;
         const s = input.trim();
-        // 含空格的通常不是 URL，例如搜索词
         if (s.indexOf(' ') >= 0) return false;
-        // 以协议开头明显是 URL
-        if (/^[a-zA-Z][a-zA-Z0-9+-.]*:\/\//.test(s)) return true;
-        // 包含点号且不以@开头(排除邮箱)，通常是域名或网址
-        if (/\./.test(s) && !/^@/.test(s)) return true;
-        return false;
+        if (/^https?:\/\//i.test(s)) return true;
+        if (/^[a-zA-Z][a-zA-Z0-9+-.]*:\/\//.test(s)) return false;
+        if (/^@/.test(s) || s.includes('@')) return false;
+
+        const domainPattern =
+            /^(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|org|net|io|ai|app|dev|cn|top|xyz|me|co|edu|gov|info|wiki|site|tech|cloud|page|blog)(?::\d{1,5})?(?:[/?#][^\s]*)?$/i;
+        return domainPattern.test(s);
     }
 
     // 依次尝试多个 favicon 源，遇到第一个成功的就返回 data:image...
@@ -436,6 +456,7 @@ export default class PluginSample extends Plugin {
     async onload() {
         // 插件被启用时会自动调用这个函数
         // 设置i18n插件实例
+        clearPendingOpenCodeStop();
         setPluginInstance(this);
 
         // Load settings before auto-starting OpenCode so custom serverUrl/port is honored.
@@ -1926,6 +1947,23 @@ export default class PluginSample extends Plugin {
         this.chatDialogs.set(dialogId, { dialog, app: chatApp });
     }
 
+    private getOpenCodeWorkingDir(): string {
+        try {
+            const nodeRequire = typeof window !== 'undefined' ? (window as any).require : null;
+            const os = nodeRequire?.('os');
+            const homeDir = typeof os?.homedir === 'function' ? os.homedir() : '';
+            const cwd = typeof process !== 'undefined' && typeof process.cwd === 'function'
+                ? process.cwd()
+                : '';
+            if (!cwd || /\\Program Files\\SiYuan$/i.test(cwd) || /\/Applications\/SiYuan\.app/i.test(cwd)) {
+                return homeDir || cwd || '.';
+            }
+            return cwd;
+        } catch {
+            return '.';
+        }
+    }
+
     private async initOpenCodeServer(settingsOverride?: any) {
         try {
             const settings = settingsOverride || await getSettings();
@@ -1937,7 +1975,7 @@ export default class PluginSample extends Plugin {
             const available = await ensureServerRunning({
                 port,
                 hostname,
-                workingDir: process.cwd(),
+                workingDir: this.getOpenCodeWorkingDir(),
             });
 
             if (!available.success) {
@@ -1963,8 +2001,9 @@ export default class PluginSample extends Plugin {
         this.eventBus.off("click-editortitleicon", this.clickEditorTitleIconBindThis);
         this.eventBus.off("open-menu-link", this.openMenuLinkBindThis);
 
-        // Stop OpenCode serve if we started it
-        stopServe();
+        // SiYuan sync can transiently unload/reload plugins. Delay stopping the
+        // spawned OpenCode server so in-flight async sessions are not interrupted.
+        scheduleOpenCodeStop();
         stopHealthPoll();
 
         console.log(`${PLUGIN_BRAND_NAME} onunload`);
