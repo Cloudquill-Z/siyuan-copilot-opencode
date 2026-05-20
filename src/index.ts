@@ -11,7 +11,6 @@ import {
     Protyle,
     openWindow,
     Constants,
-    openMobileFileById,
     lockScreen,
     ICard,
     ICardData

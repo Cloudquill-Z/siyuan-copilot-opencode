@@ -551,14 +551,6 @@
   }
 }
 
-/* ── Mobile ─────────────────────────────────────────────────── */
-
-@media (max-width: 768px) {
-  .ai-sidebar__messages { padding: 10px; }
-  .ai-sidebar__input-container { padding: 8px 10px; }
-  .ai-message__content { max-width: 90%; font-size: 13px; }
-}
-
 /* ── B3 Typography fixes ────────────────────────────────────── */
 
 .ai-sidebar .vditor-task {

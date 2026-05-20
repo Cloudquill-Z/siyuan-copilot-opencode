@@ -8,7 +8,8 @@
     "all"
   ],
   "frontends": [
-    "all"
+    "desktop",
+    "desktop-window"
   ],
   "disabledInPublish": true,
   "displayName": {

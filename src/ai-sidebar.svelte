@@ -100,7 +100,7 @@
     let isLoading = false;
     let streamingMessage = '';
     let streamingThinkingCollapsed = false;
-    let streamingToolCallsCollapsed = false;
+    let streamingToolCallsCollapsed = true;
     let streamingThinking = ''; // 流式思考内容
     let isThinkingPhase = false; // 是否在思考阶段
     let settings: any = {};
@@ -112,6 +112,21 @@
 
     // 思考过程折叠状态管理
     let thinkingCollapsed: Record<number, boolean> = {};
+    let toolCallGroupsCollapsed: Record<string, boolean> = {};
+
+    function isToolCallGroupCollapsed(
+        state: Record<string, boolean>,
+        key: string
+    ): boolean {
+        return state[key] ?? true;
+    }
+
+    function toggleToolCallGroup(key: string) {
+        toolCallGroupsCollapsed = {
+            ...toolCallGroupsCollapsed,
+            [key]: !isToolCallGroupCollapsed(toolCallGroupsCollapsed, key),
+        };
+    }
 
     // 消息编辑状态
     let editingMessageIndex: number | null = null;
@@ -4095,7 +4110,7 @@
         streamingThinking = '';
         openCodeToolParts = [];
         streamingThinkingCollapsed = false;
-        streamingToolCallsCollapsed = false;
+        streamingToolCallsCollapsed = true;
         thinkingBeforeToolCalls = ''; // 重置工具调用前的思考内容
         isThinkingPhase = false;
         hasUnsavedChanges = true;
@@ -5143,12 +5158,6 @@
                             // 如果有思考内容，添加到消息中
                             if (streamingThinking) {
                                 assistantMessage.thinking = streamingThinking;
-                            }
-
-                            if (openCodeToolParts.length > 0) {
-                                assistantMessage.openCodeToolParts = openCodeToolParts.map(part => ({
-                                    ...part,
-                                }));
                             }
 
                             if (openCodeToolParts.length > 0) {
@@ -10608,10 +10617,23 @@
                                     )}
 
                                     {#if roundToolCalls.length > 0}
+                                        {@const toolGroupKey = `tool-round-${messageIndex}-${msgIndex}-${roundIndex}`}
+                                        {@const toolGroupCollapsed = isToolCallGroupCollapsed(toolCallGroupsCollapsed, toolGroupKey)}
                                         <div class="ai-message__tool-calls">
-                                            <div class="ai-message__tool-calls-title">
+                                            <div
+                                                class="ai-message__tool-calls-title ai-message__tool-calls-title--clickable"
+                                                on:click={() => toggleToolCallGroup(toolGroupKey)}
+                                                title={toolGroupCollapsed ? '展开工具执行' : '折叠工具执行'}
+                                            >
+                                                <svg
+                                                    class="ai-message__tool-call-icon"
+                                                    class:collapsed={toolGroupCollapsed}
+                                                >
+                                                    <use xlink:href="#iconRight"></use>
+                                                </svg>
                                                 🔧 {t('tools.calling')} ({roundToolCalls.length})
                                             </div>
+                                            {#if !toolGroupCollapsed}
                                             {#each roundToolCalls as toolCall}
                                                 {@const toolResult = group.messages
                                                     .slice(msgIndex + 1)
@@ -10748,6 +10770,7 @@
                                                     {/if}
                                                 </div>
                                             {/each}
+                                            {/if}
                                         </div>
                                     {/if}
                                 {/if}
@@ -10783,8 +10806,8 @@
                                 </div>
                             {/if}
 
-                            <!-- 显示消息内容（只有在有实际内容时才显示，且没有多模型响应时才显示） -->
-                            {#if message.content && message.content
+                            <!-- 用户消息内容保持原位；AI 最终内容统一放到工具与差异之后 -->
+                            {#if message.role !== 'assistant' && message.content && message.content
                                     .toString()
                                     .trim() && !(message.role === 'assistant' && message.multiModelResponses && message.multiModelResponses.length > 0)}
                                 {@const displayContent = getDisplayContent(message.content)}
@@ -10800,10 +10823,23 @@
 
                             <!-- 兼容旧数据：显示工具调用 -->
                             {#if message.role === 'assistant' && message.tool_calls && message.tool_calls.length > 0 && !message.toolCallThinkings && !(message.multiModelResponses && message.multiModelResponses.length > 0)}
+                                {@const legacyToolGroupKey = `legacy-tools-${messageIndex}-${msgIndex}`}
+                                {@const legacyToolGroupCollapsed = isToolCallGroupCollapsed(toolCallGroupsCollapsed, legacyToolGroupKey)}
                                 <div class="ai-message__tool-calls">
-                                    <div class="ai-message__tool-calls-title">
+                                    <div
+                                        class="ai-message__tool-calls-title ai-message__tool-calls-title--clickable"
+                                        on:click={() => toggleToolCallGroup(legacyToolGroupKey)}
+                                        title={legacyToolGroupCollapsed ? '展开工具执行' : '折叠工具执行'}
+                                    >
+                                        <svg
+                                            class="ai-message__tool-call-icon"
+                                            class:collapsed={legacyToolGroupCollapsed}
+                                        >
+                                            <use xlink:href="#iconRight"></use>
+                                        </svg>
                                         🔧 {t('tools.calling')} ({message.tool_calls.length})
                                     </div>
+                                    {#if !legacyToolGroupCollapsed}
                                     {#each message.tool_calls as toolCall}
                                         {@const toolResult = group.messages
                                             .slice(msgIndex + 1)
@@ -10917,14 +10953,28 @@
                                             {/if}
                                         </div>
                                     {/each}
+                                    {/if}
                                 </div>
                             {/if}
 
                             {#if message.role === 'assistant' && message.openCodeToolParts && message.openCodeToolParts.length > 0 && !(message.multiModelResponses && message.multiModelResponses.length > 0)}
+                                {@const openCodeToolGroupKey = `opencode-tools-${messageIndex}-${msgIndex}`}
+                                {@const openCodeToolGroupCollapsed = isToolCallGroupCollapsed(toolCallGroupsCollapsed, openCodeToolGroupKey)}
                                 <div class="ai-message__tool-calls">
-                                    <div class="ai-message__tool-calls-title">
+                                    <div
+                                        class="ai-message__tool-calls-title ai-message__tool-calls-title--clickable"
+                                        on:click={() => toggleToolCallGroup(openCodeToolGroupKey)}
+                                        title={openCodeToolGroupCollapsed ? '展开工具执行' : '折叠工具执行'}
+                                    >
+                                        <svg
+                                            class="ai-message__tool-call-icon"
+                                            class:collapsed={openCodeToolGroupCollapsed}
+                                        >
+                                            <use xlink:href="#iconRight"></use>
+                                        </svg>
                                         🔧 工具执行 ({message.openCodeToolParts.length})
                                     </div>
+                                    {#if !openCodeToolGroupCollapsed}
                                     {#each message.openCodeToolParts as toolPart (getOpenCodeToolPartKey(toolPart))}
                                         {@const toolPartKey = getOpenCodeToolPartKey(toolPart)}
                                         {@const toolPartCollapsed = !toolCallsExpanded[toolPartKey]}
@@ -10988,6 +11038,7 @@
                                             {/if}
                                         </div>
                                     {/each}
+                                    {/if}
                                 </div>
                             {/if}
 
@@ -11266,16 +11317,34 @@
                                                             {/if}
 
                                                             <!-- 该轮工具调用 -->
+                                                            {@const historyCardToolGroupKey = `hist-mm-tools-${messageIndex}-${msgIndex}-${index}-${groupIndex}`}
+                                                            {@const historyCardToolGroupCollapsed = isToolCallGroupCollapsed(toolCallGroupsCollapsed, historyCardToolGroupKey)}
                                                             <div
                                                                 class="ai-message__tool-calls"
                                                                 style="margin-top: 8px;"
                                                             >
                                                                 <div
-                                                                    class="ai-message__tool-calls-title"
+                                                                    class="ai-message__tool-calls-title ai-message__tool-calls-title--clickable"
+                                                                    on:click={() =>
+                                                                        toggleToolCallGroup(
+                                                                            historyCardToolGroupKey
+                                                                        )}
+                                                                    title={historyCardToolGroupCollapsed
+                                                                        ? '展开工具执行'
+                                                                        : '折叠工具执行'}
                                                                 >
+                                                                    <svg
+                                                                        class="ai-message__tool-call-icon"
+                                                                        class:collapsed={historyCardToolGroupCollapsed}
+                                                                    >
+                                                                        <use
+                                                                            xlink:href="#iconRight"
+                                                                        ></use>
+                                                                    </svg>
                                                                     🔧 {t('tools.calling')} ({group
                                                                         .toolCalls.length})
                                                                 </div>
+                                                                {#if !historyCardToolGroupCollapsed}
                                                                 {#each group.toolCalls as toolCall}
                                                                     {@const toolDisplayName =
                                                                         getToolDisplayName(
@@ -11383,6 +11452,7 @@
                                                                         {/if}
                                                                     </div>
                                                                 {/each}
+                                                                {/if}
                                                             </div>
                                                         {/each}
 
@@ -11733,16 +11803,34 @@
                                                                 {/if}
 
                                                                 <!-- 该轮工具调用 -->
+                                                                {@const historyTabToolGroupKey = `hist-tab-tools-${messageIndex}-${msgIndex}-${index}-${groupIndex}`}
+                                                                {@const historyTabToolGroupCollapsed = isToolCallGroupCollapsed(toolCallGroupsCollapsed, historyTabToolGroupKey)}
                                                                 <div
                                                                     class="ai-message__tool-calls"
                                                                     style="margin-top: 8px;"
                                                                 >
                                                                     <div
-                                                                        class="ai-message__tool-calls-title"
+                                                                        class="ai-message__tool-calls-title ai-message__tool-calls-title--clickable"
+                                                                        on:click={() =>
+                                                                            toggleToolCallGroup(
+                                                                                historyTabToolGroupKey
+                                                                            )}
+                                                                        title={historyTabToolGroupCollapsed
+                                                                            ? '展开工具执行'
+                                                                            : '折叠工具执行'}
                                                                     >
+                                                                        <svg
+                                                                            class="ai-message__tool-call-icon"
+                                                                            class:collapsed={historyTabToolGroupCollapsed}
+                                                                        >
+                                                                            <use
+                                                                                xlink:href="#iconRight"
+                                                                            ></use>
+                                                                        </svg>
                                                                         🔧 {t('tools.calling')} ({group
                                                                             .toolCalls.length})
                                                                     </div>
+                                                                    {#if !historyTabToolGroupCollapsed}
                                                                     {#each group.toolCalls as toolCall}
                                                                         {@const toolDisplayName =
                                                                             getToolDisplayName(
@@ -11852,6 +11940,7 @@
                                                                             {/if}
                                                                         </div>
                                                                     {/each}
+                                                                    {/if}
                                                                 </div>
                                                             {/each}
 
@@ -12103,17 +12192,6 @@
                             </div>
                         {/if}
 
-                        <!-- 显示工具调用后的最终回复 -->
-                        {#if message.role === 'assistant' && message.finalReply}
-                            {@const finalReplyDisplay = getDisplayContent(message.finalReply)}
-                            <div
-                                class="ai-message__content ai-message__final-reply b3-typography"
-                                style={messageFontSize ? `font-size: ${messageFontSize}px;` : ''}
-                            >
-                                {@html finalReplyDisplay}
-                            </div>
-                        {/if}
-
                         <!-- 显示编辑操作 -->
                         {#if message.role === 'assistant' && message.editOperations && message.editOperations.length > 0}
                             <div class="ai-message__edit-operations">
@@ -12169,6 +12247,27 @@
                                         </div>
                                     </div>
                                 {/each}
+                            </div>
+                        {/if}
+
+                        <!-- 最终回复始终放在工具执行、差异汇总和附件之后 -->
+                        {#if message.role === 'assistant' && message.finalReply}
+                            {@const finalReplyDisplay = getDisplayContent(message.finalReply)}
+                            <div
+                                class="ai-message__content ai-message__final-reply b3-typography"
+                                style={messageFontSize ? `font-size: ${messageFontSize}px;` : ''}
+                            >
+                                {@html finalReplyDisplay}
+                            </div>
+                        {:else if message.role === 'assistant' && message.content && message.content
+                                .toString()
+                                .trim() && !(message.multiModelResponses && message.multiModelResponses.length > 0)}
+                            {@const assistantDisplayContent = getDisplayContent(message.content)}
+                            <div
+                                class="ai-message__content b3-typography"
+                                style={messageFontSize ? `font-size: ${messageFontSize}px;` : ''}
+                            >
+                                {@html assistantDisplayContent}
                             </div>
                         {/if}
                     {/if}
@@ -12552,14 +12651,30 @@
                                             {/if}
 
                                             <!-- 该轮工具调用 -->
+                                            {@const liveCardToolGroupKey = `mm-tools-${index}-${groupIndex}`}
+                                            {@const liveCardToolGroupCollapsed = isToolCallGroupCollapsed(toolCallGroupsCollapsed, liveCardToolGroupKey)}
                                             <div
                                                 class="ai-message__tool-calls"
                                                 style="margin-top: 8px;"
                                             >
-                                                <div class="ai-message__tool-calls-title">
+                                                <div
+                                                    class="ai-message__tool-calls-title ai-message__tool-calls-title--clickable"
+                                                    on:click={() =>
+                                                        toggleToolCallGroup(liveCardToolGroupKey)}
+                                                    title={liveCardToolGroupCollapsed
+                                                        ? '展开工具执行'
+                                                        : '折叠工具执行'}
+                                                >
+                                                    <svg
+                                                        class="ai-message__tool-call-icon"
+                                                        class:collapsed={liveCardToolGroupCollapsed}
+                                                    >
+                                                        <use xlink:href="#iconRight"></use>
+                                                    </svg>
                                                     🔧 {t('tools.calling')} ({group.toolCalls
                                                         .length})
                                                 </div>
+                                                {#if !liveCardToolGroupCollapsed}
                                                 {#each group.toolCalls as toolCall}
                                                     {@const toolDisplayName = getToolDisplayName(
                                                         toolCall.function.name
@@ -12652,6 +12767,7 @@
                                                         {/if}
                                                     </div>
                                                 {/each}
+                                                {/if}
                                             </div>
                                         {/each}
 
@@ -12936,14 +13052,30 @@
                                             {/if}
 
                                             <!-- 该轮工具调用 -->
+                                            {@const liveTabToolGroupKey = `mm-tab-tools-${selectedTabIndex}-${groupIndex}`}
+                                            {@const liveTabToolGroupCollapsed = isToolCallGroupCollapsed(toolCallGroupsCollapsed, liveTabToolGroupKey)}
                                             <div
                                                 class="ai-message__tool-calls"
                                                 style="margin-top: 8px;"
                                             >
-                                                <div class="ai-message__tool-calls-title">
+                                                <div
+                                                    class="ai-message__tool-calls-title ai-message__tool-calls-title--clickable"
+                                                    on:click={() =>
+                                                        toggleToolCallGroup(liveTabToolGroupKey)}
+                                                    title={liveTabToolGroupCollapsed
+                                                        ? '展开工具执行'
+                                                        : '折叠工具执行'}
+                                                >
+                                                    <svg
+                                                        class="ai-message__tool-call-icon"
+                                                        class:collapsed={liveTabToolGroupCollapsed}
+                                                    >
+                                                        <use xlink:href="#iconRight"></use>
+                                                    </svg>
                                                     🔧 {t('tools.calling')} ({group.toolCalls
                                                         .length})
                                                 </div>
+                                                {#if !liveTabToolGroupCollapsed}
                                                 {#each group.toolCalls as toolCall}
                                                     {@const toolDisplayName = getToolDisplayName(
                                                         toolCall.function.name
@@ -13036,6 +13168,7 @@
                                                         {/if}
                                                     </div>
                                                 {/each}
+                                                {/if}
                                             </div>
                                         {/each}
 
@@ -14908,6 +15041,14 @@
             gap: 6px;
             cursor: pointer;
             user-select: none;
+
+            &:hover {
+                background: var(--b3-list-hover);
+            }
+        }
+
+        &:last-child {
+            border-bottom: none;
         }
     }
 
