@@ -38,16 +38,15 @@
         getSessionPath,
         isPluginAssetPath,
     } from './pluginPaths';
-    import { SUMMARY_EVENT, WEBAPP_ICON_ID, WEBAPP_TAB_TYPE } from './pluginNamespace';
+    import { SUMMARY_EVENT, WEBAPP_TAB_TYPE } from './pluginNamespace';
     import {
         parseMultipleWebPages,
         fetchWithWebView,
         parseWebPageToMarkdown,
     } from './utils/webParser';
     import SessionManager from './components/SessionManager.svelte';
-        import ModelPresetButton from './components/ModelPreset.svelte';
+    import ModelPresetButton from './components/ModelPreset.svelte';
     import MultiModelSelector from './components/MultiModelSelector.svelte';
-    import WebAppManager from './components/WebAppManager.svelte';
     import ConnectionStatus from './components/ConnectionStatus.svelte';
     import type { ProviderConfig } from './defaultSettings';
     import { settingsStore, updateSettings } from './stores/settings';
@@ -290,22 +289,6 @@
     let currentImageSrc = '';
     let currentImageName = '';
 
-    // 小程序功能
-    let isWebAppManagerOpen = false;
-    let showWebAppMenu = false;
-    let webAppMenuButton: HTMLButtonElement;
-    let webAppMenuDropdown: HTMLDivElement;
-    let webAppDropdownTop = 0;
-    let webAppDropdownLeft = 0;
-    let webApps: Array<{
-        id: string;
-        name: string;
-        url: string;
-        icon?: string;
-        createdAt: number;
-        updatedAt: number;
-    }> = [];
-
     // 消息内容显示缓存（存储每个消息的显示内容，键为content的哈希）
     const messageDisplayCache = new Map<string, { loading: boolean; content: string }>();
 
@@ -442,135 +425,6 @@
             console.error('复制图片失败:', error);
             pushErrMsg('复制图片失败，请尝试下载后复制');
         }
-    }
-
-    // 小程序功能相关函数
-    // 切换小程序菜单
-    async function toggleWebAppMenu(event: MouseEvent) {
-        event.stopPropagation();
-        showWebAppMenu = !showWebAppMenu;
-        if (showWebAppMenu) {
-            await updateWebAppDropdownPosition();
-            setTimeout(() => {
-                document.addEventListener('click', closeWebAppMenuOnOutsideClick);
-            }, 0);
-        } else {
-            document.removeEventListener('click', closeWebAppMenuOnOutsideClick);
-        }
-    }
-
-    // 计算下拉菜单位置
-    async function updateWebAppDropdownPosition() {
-        if (!webAppMenuButton || !showWebAppMenu) return;
-
-        await tick();
-
-        const rect = webAppMenuButton.getBoundingClientRect();
-        const dropdownWidth = webAppMenuDropdown?.offsetWidth || 200;
-        const dropdownHeight = webAppMenuDropdown?.offsetHeight || 300;
-
-        // 计算垂直位置
-        const spaceBelow = window.innerHeight - rect.bottom;
-        const spaceAbove = rect.top;
-
-        if (spaceBelow >= dropdownHeight || spaceBelow >= spaceAbove) {
-            // 显示在按钮下方
-            webAppDropdownTop = rect.bottom + 4;
-        } else {
-            // 显示在按钮上方
-            webAppDropdownTop = rect.top - dropdownHeight - 4;
-        }
-
-        // 计算水平位置（右对齐）
-        webAppDropdownLeft = rect.right - dropdownWidth;
-
-        // 确保下拉菜单不会超出视口左边界
-        if (webAppDropdownLeft < 8) {
-            webAppDropdownLeft = 8;
-        }
-
-        // 确保下拉菜单不会超出视口右边界
-        if (webAppDropdownLeft + dropdownWidth > window.innerWidth - 8) {
-            webAppDropdownLeft = window.innerWidth - dropdownWidth - 8;
-        }
-    }
-
-    // 点击外部关闭小程序菜单
-    function closeWebAppMenuOnOutsideClick(event: MouseEvent) {
-        const target = event.target as HTMLElement;
-        if (!target.closest('.ai-sidebar__webapp-menu-container')) {
-            showWebAppMenu = false;
-            document.removeEventListener('click', closeWebAppMenuOnOutsideClick);
-        }
-    }
-
-    // 打开小程序管理器
-    function openWebAppManager() {
-        showWebAppMenu = false;
-        document.removeEventListener('click', closeWebAppMenuOnOutsideClick);
-        isWebAppManagerOpen = true;
-    }
-
-    // 关闭小程序管理器
-    function closeWebAppManager() {
-        isWebAppManagerOpen = false;
-    }
-
-    // 保存小程序设置
-    async function saveWebApps(event: CustomEvent<{ webApps: any[] }>) {
-        webApps = event.detail.webApps;
-        settings.webApps = webApps;
-        await plugin.saveSettings(settings);
-
-        // 为每个小程序注册图标
-        for (const app of webApps) {
-            if (app.icon && app.icon.startsWith('data:image')) {
-                plugin.registerWebAppIcon(app.id, app.icon);
-            }
-        }
-    }
-
-    // 打开小程序
-    function openWebApp(event: CustomEvent<{ app: any }>) {
-        const app = event.detail.app;
-        openWebAppDirect(app);
-    }
-
-    // 获取小程序图标URL（兼容base64和文件路径格式）
-    function getWebAppIconUrl(icon: string): string {
-        if (!icon) return '';
-        // 如果已经是base64格式，直接返回
-        if (icon.startsWith('data:')) {
-            return icon;
-        }
-        // 兼容旧的文件名格式
-        return getWebAppIconPath(icon);
-    }
-
-    // 直接打开小程序
-    function openWebAppDirect(app: any) {
-        showWebAppMenu = false;
-        document.removeEventListener('click', closeWebAppMenuOnOutsideClick);
-
-        // 如果小程序有自定义图标，使用自定义图标，否则使用默认图标
-        const iconId =
-            app.icon && app.icon.startsWith('data:image')
-                ? plugin.getWebAppIconId(app.id)
-                : WEBAPP_ICON_ID;
-
-        // 使用 openTab API 打开小程序
-        openTab({
-            app: plugin.app,
-            custom: {
-                icon: iconId,
-                title: app.name,
-                id: plugin.name + WEBAPP_TAB_TYPE,
-                data: {
-                    app: app,
-                    time: Date.now(), // 添加时间戳，确保每次点击都能打开新标签页
-                },
-            },
-        });
     }
 
     // 当模式切换时，更新已添加的上下文文档内容
@@ -1426,9 +1280,6 @@
 
         // 加载提示词
         await loadPrompts();
-
-        // 加载小程序设置
-        webApps = settings.webApps || [];
 
         // 如果有系统提示词，添加到消息列表
         if (settings.aiSystemPrompt) {
@@ -8614,12 +8465,6 @@
             showOpenWindowMenu = false;
         }
 
-        // 关闭小程序菜单
-        if (showWebAppMenu && !target.closest('.ai-sidebar__webapp-menu-container')) {
-            showWebAppMenu = false;
-            document.removeEventListener('click', closeWebAppMenuOnOutsideClick);
-        }
-
         if (isPromptSelectorOpen) {
             const selector = document.querySelector('.ai-sidebar__prompt-selector');
             const buttons = document.querySelectorAll('.ai-sidebar__prompt-actions button');
@@ -10406,146 +10251,82 @@
 
 <div class="ai-sidebar" class:ai-sidebar--fullscreen={isFullscreen} bind:this={sidebarContainer}>
     <ConnectionStatus showVersion={false} showRetry={true} />
+    <!-- 顶部标题栏 -->
     <div class="ai-sidebar__header">
-        <h3 class="ai-sidebar__title">
-            <div class="ai-sidebar__webapp-menu-container">
-                <button
-                    class="b3-button b3-button--text"
-                    bind:this={webAppMenuButton}
-                    on:click={toggleWebAppMenu}
-                    title={t('aiSidebar.webapp.title') || '小程序'}
-                >
-                    <svg class="b3-button__icon"><use xlink:href={`#${WEBAPP_ICON_ID}`}></use></svg>
-                </button>
-            </div>
-            {#if hasUnsavedChanges}
-                <span class="ai-sidebar__unsaved" title={t('aiSidebar.unsavedChanges')}>●</span>
-            {/if}
-        </h3>
-
-        {#if showWebAppMenu}
-            <div
-                bind:this={webAppMenuDropdown}
-                class="ai-sidebar__webapp-menu"
-                style="top: {webAppDropdownTop}px; left: {webAppDropdownLeft}px;"
-            >
-                <button class="b3-menu__item" on:click={openWebAppManager}>
-                    <svg class="b3-menu__icon">
-                        <use xlink:href="#iconSettings"></use>
-                    </svg>
-                    <span class="b3-menu__label">管理小程序</span>
-                </button>
-                {#if webApps.length > 0}
-                    <div class="b3-menu__separator"></div>
-                    {#each webApps as app (app.id)}
-                        <button class="b3-menu__item" on:click={() => openWebAppDirect(app)}>
-                            <div
-                                class="b3-menu__icon"
-                                style="display: flex; align-items: center; justify-content: center;"
-                            >
-                                {#if app.icon}
-                                    <img
-                                        src={getWebAppIconUrl(app.icon)}
-                                        alt=""
-                                        style="width: 16px; height: 16px; object-fit: cover;"
-                                    />
-                                {:else}
-                                    <svg><use xlink:href="#iconGlobe"></use></svg>
-                                {/if}
-                            </div>
-                            <span class="b3-menu__label">{app.name}</span>
-                        </button>
-                    {/each}
-                {/if}
-            </div>
-        {/if}
-
-        <div class="ai-sidebar__actions">
-            <button
-                class="b3-button b3-button--text"
-                on:click={newSession}
-                title={t('aiSidebar.session.new')}
-            >
-                <svg class="b3-button__icon"><use xlink:href="#iconAdd"></use></svg>
-            </button>
-            <SessionManager
-                bind:sessions
-                bind:currentSessionId
-                bind:isOpen={isSessionManagerOpen}
-                on:refresh={loadSessions}
-                on:load={e => loadSession(e.detail.sessionId)}
-                on:delete={e => deleteSession(e.detail.sessionId)}
-                on:batchDelete={e => batchDeleteSessions(e.detail.sessionIds)}
-                on:new={newSession}
-                on:update={e => handleSessionUpdate(e.detail.sessions)}
-                on:saveToNote={e => handleSaveSessionToNote(e.detail.sessionId)}
-            />
-            <button
-                class="b3-button b3-button--text"
-                on:click={copyAsMarkdown}
-                title={t('aiSidebar.actions.copyAllChat')}
-            >
-                <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
-            </button>
-            <button
-                class="b3-button b3-button--text"
-                on:click={() => openSaveToNoteDialog()}
-                title={t('aiSidebar.actions.saveToNote')}
-            >
-                <svg class="b3-button__icon"><use xlink:href="#iconDownload"></use></svg>
-            </button>
-            <button
-                class="b3-button b3-button--text"
-                on:click={clearChat}
-                title={t('aiSidebar.actions.clear')}
-            >
-                <svg class="b3-button__icon"><use xlink:href="#iconTrashcan"></use></svg>
-            </button>
-            <div class="ai-sidebar__open-window-menu-container" style="position: relative;">
-                <button
-                    class="b3-button b3-button--text"
-                    bind:this={openWindowMenuButton}
-                    on:click={toggleOpenWindowMenu}
-                    title={t('aiSidebar.actions.openWindow') || '在新窗口打开'}
-                >
-                    <svg class="b3-button__icon"><use xlink:href="#iconOpenWindow"></use></svg>
-                </button>
-                {#if showOpenWindowMenu}
-                    <div class="ai-sidebar__open-window-menu">
-                        <button class="b3-menu__item" on:click={openInTab}>
-                            <svg class="b3-menu__icon">
-                                <use xlink:href="#iconOpenWindow"></use>
-                            </svg>
-                            <span class="b3-menu__label">在页签打开</span>
-                        </button>
-                        <button class="b3-menu__item" on:click={openInNewWindow}>
-                            <svg class="b3-menu__icon">
-                                <use xlink:href="#iconOpenWindow"></use>
-                            </svg>
-                            <span class="b3-menu__label">在新窗口打开</span>
-                        </button>
-                    </div>
-                {/if}
-            </div>
-            <button
-                class="b3-button b3-button--text"
-                on:click={toggleFullscreen}
-                title={isFullscreen ? '退出全屏' : '全屏查看'}
-            >
-                <svg class="b3-button__icon">
-                    <use
-                        xlink:href={isFullscreen ? '#iconFullscreenExit' : '#iconFullscreen'}
-                    ></use>
+        <div class="ai-sidebar__brand">
+            <div class="ai-sidebar__brand-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="16 18 22 12 16 6"></polyline>
+                    <polyline points="8 6 2 12 8 18"></polyline>
                 </svg>
+            </div>
+            <div class="ai-sidebar__brand-text">
+                <div class="ai-sidebar__brand-name">OpenCode</div>
+                <div class="ai-sidebar__brand-status">
+                    <span class="ai-sidebar__status-dot"></span>
+                    <span>在线</span>
+                </div>
+            </div>
+        </div>
+        <div class="ai-sidebar__header-actions">
+            <button class="ai-sidebar__icon-btn" title="钉住" on:click={() => {}}>
+                <svg class="b3-button__icon"><use xlink:href="#iconPin"></use></svg>
             </button>
-            <button
-                class="b3-button b3-button--text"
-                on:click={openSettings}
-                title={t('aiSidebar.actions.settings')}
-            >
-                <svg class="b3-button__icon"><use xlink:href="#iconSettings"></use></svg>
+            <button class="ai-sidebar__icon-btn" title="更多" on:click={() => {}}>
+                <svg class="b3-button__icon"><use xlink:href="#iconMore"></use></svg>
             </button>
         </div>
+    </div>
+
+    <!-- 工具栏 -->
+    <div class="ai-sidebar__toolbar">
+        <button class="ai-sidebar__toolbar-btn" title={t('aiSidebar.session.new')} on:click={newSession}>
+            <svg class="b3-button__icon"><use xlink:href="#iconAdd"></use></svg>
+        </button>
+        <SessionManager
+            bind:sessions
+            bind:currentSessionId
+            bind:isOpen={isSessionManagerOpen}
+            on:refresh={loadSessions}
+            on:load={e => loadSession(e.detail.sessionId)}
+            on:delete={e => deleteSession(e.detail.sessionId)}
+            on:batchDelete={e => batchDeleteSessions(e.detail.sessionIds)}
+            on:new={newSession}
+            on:update={e => handleSessionUpdate(e.detail.sessions)}
+            on:saveToNote={e => handleSaveSessionToNote(e.detail.sessionId)}
+        />
+        <button class="ai-sidebar__toolbar-btn" title={t('aiSidebar.actions.copyAllChat')} on:click={copyAsMarkdown}>
+            <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
+        </button>
+        <button class="ai-sidebar__toolbar-btn" title={t('aiSidebar.actions.saveToNote')} on:click={() => openSaveToNoteDialog()}>
+            <svg class="b3-button__icon"><use xlink:href="#iconDownload"></use></svg>
+        </button>
+        <button class="ai-sidebar__toolbar-btn" title={t('aiSidebar.actions.clear')} on:click={clearChat}>
+            <svg class="b3-button__icon"><use xlink:href="#iconTrashcan"></use></svg>
+        </button>
+        <button class="ai-sidebar__toolbar-btn" title={t('aiSidebar.actions.openWindow') || '在新窗口打开'} on:click={toggleOpenWindowMenu}>
+            <svg class="b3-button__icon"><use xlink:href="#iconOpenWindow"></use></svg>
+        </button>
+        {#if showOpenWindowMenu}
+            <div class="ai-sidebar__open-window-menu">
+                <button class="b3-menu__item" on:click={openInTab}>
+                    <svg class="b3-menu__icon"><use xlink:href="#iconOpenWindow"></use></svg>
+                    <span class="b3-menu__label">在页签打开</span>
+                </button>
+                <button class="b3-menu__item" on:click={openInNewWindow}>
+                    <svg class="b3-menu__icon"><use xlink:href="#iconOpenWindow"></use></svg>
+                    <span class="b3-menu__label">在新窗口打开</span>
+                </button>
+            </div>
+        {/if}
+        <button class="ai-sidebar__toolbar-btn" title={isFullscreen ? '退出全屏' : '全屏查看'} on:click={toggleFullscreen}>
+            <svg class="b3-button__icon">
+                <use xlink:href={isFullscreen ? '#iconFullscreenExit' : '#iconFullscreen'}></use>
+            </svg>
+        </button>
+        <button class="ai-sidebar__toolbar-btn" title={t('aiSidebar.actions.settings')} on:click={openSettings}>
+            <svg class="b3-button__icon"><use xlink:href="#iconSettings"></use></svg>
+        </button>
     </div>
 
     <div class="ai-sidebar__messages" bind:this={messagesContainer} on:scroll={handleScroll}>
@@ -13288,8 +13069,22 @@
 
         {#if messages.filter(msg => msg.role !== 'system').length === 0 && !isLoading}
             <div class="ai-sidebar__empty">
-                <div class="ai-sidebar__empty-icon">💬</div>
-                <p>{t('aiSidebar.empty.greeting')}</p>
+                <div class="ai-sidebar__empty-illustration">
+                    <svg viewBox="0 0 120 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <ellipse cx="60" cy="88" rx="35" ry="6" fill="var(--b3-theme-surface)" opacity="0.6"/>
+                        <path d="M25 40C25 28.954 33.954 20 45 20H75C86.046 20 95 28.954 95 40V55C95 66.046 86.046 75 75 75H55L40 88V75H35C33.954 75 25 66.046 25 55V40Z" fill="#EBF2FF" stroke="#C7D8F7" stroke-width="1.5"/>
+                        <path d="M45 30C45 22.268 51.268 16 59 16H81C88.732 16 95 22.268 95 30V43C95 50.732 88.732 57 81 57H65L52 68V57H51C51 57 45 50.732 45 43V30Z" fill="#F5F9FF" stroke="#D6E4FA" stroke-width="1.5"/>
+                        <circle cx="50" cy="42" r="3.5" fill="#3B82F6"/>
+                        <circle cx="62" cy="42" r="3.5" fill="#3B82F6"/>
+                        <circle cx="74" cy="42" r="3.5" fill="#3B82F6"/>
+                        <path d="M18 32L22 28M98 28L102 32" stroke="#D6E4FA" stroke-width="1.5" stroke-linecap="round"/>
+                        <path d="M15 48L19 46M101 46L105 48" stroke="#D6E4FA" stroke-width="1.5" stroke-linecap="round"/>
+                        <circle cx="18" cy="58" r="2" fill="#D6E4FA"/>
+                        <circle cx="102" cy="38" r="2" fill="#D6E4FA"/>
+                    </svg>
+                </div>
+                <h2 class="ai-sidebar__empty-title">开始与 AI 对话吧！</h2>
+                <p class="ai-sidebar__empty-subtitle">你可以向我提问、分析文档或生成内容。</p>
             </div>
         {/if}
     </div>
@@ -13444,73 +13239,26 @@
         on:dragleave={handleDragLeave}
         on:drop={handleDrop}
     >
-        <!-- 模式选择 -->
-        <div class="ai-sidebar__mode-selector">
-            <label for="chat-mode-select" class="ai-sidebar__mode-label">
-                {t('aiSidebar.mode.label')}:
-            </label>
-            <select
-                id="chat-mode-select"
-                class="b3-select ai-sidebar__mode-select"
-                bind:value={chatMode}
-            >
-                <option value="plan">{t('aiSidebar.mode.plan') || 'Plan'}</option>
-                <option value="build">{t('aiSidebar.mode.build') || 'Build'}</option>
-            </select>
-
-
-            <!-- 模型选择器（问答模式：支持单选/多选切换；其他模式：仅单选） -->
-            {#if chatMode === 'plan'}
-                <div class="ai-sidebar__multi-model-selector-wrapper">
-                    {#if !enableMultiModel && (showThinkingToggle || showWebSearchToggle)}
-                        <div class="ai-sidebar__thinking-toggle-container">
-                            {#if showWebSearchToggle}
-                                <button
-                                    class="ai-sidebar__thinking-toggle b3-button b3-button--text"
-                                    class:ai-sidebar__thinking-toggle--active={isWebSearchModeEnabled}
-                                    on:click={toggleWebSearchMode}
-                                    title={isWebSearchModeEnabled
-                                        ? t('webSearch.enabled')
-                                        : t('webSearch.disabled')}
-                                    disabled={!currentProvider || !currentModelId}
-                                >
-                                    🌐
-                                </button>
-                            {/if}
-                            {#if showThinkingToggle}
-                                <button
-                                    class="ai-sidebar__thinking-toggle b3-button b3-button--text"
-                                    class:ai-sidebar__thinking-toggle--active={isThinkingModeEnabled}
-                                    on:click={toggleThinkingMode}
-                                    title={isThinkingModeEnabled
-                                        ? t('thinking.enabled')
-                                        : t('thinking.disabled')}
-                                    disabled={!currentProvider || !currentModelId}
-                                >
-                                    {t('thinking.toggle')}
-                                </button>
-                            {/if}
-                            {#if showThinkingEffortSelector}
-                                <select
-                                    class="ai-sidebar__thinking-effort-select b3-select"
-                                    value={currentThinkingEffort}
-                                    on:change={handleThinkingEffortChange}
-                                    title={t('thinking.effort.title')}
-                                >
-                                    {#if isCurrentModelGemini}
-                                        <option value="auto">{t('thinking.effort.auto')}</option>
-                                    {/if}
-                                    <option value="low">{t('thinking.effort.low')}</option>
-                                    {#if !isCurrentModelGemini3}
-                                        <option value="medium">
-                                            {t('thinking.effort.medium')}
-                                        </option>
-                                    {/if}
-                                    <option value="high">{t('thinking.effort.high')}</option>
-                                </select>
-                            {/if}
-                        </div>
-                    {/if}
+        <!-- 顶部选择器栏 -->
+        <div class="ai-sidebar__selectors-bar">
+            <div class="ai-sidebar__selector">
+                <svg class="ai-sidebar__selector-icon" style="width:14px;height:14px"><use xlink:href="#iconCode"></use></svg>
+                <select class="ai-sidebar__selector-select" bind:value={chatMode}>
+                    <option value="plan">模式: {t('aiSidebar.mode.plan') || 'Plan'}</option>
+                    <option value="build">模式: {t('aiSidebar.mode.build') || 'Build'}</option>
+                </select>
+                <svg class="ai-sidebar__selector-chevron" style="width:12px;height:12px"><use xlink:href="#iconDown"></use></svg>
+            </div>
+            <div class="ai-sidebar__selector">
+                <span class="ai-sidebar__selector-icon" style="font-size:13px">💡</span>
+                <select class="ai-sidebar__selector-select">
+                    <option>中</option>
+                </select>
+                <svg class="ai-sidebar__selector-chevron" style="width:12px;height:12px"><use xlink:href="#iconDown"></use></svg>
+            </div>
+            <div class="ai-sidebar__selector ai-sidebar__selector--model">
+                <svg class="ai-sidebar__selector-icon" style="width:14px;height:14px"><use xlink:href="#iconEmoji"></use></svg>
+                {#if chatMode === 'plan'}
                     <MultiModelSelector
                         {providers}
                         selectedModels={selectedMultiModels}
@@ -13522,58 +13270,7 @@
                         on:change={handleMultiModelChange}
                         on:toggleEnable={handleToggleMultiModel}
                     />
-                </div>
-            {:else}
-                <div class="ai-sidebar__model-selector-container">
-                    {#if showThinkingToggle || showWebSearchToggle}
-                        <div class="ai-sidebar__thinking-toggle-container">
-                            {#if showWebSearchToggle}
-                                <button
-                                    class="ai-sidebar__thinking-toggle b3-button b3-button--text"
-                                    class:ai-sidebar__thinking-toggle--active={isWebSearchModeEnabled}
-                                    on:click={toggleWebSearchMode}
-                                    title={isWebSearchModeEnabled
-                                        ? t('webSearch.enabled')
-                                        : t('webSearch.disabled')}
-                                    disabled={!currentProvider || !currentModelId}
-                                >
-                                    🌐
-                                </button>
-                            {/if}
-                            {#if showThinkingToggle}
-                                <button
-                                    class="ai-sidebar__thinking-toggle b3-button b3-button--text"
-                                    class:ai-sidebar__thinking-toggle--active={isThinkingModeEnabled}
-                                    on:click={toggleThinkingMode}
-                                    title={isThinkingModeEnabled
-                                        ? t('thinking.enabled')
-                                        : t('thinking.disabled')}
-                                    disabled={!currentProvider || !currentModelId}
-                                >
-                                    {t('thinking.toggle')}
-                                </button>
-                            {/if}
-                            {#if showThinkingEffortSelector}
-                                <select
-                                    class="ai-sidebar__thinking-effort-select b3-select"
-                                    value={currentThinkingEffort}
-                                    on:change={handleThinkingEffortChange}
-                                    title={t('thinking.effort.title')}
-                                >
-                                    {#if isCurrentModelGemini}
-                                        <option value="auto">{t('thinking.effort.auto')}</option>
-                                    {/if}
-                                    <option value="low">{t('thinking.effort.low')}</option>
-                                    {#if !isCurrentModelGemini3}
-                                        <option value="medium">
-                                            {t('thinking.effort.medium')}
-                                        </option>
-                                    {/if}
-                                    <option value="high">{t('thinking.effort.high')}</option>
-                                </select>
-                            {/if}
-                        </div>
-                    {/if}
+                {:else}
                     <MultiModelSelector
                         {providers}
                         selectedModels={[]}
@@ -13583,54 +13280,108 @@
                         {chatMode}
                         on:select={handleModelSelect}
                     />
+                {/if}
+            </div>
+        </div>
+
+        <!-- 大输入框 -->
+        <div class="ai-sidebar__chat-input-box">
+            {#if showCommandPalette}
+                <div class="command-palette">
+                    {#each getFilteredCommands() as cmd, i}
+                        <button
+                            class="command-palette__item"
+                            class:command-palette__item--active={i === commandPaletteIndex}
+                            on:click={() => applyCommand(cmd.name)}
+                            on:mouseenter={() => { commandPaletteIndex = i; }}
+                        >
+                            <span class="command-palette__name">/{cmd.name}</span>
+                            {#if cmd.args}
+                                <span class="command-palette__args">{cmd.args}</span>
+                            {/if}
+                            <span class="command-palette__desc">{cmd.desc}</span>
+                        </button>
+                    {/each}
                 </div>
             {/if}
-        </div>
-        <div class="ai-sidebar__input-row">
-            <div class="ai-sidebar__input-wrapper">
-                {#if showCommandPalette}
-                    <div class="command-palette">
-                        {#each getFilteredCommands() as cmd, i}
-                            <button
-                                class="command-palette__item"
-                                class:command-palette__item--active={i === commandPaletteIndex}
-                                on:click={() => applyCommand(cmd.name)}
-                                on:mouseenter={() => { commandPaletteIndex = i; }}
-                            >
-                                <span class="command-palette__name">/{cmd.name}</span>
-                                {#if cmd.args}
-                                    <span class="command-palette__args">{cmd.args}</span>
-                                {/if}
-                                <span class="command-palette__desc">{cmd.desc}</span>
-                            </button>
-                        {/each}
-                    </div>
-                {/if}
-                <textarea
-                    bind:this={textareaElement}
-                    bind:value={currentInput}
-                    on:keydown={handleKeydown}
-                    on:input={handleInput}
-                    on:paste={handlePaste}
-                    placeholder={t('aiSidebar.input.placeholder')}
-                    class="ai-sidebar__input"
-                    rows="1"
-                    spellcheck="false"
-                ></textarea>
+            <textarea
+                bind:this={textareaElement}
+                bind:value={currentInput}
+                on:keydown={handleKeydown}
+                on:input={handleInput}
+                on:paste={handlePaste}
+                placeholder={t('aiSidebar.input.placeholder')}
+                class="ai-sidebar__chat-textarea"
+                rows="1"
+                spellcheck="false"
+            ></textarea>
+
+            <!-- 输入框底部工具栏 -->
+            <div class="ai-sidebar__chat-input-toolbar">
+                <div class="ai-sidebar__chat-input-tools">
+                    <button
+                        class="ai-sidebar__chat-input-tool"
+                        on:click={triggerFileUpload}
+                        disabled={isUploadingFile || isLoading}
+                        title={t('aiSidebar.actions.upload')}
+                    >
+                        {#if isUploadingFile}
+                            <svg class="b3-button__icon ai-sidebar__loading-icon"><use xlink:href="#iconRefresh"></use></svg>
+                        {:else}
+                            <svg class="b3-button__icon"><use xlink:href="#iconUpload"></use></svg>
+                        {/if}
+                    </button>
+                    <button
+                        class="ai-sidebar__chat-input-tool"
+                        on:click={openWebLinkDialog}
+                        disabled={isFetchingWebContent || isLoading}
+                        title={t('aiSidebar.actions.addWebLink')}
+                    >
+                        {#if isFetchingWebContent}
+                            <svg class="b3-button__icon ai-sidebar__loading-icon"><use xlink:href="#iconRefresh"></use></svg>
+                        {:else}
+                            <svg class="b3-button__icon"><use xlink:href="#iconLink"></use></svg>
+                        {/if}
+                    </button>
+                    <button
+                        class="ai-sidebar__chat-input-tool"
+                        on:click={addCurrentDocToContext}
+                        title={t('aiSidebar.actions.addCurrentDoc')}
+                    >
+                        <svg class="b3-button__icon"><use xlink:href="#iconFile"></use></svg>
+                    </button>
+                    <button
+                        class="ai-sidebar__chat-input-tool"
+                        on:click={() => {
+                            isSearchDialogOpen = !isSearchDialogOpen;
+                            if (isSearchDialogOpen && !searchKeyword.trim()) {
+                                searchDocuments();
+                            }
+                        }}
+                        title={t('aiSidebar.actions.search')}
+                    >
+                        <svg class="b3-button__icon"><use xlink:href="#iconSearch"></use></svg>
+                    </button>
+                    <div class="ai-sidebar__chat-input-divider"></div>
+                    <button
+                        class="ai-sidebar__chat-input-tool"
+                        on:click={() => (isPromptSelectorOpen = !isPromptSelectorOpen)}
+                        title={t('aiSidebar.prompt.title')}
+                    >
+                        <svg class="b3-button__icon"><use xlink:href="#iconSettings"></use></svg>
+                    </button>
+                </div>
                 <button
-                    class="b3-button ai-sidebar__send-btn"
-                    class:b3-button--primary={!isLoading}
-                    class:ai-sidebar__send-btn--abort={isLoading}
+                    class="ai-sidebar__chat-send-btn"
+                    class:ai-sidebar__chat-send-btn--abort={isLoading}
                     on:click={isLoading ? abortMessage : sendMessage}
                     disabled={!isLoading && !currentInput.trim() && currentAttachments.length === 0}
                     title={isLoading ? '中断生成' : '发送消息'}
                 >
                     {#if isLoading}
-                        <svg class="b3-button__icon">
-                            <use xlink:href="#iconPause"></use>
-                        </svg>
+                        <svg class="b3-button__icon"><use xlink:href="#iconPause"></use></svg>
                     {:else}
-                        <svg class="b3-button__icon"><use xlink:href="#iconUp"></use></svg>
+                        <svg class="b3-button__icon" style="width:18px;height:18px"><use xlink:href="#iconUp"></use></svg>
                     {/if}
                 </button>
             </div>
@@ -13645,119 +13396,29 @@
             multiple
             style="display: none;"
         />
-        <div class="ai-sidebar__bottom-row">
-            <button
-                class="b3-button b3-button--text ai-sidebar__upload-btn"
-                on:click={triggerFileUpload}
-                disabled={isUploadingFile || isLoading}
-                title={t('aiSidebar.actions.upload')}
-            >
-                {#if isUploadingFile}
-                    <svg class="b3-button__icon ai-sidebar__loading-icon">
-                        <use xlink:href="#iconRefresh"></use>
-                    </svg>
-                {:else}
-                    <svg class="b3-button__icon"><use xlink:href="#iconUpload"></use></svg>
-                {/if}
-            </button>
-            <button
-                class="b3-button b3-button--text ai-sidebar__weblink-btn"
-                on:click={openWebLinkDialog}
-                disabled={isFetchingWebContent || isLoading}
-                title={t('aiSidebar.actions.addWebLink')}
-            >
-                {#if isFetchingWebContent}
-                    <svg class="b3-button__icon ai-sidebar__loading-icon">
-                        <use xlink:href="#iconRefresh"></use>
-                    </svg>
-                {:else}
-                    <svg class="b3-button__icon"><use xlink:href="#iconLink"></use></svg>
-                {/if}
-            </button>
-            <button
-                class="b3-button b3-button--text ai-sidebar__add-current-doc-btn"
-                on:click={addCurrentDocToContext}
-                title={t('aiSidebar.actions.addCurrentDoc')}
-            >
-                <svg class="b3-button__icon"><use xlink:href="#iconFile"></use></svg>
-            </button>
-            <button
-                class="b3-button b3-button--text ai-sidebar__search-btn"
-                on:click={() => {
-                    isSearchDialogOpen = !isSearchDialogOpen;
-                    // 打开对话框时，如果搜索关键词为空，自动加载当前文档
-                    if (isSearchDialogOpen && !searchKeyword.trim()) {
-                        searchDocuments();
-                    }
-                }}
-                title={t('aiSidebar.actions.search')}
-            >
-                <svg class="b3-button__icon"><use xlink:href="#iconSearch"></use></svg>
-            </button>
-            <div class="ai-sidebar__prompt-actions">
-                <button
-                    class="b3-button b3-button--text"
-                    on:click={() => (isPromptSelectorOpen = !isPromptSelectorOpen)}
-                    title={t('aiSidebar.prompt.title')}
-                >
-                    <svg class="b3-button__icon"><use xlink:href="#iconQuote"></use></svg>
-                </button>
-            </div>
-            <!-- 模型设置按钮 -->
-            <ModelPresetButton
-                {providers}
-                {currentProvider}
-                {currentModelId}
-                appliedSettings={tempModelSettings}
-                on:apply={handleApplyModelSettings}
-                {plugin}
-            />
-        </div>
 
         <!-- 提示词选择器下拉菜单 -->
         {#if isPromptSelectorOpen}
             <div class="ai-sidebar__prompt-selector">
                 <div class="ai-sidebar__prompt-list">
-                    <!-- 新建提示词按钮 -->
                     <button
                         class="ai-sidebar__prompt-item ai-sidebar__prompt-item--new"
                         on:click={openPromptManager}
                     >
-                        <svg class="ai-sidebar__prompt-item-icon">
-                            <use xlink:href="#iconAdd"></use>
-                        </svg>
-                        <span class="ai-sidebar__prompt-item-title">
-                            {t('aiSidebar.prompt.new')}
-                        </span>
+                        <svg class="ai-sidebar__prompt-item-icon"><use xlink:href="#iconAdd"></use></svg>
+                        <span class="ai-sidebar__prompt-item-title">{t('aiSidebar.prompt.new')}</span>
                     </button>
-
                     {#if prompts.length > 0}
                         <div class="ai-sidebar__prompt-divider-small"></div>
                         {#each prompts as prompt (prompt.id)}
-                            <button
-                                class="ai-sidebar__prompt-item"
-                                on:click={() => usePrompt(prompt)}
-                                title={prompt.content}
-                            >
+                            <button class="ai-sidebar__prompt-item" on:click={() => usePrompt(prompt)} title={prompt.content}>
                                 <span class="ai-sidebar__prompt-item-title">{prompt.title}</span>
                                 <div class="ai-sidebar__prompt-item-actions">
-                                    <button
-                                        class="ai-sidebar__prompt-item-edit"
-                                        on:click|stopPropagation={() => editPrompt(prompt)}
-                                        title={t('aiSidebar.prompt.edit')}
-                                    >
-                                        <svg class="b3-button__icon">
-                                            <use xlink:href="#iconEdit"></use>
-                                        </svg>
+                                    <button class="ai-sidebar__prompt-item-edit" on:click|stopPropagation={() => editPrompt(prompt)} title={t('aiSidebar.prompt.edit')}>
+                                        <svg class="b3-button__icon"><use xlink:href="#iconEdit"></use></svg>
                                     </button>
-                                    <button
-                                        class="ai-sidebar__prompt-item-delete"
-                                        on:click|stopPropagation={() => deletePrompt(prompt.id)}
-                                        title={t('aiSidebar.prompt.delete')}
-                                    >
-                                        <svg class="b3-button__icon">
-                                            <use xlink:href="#iconTrashcan"></use>
-                                        </svg>
+                                    <button class="ai-sidebar__prompt-item-delete" on:click|stopPropagation={() => deletePrompt(prompt.id)} title={t('aiSidebar.prompt.delete')}>
+                                        <svg class="b3-button__icon"><use xlink:href="#iconTrashcan"></use></svg>
                                     </button>
                                 </div>
                             </button>
@@ -14481,14 +14142,6 @@
         </div>
     {/if}
 
-    <!-- 小程序管理器 -->
-    <WebAppManager
-        bind:isOpen={isWebAppManagerOpen}
-        {plugin}
-        bind:webApps
-        on:save={saveWebApps}
-        on:open={openWebApp}
-    />
 </div>
 
 <style lang="scss">
@@ -14596,63 +14249,6 @@
         .b3-menu__label {
             flex: 1;
         }
-    }
-
-    // 小程序菜单样式
-    .ai-sidebar__webapp-menu-container {
-        position: relative;
-        display: inline-block;
-    }
-
-    .ai-sidebar__webapp-menu {
-        position: fixed;
-        background: var(--b3-theme-background);
-        border: 1px solid var(--b3-border-color);
-        border-radius: 8px;
-        box-shadow: var(--b3-dialog-shadow);
-        min-width: 180px;
-        max-width: 250px;
-        max-height: 600px;
-        overflow-y: auto;
-        z-index: 10;
-    }
-
-    .ai-sidebar__webapp-menu .b3-menu__item {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 0px 12px;
-        width: 100%;
-        border: none;
-        background: none;
-        text-align: left;
-        cursor: pointer;
-        color: var(--b3-theme-on-background);
-        font-size: 14px;
-        transition: background-color 0.2s;
-
-        &:hover {
-            background: var(--b3-list-hover);
-        }
-
-        .b3-menu__icon {
-            width: 16px;
-            height: 16px;
-            flex-shrink: 0;
-        }
-
-        .b3-menu__label {
-            flex: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-    }
-
-    .ai-sidebar__webapp-menu .b3-menu__separator {
-        height: 1px;
-        background: var(--b3-border-color);
-        margin: 4px 0;
     }
 
     .ai-sidebar__context-docs {
@@ -18046,5 +17642,350 @@
     @keyframes permissionIn {
         from { opacity: 0; transform: translateY(-6px); }
         to { opacity: 1; transform: translateY(0); }
+    }
+
+    // ── New Header ───────────────────────────────────────────────
+    .ai-sidebar__header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--b3-border-color);
+        flex-shrink: 0;
+        min-width: 0;
+    }
+
+    .ai-sidebar__brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .ai-sidebar__brand-icon {
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #FEF3E2, #FFF8F0);
+        border-radius: 10px;
+        color: #F97316;
+        svg {
+            width: 20px;
+            height: 20px;
+        }
+    }
+
+    .ai-sidebar__brand-text {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .ai-sidebar__brand-name {
+        font-size: 16px;
+        font-weight: 700;
+        color: var(--b3-theme-on-background);
+        line-height: 1.2;
+    }
+
+    .ai-sidebar__brand-status {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 12px;
+        color: var(--b3-theme-on-surface-light);
+    }
+
+    .ai-sidebar__status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #22C55E;
+        flex-shrink: 0;
+    }
+
+    .ai-sidebar__header-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .ai-sidebar__icon-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border: none;
+        background: transparent;
+        color: var(--b3-theme-on-surface-light);
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        .b3-button__icon {
+            width: 16px;
+            height: 16px;
+        }
+        &:hover {
+            background: var(--b3-theme-surface);
+            color: var(--b3-theme-on-surface);
+        }
+    }
+
+    // ── Toolbar ──────────────────────────────────────────────────
+    .ai-sidebar__toolbar {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--b3-border-color);
+        flex-shrink: 0;
+        overflow-x: auto;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+        &::-webkit-scrollbar { display: none; }
+    }
+
+    .ai-sidebar__toolbar-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border: 1px solid var(--b3-border-color);
+        background: var(--b3-theme-background);
+        color: var(--b3-theme-on-surface-light);
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        flex-shrink: 0;
+        .b3-button__icon {
+            width: 15px;
+            height: 15px;
+        }
+        &:hover {
+            background: var(--b3-theme-surface);
+            color: $accent;
+            border-color: rgba($accent, 0.4);
+        }
+    }
+
+    // ── Empty State ──────────────────────────────────────────────
+    .ai-sidebar__empty {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        color: var(--b3-theme-on-surface-light);
+        text-align: center;
+        padding: 40px 20px;
+    }
+
+    .ai-sidebar__empty-illustration {
+        width: 140px;
+        height: 120px;
+        margin-bottom: 20px;
+        svg {
+            width: 100%;
+            height: 100%;
+        }
+    }
+
+    .ai-sidebar__empty-title {
+        font-size: 20px;
+        font-weight: 600;
+        color: var(--b3-theme-on-background);
+        margin: 0 0 8px;
+    }
+
+    .ai-sidebar__empty-subtitle {
+        font-size: 14px;
+        color: var(--b3-theme-on-surface-light);
+        margin: 0;
+    }
+
+    // ── Bottom Selectors ─────────────────────────────────────────
+    .ai-sidebar__selectors-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+        flex-wrap: wrap;
+    }
+
+    .ai-sidebar__selector {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        background: var(--b3-theme-surface);
+        border: 1px solid var(--b3-border-color);
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        font-size: 13px;
+        color: var(--b3-theme-on-surface);
+        &:hover {
+            border-color: var(--b3-theme-primary-light);
+        }
+    }
+
+    .ai-sidebar__selector-icon {
+        color: var(--b3-theme-on-surface-light);
+        flex-shrink: 0;
+    }
+
+    .ai-sidebar__selector-select {
+        border: none;
+        background: transparent;
+        color: var(--b3-theme-on-surface);
+        font-size: 13px;
+        cursor: pointer;
+        outline: none;
+        appearance: none;
+        -webkit-appearance: none;
+        padding-right: 4px;
+        max-width: 120px;
+    }
+
+    .ai-sidebar__selector-chevron {
+        color: var(--b3-theme-on-surface-light);
+        flex-shrink: 0;
+    }
+
+    .ai-sidebar__selector--model {
+        :global(.multi-model-selector) {
+            min-width: 0;
+        }
+        :global(.model-selector__button) {
+            border: none;
+            background: transparent;
+            padding: 0;
+            font-size: 13px;
+            color: var(--b3-theme-on-surface);
+        }
+    }
+
+    // ── Chat Input Box ───────────────────────────────────────────
+    .ai-sidebar__chat-input-box {
+        display: flex;
+        flex-direction: column;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 14px;
+        background: var(--b3-theme-background);
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        overflow: hidden;
+        &:focus-within {
+            border-color: var(--b3-theme-primary-light);
+            box-shadow: 0 0 0 3px rgba($primary, 0.08);
+        }
+    }
+
+    .ai-sidebar__chat-textarea {
+        flex: 1;
+        resize: none;
+        border: none;
+        padding: 14px 16px;
+        padding-bottom: 8px;
+        font-family: var(--b3-font-family);
+        font-size: 14px;
+        line-height: 1.6;
+        background: transparent;
+        color: var(--b3-theme-on-background);
+        min-height: 60px;
+        max-height: 200px;
+        overflow-y: auto;
+        outline: none;
+        &::placeholder {
+            color: var(--b3-theme-on-surface-light);
+        }
+    }
+
+    .ai-sidebar__chat-input-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 12px;
+        border-top: 1px solid transparent;
+    }
+
+    .ai-sidebar__chat-input-tools {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+    }
+
+    .ai-sidebar__chat-input-tool {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border: none;
+        background: transparent;
+        color: var(--b3-theme-on-surface-light);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        .b3-button__icon {
+            width: 15px;
+            height: 15px;
+        }
+        &:hover {
+            background: var(--b3-theme-surface);
+            color: var(--b3-theme-on-surface);
+        }
+        &:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+    }
+
+    .ai-sidebar__chat-input-divider {
+        width: 1px;
+        height: 16px;
+        background: var(--b3-border-color);
+        margin: 0 4px;
+    }
+
+    .ai-sidebar__chat-send-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        height: 36px;
+        border: none;
+        border-radius: 50%;
+        background: $primary;
+        color: #fff;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        flex-shrink: 0;
+        .b3-button__icon {
+            width: 16px;
+            height: 16px;
+        }
+        &:hover:not(:disabled) {
+            background: $primary-dark;
+            transform: scale(1.05);
+        }
+        &:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        &--abort {
+            background: var(--b3-theme-error) !important;
+            &:hover:not(:disabled) {
+                background: var(--b3-theme-error-lighter) !important;
+            }
+        }
+    }
+
+    // Override old input styles for compatibility
+    .ai-sidebar__input-container {
+        gap: 8px;
+        padding: 12px 14px;
     }
 </style>
