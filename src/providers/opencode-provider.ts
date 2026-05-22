@@ -1,4 +1,9 @@
 import { OPENCODE_SESSION_TITLE } from "../pluginNamespace";
+import {
+    createRealtimeCompletionWatcher,
+    type RealtimeCompletionWatcher,
+    type RealtimeSessionStatus,
+} from "./realtime-completion-watcher";
 
 export interface OpenCodeProviderConfig {
     serverUrl: string;
@@ -48,6 +53,7 @@ export interface OpenCodeModelInfo {
 
 const DEFAULT_SERVER_URL = 'http://localhost:4096';
 const IDLE_TIMEOUT_MS = 300_000;
+const SESSION_STATUS_POLL_INTERVAL_MS = 5_000;
 
 const MODEL_CACHE_TTL = 5 * 60 * 1000;
 const modelCache = new Map<string, { models: OpenCodeModelInfo[]; timestamp: number }>();
@@ -337,37 +343,6 @@ function buildPromptBody(options: OpenCodeChatOptions, model: any): any {
     };
 }
 
-function waitForRealtimeIdle(idlePromise: Promise<void>, signal?: AbortSignal): Promise<void> {
-    return new Promise((resolve, reject) => {
-        if (signal?.aborted) {
-            reject(new Error('Request aborted'));
-            return;
-        }
-
-        const timeout = setTimeout(() => {
-            cleanup();
-            reject(new Error(`OpenCode request timed out (no session idle event for ${Math.round(IDLE_TIMEOUT_MS / 60000)} minutes). The server may be overloaded or not responding.`));
-        }, IDLE_TIMEOUT_MS);
-        const onAbort = () => {
-            cleanup();
-            reject(new Error('Request aborted'));
-        };
-        const cleanup = () => {
-            clearTimeout(timeout);
-            signal?.removeEventListener('abort', onAbort);
-        };
-
-        signal?.addEventListener('abort', onAbort);
-        idlePromise.then(() => {
-            cleanup();
-            resolve();
-        }, (err) => {
-            cleanup();
-            reject(err);
-        });
-    });
-}
-
 function getEventParts(props: any): any[] {
     const candidates = [
         props?.part,
@@ -451,6 +426,76 @@ function isConnectionError(err: Error): boolean {
         msg.includes('econnreset') ||
         msg.includes('fetch error')
     );
+}
+
+function normalizeSessionStatus(value: any): RealtimeSessionStatus {
+    const raw =
+        typeof value === 'string'
+            ? value
+            : value?.status?.type ||
+              value?.status ||
+              value?.type ||
+              value?.state ||
+              value?.phase ||
+              '';
+    const normalized = String(raw).toLowerCase();
+    if (normalized.includes('idle') || normalized.includes('complete') || normalized.includes('done')) {
+        return 'idle';
+    }
+    if (normalized.includes('error') || normalized.includes('fail')) {
+        return 'error';
+    }
+    if (
+        normalized.includes('running') ||
+        normalized.includes('busy') ||
+        normalized.includes('pending') ||
+        normalized.includes('working') ||
+        normalized.includes('queue')
+    ) {
+        return 'running';
+    }
+    return 'unknown';
+}
+
+async function fetchOpenCodeSessionStatus(
+    serverUrl: string,
+    sessionId: string
+): Promise<RealtimeSessionStatus> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5_000);
+    try {
+        const response = await fetch(`${normalizeServerUrl(serverUrl)}/session/status`, {
+            signal: controller.signal,
+        });
+        if (!response.ok) {
+            return 'unknown';
+        }
+
+        const data = await response.json().catch(() => null);
+        if (!data) {
+            return 'unknown';
+        }
+
+        if (Array.isArray(data)) {
+            const match = data.find((item: any) => item?.sessionId === sessionId || item?.sessionID === sessionId || item?.id === sessionId);
+            return normalizeSessionStatus(match);
+        }
+
+        const direct = data[sessionId] || data.sessions?.[sessionId] || data.sessionStatus?.[sessionId];
+        if (direct) {
+            return normalizeSessionStatus(direct);
+        }
+
+        if (data.sessionId === sessionId || data.sessionID === sessionId || data.id === sessionId) {
+            return normalizeSessionStatus(data);
+        }
+
+        return 'unknown';
+    } catch {
+        return 'unknown';
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 async function openCodeFetch(
@@ -543,6 +588,7 @@ interface EventStreamCallbacks {
     onSessionIdle?: () => void;
     onSessionError?: (error: any) => void;
     onPermissionAsked?: (payload: PermissionRequest) => void;
+    onPermissionActivity?: (isWaiting: boolean) => void;
 }
 
 export interface PermissionRequest {
@@ -708,16 +754,20 @@ class EventStreamClient {
                 const permission = props.permission || props;
                 const permId = props.permissionID || props.id || permission?.permissionID || permission?.id;
                 const permSid = props.sessionID || permission?.sessionID;
-                if (callbacks.onPermissionAsked && permId && (!permSid || permSid === this.targetSessionId)) {
-                    console.log('[OpenCode] EventStream: permission.asked', props.tool || permission?.tool, permId);
-                    callbacks.onPermissionAsked({
-                        permissionID: permId,
-                        sessionID: permSid || this.targetSessionId,
-                        tool: props.tool || permission?.tool || permission?.type || 'unknown',
-                        input: props.input || permission?.input || props.prompt || '',
-                        patterns: props.patterns,
-                        description: props.description || props.message || permission?.description || props.input || '',
-                    });
+                if (permId && (!permSid || permSid === this.targetSessionId)) {
+                    const isWaiting = eventType === 'permission.asked';
+                    callbacks.onPermissionActivity?.(isWaiting);
+                    if (callbacks.onPermissionAsked && isWaiting) {
+                        console.log('[OpenCode] EventStream: permission.asked', props.tool || permission?.tool, permId);
+                        callbacks.onPermissionAsked({
+                            permissionID: permId,
+                            sessionID: permSid || this.targetSessionId,
+                            tool: props.tool || permission?.tool || permission?.type || 'unknown',
+                            input: props.input || permission?.input || props.prompt || '',
+                            patterns: props.patterns,
+                            description: props.description || props.message || permission?.description || props.input || '',
+                        });
+                    }
                 }
             }
         };
@@ -1069,6 +1119,10 @@ export async function chatOpenCode(
     let sessionId = options.sessionId;
     let sessionCreated = false;
     let eventStream: EventStreamClient | null = null;
+    let wantRealtime = false;
+    let realtimeText = '';
+    let realtimeThinking = '';
+    let realtimeHadUsefulActivity = false;
 
     try {
         if (!sessionId) {
@@ -1118,50 +1172,65 @@ export async function chatOpenCode(
         }
 
         // Try real-time event stream for thinking/tool updates
-        const wantRealtime = !!(options.onThinkingChunk || options.onToolPartUpdate);
-        let realtimeText = '';
-        let realtimeThinking = '';
-        let resolveRealtimeIdle: (() => void) | null = null;
-        let rejectRealtimeIdle: ((error: Error) => void) | null = null;
-        const realtimeIdle = new Promise<void>((resolve, reject) => {
-            resolveRealtimeIdle = resolve;
-            rejectRealtimeIdle = reject;
-        });
+        wantRealtime = !!(options.onThinkingChunk || options.onToolPartUpdate);
+        let completionWatcher: RealtimeCompletionWatcher | null = null;
 
         if (wantRealtime) {
             try {
+                completionWatcher = createRealtimeCompletionWatcher({
+                    signal: options.signal,
+                    idleTimeoutMs: IDLE_TIMEOUT_MS,
+                    pollIntervalMs: SESSION_STATUS_POLL_INTERVAL_MS,
+                    getSessionStatus: () => fetchOpenCodeSessionStatus(serverUrl, sessionId!),
+                });
                 eventStream = new EventStreamClient(serverUrl, sessionId);
                 await eventStream.connect({
                     onTextDelta: (delta) => {
                         console.log('[OpenCode] EventStream onTextDelta:', delta.slice(0, 50));
+                        realtimeHadUsefulActivity = true;
+                        completionWatcher?.markPermissionWaiting(false);
+                        completionWatcher?.markActivity('text-delta');
                         realtimeText += delta;
                         options.onChunk?.(delta);
                     },
                     onReasoningDelta: (delta) => {
                         console.log('[OpenCode] EventStream onReasoningDelta:', delta.slice(0, 50));
+                        realtimeHadUsefulActivity = true;
+                        completionWatcher?.markPermissionWaiting(false);
+                        completionWatcher?.markActivity('reasoning-delta');
                         realtimeThinking += delta;
                         options.onThinkingChunk?.(delta);
                     },
                     onToolPartUpdate: (part) => {
+                        realtimeHadUsefulActivity = true;
+                        completionWatcher?.markPermissionWaiting(false);
+                        completionWatcher?.markActivity('tool-update');
                         if (!options.onToolPartUpdate) return;
                         options.onToolPartUpdate(isOpenCodeToolPartUpdate(part) ? part : toolPartToUpdate(part));
                     },
                     onSessionIdle: () => {
-                        resolveRealtimeIdle?.();
+                        completionWatcher?.markActivity('session-idle');
+                        completionWatcher?.resolveIdle();
                     },
                     onSessionError: (error) => {
                         const err = new Error(formatErrorMessage(error));
                         options.onError?.(err);
-                        rejectRealtimeIdle?.(err);
+                        completionWatcher?.reject(err);
                     },
                     onPermissionAsked: (req) => {
                         options.onPermissionAsked?.(req);
+                    },
+                    onPermissionActivity: (isWaiting) => {
+                        realtimeHadUsefulActivity = true;
+                        completionWatcher?.markActivity(isWaiting ? 'permission-asked' : 'permission-updated');
+                        completionWatcher?.markPermissionWaiting(isWaiting);
                     },
                 }, options.signal);
             } catch (streamErr) {
                 console.warn('[OpenCode] Failed to connect event stream, falling back to sync mode:', streamErr);
                 eventStream?.close();
                 eventStream = null;
+                completionWatcher = null;
             }
         }
 
@@ -1184,7 +1253,7 @@ export async function chatOpenCode(
                     throw new Error(`OpenCode async request failed: ${asyncFetchResult.response.status} ${asyncFetchResult.response.statusText}${errText ? ' - ' + errText : ''}`);
                 }
 
-                await waitForRealtimeIdle(realtimeIdle, options.signal);
+                await completionWatcher!.wait();
                 options.onComplete?.(realtimeText);
                 if (realtimeThinking) {
                     options.onThinkingComplete?.(realtimeThinking);
@@ -1319,7 +1388,9 @@ export async function chatOpenCode(
         eventStream?.close();
         const err = error as Error;
 
-        if (sessionCreated && sessionId) {
+        const shouldPreserveRealtimeSession =
+            wantRealtime && (realtimeHadUsefulActivity || !!realtimeText || !!realtimeThinking);
+        if (sessionCreated && sessionId && !shouldPreserveRealtimeSession) {
             deleteOpenCodeSession(config, sessionId).catch(() => {});
         }
 
