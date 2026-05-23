@@ -8,15 +8,12 @@ import {
     getFrontend,
     getBackend,
     IModel,
-    Protyle,
     openWindow,
     Constants,
     lockScreen,
-    ICard,
-    ICardData
 } from "siyuan";
 
-import { appendBlock, deleteBlock, setBlockAttrs, getBlockAttrs, pushMsg, pushErrMsg, sql, renderSprig, getChildBlocks, insertBlock, renameDocByID, prependBlock, updateBlock, createDocWithMd, getBlockKramdown, getBlockDOM, putFile, getFileBlob, readDir } from "./api";
+import { appendBlock, pushMsg, pushErrMsg, sql, putFile, getFileBlob, readDir } from "./api";
 import { saveAsset, base64ToBlob } from "./utils/assets";
 import { ensureServerRunning, stopServe, detectOpenCodeCLI, getServedPort, isServeRunning } from "./opencode-runner";
 import { startHealthPoll, stopHealthPoll } from "./stores/connectionStatus";
@@ -93,11 +90,11 @@ export default class PluginSample extends Plugin {
     private chatDialogs: Map<string, { dialog: Dialog; app: ChatDialog }> = new Map();
     private settingDialog: Dialog | null = null;
     private settingPanel: SettingPanel | null = null;
-    private webApps: Map<string, any> = new Map(); // 存储待打开的小程序数据
     private webViewHistory: WebViewHistory[] = []; // WebView 历史记录
     private openMenuDoctreeBindThis = this.openMenuDoctree.bind(this);
     private clickEditorTitleIconBindThis = this.clickEditorTitleIcon.bind(this);
     private openMenuLinkBindThis = this.openMenuLink.bind(this);
+    private linkClickHandler: ((e: MouseEvent) => void) | null = null;
     private domainIconMap: Map<string, string> = new Map(); // 缓存域名与图标文件名的映射
 
     /**
@@ -164,9 +161,9 @@ export default class PluginSample extends Plugin {
     private searchWebViewHistory(query: string): WebViewHistory[] {
         if (!query.trim()) {
             // 返回最近访问的记录
-            return this.webViewHistory
-                .slice(0, 10)
-                .sort((a, b) => b.timestamp - a.timestamp);
+            return [...this.webViewHistory]
+                .sort((a, b) => b.timestamp - a.timestamp)
+                .slice(0, 10);
         }
 
         // 分割搜索关键词
@@ -1101,6 +1098,14 @@ export default class PluginSample extends Plugin {
                     let redirectCount = 0;
                     let lastUrl = app.url;
                     const MAX_REDIRECTS = 20; // 最大重定向次数
+                    let recentRedirectUrls: string[] = app.url ? [app.url] : [];
+                    const rememberRedirectUrl = (url: string) => {
+                        if (!url) return;
+                        recentRedirectUrls = [
+                            url,
+                            ...recentRedirectUrls.filter(item => item !== url)
+                        ].slice(0, MAX_REDIRECTS);
+                    };
 
                     // 更新导航按钮状态
                     const updateNavigationButtons = () => {
@@ -1282,9 +1287,10 @@ export default class PluginSample extends Plugin {
                     // 监听 webview 导航事件
                     webview.addEventListener('did-navigate', (event: any) => {
                         const newUrl = event.url || webview.getURL();
+                        const seenRecently = recentRedirectUrls.includes(newUrl);
 
                         // 检测重定向循环
-                        if (newUrl === lastUrl) {
+                        if (newUrl === lastUrl || seenRecently) {
                             redirectCount++;
                             if (redirectCount > MAX_REDIRECTS) {
                                 console.error('检测到重定向循环，停止加载:', newUrl);
@@ -1294,8 +1300,9 @@ export default class PluginSample extends Plugin {
                             }
                         } else {
                             redirectCount = 0;
-                            lastUrl = newUrl;
                         }
+                        lastUrl = newUrl;
+                        rememberRedirectUrl(newUrl);
 
                         urlInput.value = newUrl;
                         updateNavigationButtons();
@@ -1338,6 +1345,12 @@ export default class PluginSample extends Plugin {
                     webview.addEventListener('did-stop-loading', () => {
                         // 加载完成后重置重定向计数器
                         redirectCount = 0;
+                        try {
+                            const currentUrl = webview.getURL();
+                            recentRedirectUrls = currentUrl ? [currentUrl] : [];
+                        } catch {
+                            recentRedirectUrls = lastUrl ? [lastUrl] : [];
+                        }
                         updateNavigationButtons();
                     });
 
@@ -1757,9 +1770,7 @@ export default class PluginSample extends Plugin {
             }
 
             // 监听链接点击事件（仅在启用时）
-            if (settings?.openLinksInWebView) {
-                this.setupLinkClickListener();
-            }
+            this.syncLinkClickListener(!!settings?.openLinksInWebView);
         } catch (e) {
             console.error('Failed to register webapp icons:', e);
         }
@@ -1771,8 +1782,12 @@ export default class PluginSample extends Plugin {
      * 直接监听 div.protyle-wysiwyg 下的 span[data-type="a"] 链接点击
      */
     private setupLinkClickListener() {
+        if (this.linkClickHandler) {
+            return;
+        }
+
         // 使用事件委托，监听所有 protyle 编辑器容器
-        document.addEventListener('click', async (e: MouseEvent) => {
+        this.linkClickHandler = async (e: MouseEvent) => {
             const target = e.target as HTMLElement;
 
             // 检查点击的是否为思源链接: span[data-type="a"]
@@ -1810,9 +1825,6 @@ export default class PluginSample extends Plugin {
                             updatedAt: Date.now()
                         };
 
-                        // 存储到待打开列表
-                        this.webApps.set(appData.id, appData);
-
                         // 立即打开标签页，避免等待网络请求。后台异步检查本地缓存并更新图标（如果存在）
                         const tabPromise = openTab({
                             app: this.app,
@@ -1846,7 +1858,25 @@ export default class PluginSample extends Plugin {
                     }
                 }
             }
-        }, true); // 使用捕获阶段，确保能先于其他处理器执行
+        };
+
+        document.addEventListener('click', this.linkClickHandler, true); // 使用捕获阶段，确保能先于其他处理器执行
+    }
+
+    private removeLinkClickListener() {
+        if (!this.linkClickHandler) {
+            return;
+        }
+        document.removeEventListener('click', this.linkClickHandler, true);
+        this.linkClickHandler = null;
+    }
+
+    private syncLinkClickListener(enabled: boolean) {
+        if (enabled) {
+            this.setupLinkClickListener();
+        } else {
+            this.removeLinkClickListener();
+        }
     }
 
     /**
@@ -1999,6 +2029,16 @@ export default class PluginSample extends Plugin {
         this.eventBus.off("open-menu-doctree", this.openMenuDoctreeBindThis);
         this.eventBus.off("click-editortitleicon", this.clickEditorTitleIconBindThis);
         this.eventBus.off("open-menu-link", this.openMenuLinkBindThis);
+        this.removeLinkClickListener();
+        for (const { dialog } of Array.from(this.chatDialogs.values())) {
+            dialog.destroy();
+        }
+        this.chatDialogs.clear();
+        this.settingDialog?.destroy();
+        this.settingDialog = null;
+        this.settingPanel = null;
+        this.aiSidebarApp?.$destroy();
+        this.aiSidebarApp = null as any;
 
         // SiYuan sync can transiently unload/reload plugins. Delay stopping the
         // spawned OpenCode server so in-flight async sessions are not interrupted.
@@ -2061,8 +2101,6 @@ export default class PluginSample extends Plugin {
                     createdAt: Date.now(),
                     updatedAt: Date.now()
                 };
-                this.webApps.set(appData.id, appData);
-
                 openTab({
                     app: this.app,
                     custom: {
@@ -2073,17 +2111,6 @@ export default class PluginSample extends Plugin {
                     }
                 });
 
-                // 后台异步检查本地 favicon 缓存并更新标签图标
-                (async () => {
-                    try {
-                        const iconId = await this.getOrCreateIconForDomain(href);
-                        if (iconId && iconId !== WEBAPP_ICON_ID) {
-                            this.registerWebAppIcon(this.getDomainFromUrl(href), iconId);
-                        }
-                    } catch (e) {
-                        // ignore
-                    }
-                })();
             }
         });
     }
@@ -2166,7 +2193,26 @@ export default class PluginSample extends Plugin {
                     models: legacy.models || []
                 };
 
-                settings.aiProviders.customProviders.push(newPlatform);
+                const existingIndex = settings.aiProviders.customProviders.findIndex((provider: any) => provider?.id === newId);
+                if (existingIndex >= 0) {
+                    settings.aiProviders.customProviders[existingIndex] = {
+                        ...settings.aiProviders.customProviders[existingIndex],
+                        ...newPlatform,
+                    };
+                } else {
+                    settings.aiProviders.customProviders.push(newPlatform);
+                }
+
+                const seenCustomProviderIds = new Set<string>();
+                const dedupedCustomProviders = settings.aiProviders.customProviders.filter((provider: any) => {
+                    if (!provider?.id) return true;
+                    if (seenCustomProviderIds.has(provider.id)) return false;
+                    seenCustomProviderIds.add(provider.id);
+                    return true;
+                });
+                if (dedupedCustomProviders.length !== settings.aiProviders.customProviders.length) {
+                    settings.aiProviders.customProviders = dedupedCustomProviders;
+                }
 
                 // 如果用户选中了旧的 v3 平台，切换到新创建的自定义平台
                 if (settings.selectedProviderId === 'v3') {
@@ -2299,6 +2345,7 @@ export default class PluginSample extends Plugin {
         await this.saveData(SETTINGS_FILE, normalizedSettings);
         // 更新 store，通知所有订阅者
         updateSettings(normalizedSettings);
+        this.syncLinkClickListener(!!normalizedSettings.openLinksInWebView);
     }
 
     /**

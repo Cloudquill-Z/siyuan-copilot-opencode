@@ -1,11 +1,9 @@
 import { resolve } from "path"
-import { defineConfig, loadEnv } from "vite"
+import { defineConfig } from "vite"
 import { viteStaticCopy } from "vite-plugin-static-copy"
-import livereload from "rollup-plugin-livereload"
 import { svelte } from "@sveltejs/vite-plugin-svelte"
 import zipPack from "vite-plugin-zip-pack";
 import fg from 'fast-glob';
-import fs from 'fs';
 import { execSync } from 'child_process';
 
 
@@ -53,7 +51,7 @@ export default defineConfig({
                         });
                     } catch (error) {
                         console.warn('Auto copy to SiYuan failed:', error.message);
-                        console.warn('You can manually run: pnpm run make-link-win');
+                        console.warn('You can manually run: npm run make_dev_copy or npm run make-link');
                     }
                 }
             }
@@ -69,7 +67,7 @@ export default defineConfig({
     build: {
         outDir: outputDir,
         // Keep existing files in output directory for incremental builds
-        emptyOutDir: false,
+        emptyOutDir: !isDev,
         minify: true,
         sourcemap: isSrcmap ? 'inline' : false,
 
@@ -86,7 +84,6 @@ export default defineConfig({
                         async buildStart() {
                             const files = await fg([
                                 './i18n/**',
-                                './mindmap-embed/**',
                                 './README*.md',
                                 './plugin.json'
                             ]);

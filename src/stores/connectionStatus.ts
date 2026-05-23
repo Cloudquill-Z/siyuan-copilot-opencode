@@ -30,7 +30,7 @@ export function getConnectionStatus(): ConnectionStatus {
 }
 
 export function startHealthPoll(serverUrl: string, intervalMs: number = 5000): void {
-    stopHealthPoll();
+    stopHealthPoll(false);
     currentServerUrl = serverUrl;
 
     connectionStatusStore.update(s => ({ ...s, state: 'connecting', serverUrl, error: '' }));
@@ -80,12 +80,14 @@ export function startHealthPoll(serverUrl: string, intervalMs: number = 5000): v
     healthTimer = setInterval(check, intervalMs);
 }
 
-export function stopHealthPoll(): void {
+export function stopHealthPoll(resetState: boolean = true): void {
     if (healthTimer !== null) {
         clearInterval(healthTimer);
         healthTimer = null;
     }
-    connectionStatusStore.set({ ...initialState, serverUrl: currentServerUrl });
+    if (resetState) {
+        connectionStatusStore.set({ ...initialState, serverUrl: currentServerUrl });
+    }
 }
 
 export function refreshHealth(): void {

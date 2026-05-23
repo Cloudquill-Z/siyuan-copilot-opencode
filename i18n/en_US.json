@@ -71,6 +71,14 @@
                 "enter": "Enter to send, Shift + Enter to line break"
             }
         },
+        "executionMessageMode": {
+            "title": "Send While Running",
+            "description": "Choose how messages are handled while AI is running",
+            "options": {
+                "guide": "Guide: add context without starting a new reply",
+                "queue": "Queue: let OpenCode process it next"
+            }
+        },
         "messageFontSize": {
             "title": "Message Font Size",
             "description": "Adjust the font size of message content (default 12px)"

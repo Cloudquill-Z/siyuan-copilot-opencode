@@ -71,6 +71,14 @@
                 "enter": "Enter发送，Shift + Enter换行"
             }
         },
+        "executionMessageMode": {
+            "title": "执行中发送",
+            "description": "AI 正在执行时，继续发送消息的处理方式",
+            "options": {
+                "guide": "引导：补充到当前会话，不主动触发新回复",
+                "queue": "排队：交给 OpenCode 排队执行"
+            }
+        },
         "messageFontSize": {
             "title": "消息字体大小",
             "description": "调整消息内容的字体大小（默认12px）"

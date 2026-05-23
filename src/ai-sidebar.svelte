@@ -7,12 +7,13 @@
         type EditOperation,
         type ToolCall,
         type ContextDocument,
-    type ThinkingEffort,
-    fetchModels,
-    executeCommand,
-    sendStillPrompt,
-    sessionInit,
-} from './ai-chat';
+        type ThinkingEffort,
+        type QuestionRequest,
+        fetchModels,
+        executeCommand,
+        sendStillPrompt,
+        sessionInit,
+    } from './ai-chat';
     import type { MessageContent } from './ai-chat';
     import { getActiveEditor, openTab } from 'siyuan';
     import {
@@ -32,7 +33,7 @@
         putFile,
         removeFile,
     } from './api';
-    import { saveAsset, loadAsset, base64ToBlob, readAssetAsText } from './utils/assets';
+    import { saveAsset, loadAsset, base64ToBlob, readAssetAsText, revokeLoadedAssetUrls } from './utils/assets';
     import {
         getPluginFileBlob,
         getSessionPath,
@@ -47,9 +48,10 @@
     import SessionManager from './components/SessionManager.svelte';
     import ModelPresetButton from './components/ModelPreset.svelte';
     import MultiModelSelector from './components/MultiModelSelector.svelte';
-    import ConnectionStatus from './components/ConnectionStatus.svelte';
+    import openCodeIconUrl from '../assets/opencode-icon.svg';
     import type { ProviderConfig } from './defaultSettings';
     import { settingsStore, updateSettings } from './stores/settings';
+    import { connectionStatusStore, refreshHealth, type ConnectionStatus } from './stores/connectionStatus';
     import { confirm, Constants, platformUtils } from 'siyuan';
     import { t } from './utils/i18n';
     import { getModelCapabilities } from './utils/modelCapabilities';
@@ -102,6 +104,11 @@
     let streamingToolCallsCollapsed = true;
     let streamingThinking = ''; // 流式思考内容
     let isThinkingPhase = false; // 是否在思考阶段
+    type OpenCodeTimelineItem =
+        | { type: 'thinking'; id: string; content: string }
+        | { type: 'tool'; id: string; toolPart: any };
+    let openCodeTimeline: OpenCodeTimelineItem[] = [];
+    let openCodeTimelineCounter = 0;
     let settings: any = {};
     let messagesContainer: HTMLElement;
     let textareaElement: HTMLTextAreaElement;
@@ -205,6 +212,15 @@
             isAborted = val;
         }
     }
+
+    function createSessionId(): string {
+        const randomPart =
+            typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+                ? crypto.randomUUID()
+                : Math.random().toString(36).slice(2, 10);
+        return `session_${Date.now()}_${randomPart}`;
+    }
+
     // 当切换当前会话时，同步全局代理变量
     $: currentSessionId, syncFromCurrentSession();
 
@@ -277,7 +293,15 @@
 
     // 对话模式
     type ChatMode = 'plan' | 'build';
+    type ThinkingSelectValue = 'off' | ThinkingEffort;
     let chatMode: ChatMode = 'plan';
+    const THINKING_EFFORT_OPTIONS: Array<{ value: ThinkingEffort; label: string }> = [
+        { value: 'auto', label: 'Auto' },
+        { value: 'low', label: 'Low' },
+        { value: 'medium', label: 'Middle' },
+        { value: 'high', label: 'High' },
+        { value: 'max', label: 'Max' },
+    ];
     let isDiffDialogOpen = false;
     let currentDiffOperation: EditOperation | null = null;
     type DiffViewMode = 'diff' | 'split';
@@ -292,7 +316,7 @@
     // 消息内容显示缓存（存储每个消息的显示内容，键为content的哈希）
     const messageDisplayCache = new Map<string, { loading: boolean; content: string }>();
 
-    // 获取content的简单哈希（用作缓存键）
+    // 获取content的缓存键
     function getContentHash(content: string): string {
         let hash = 0;
         for (let i = 0; i < content.length; i++) {
@@ -300,7 +324,7 @@
             hash = (hash << 5) - hash + char;
             hash = hash & hash;
         }
-        return hash.toString();
+        return `${content.length}:${hash >>> 0}:${content.slice(0, 64)}:${content.slice(-64)}`;
     }
 
     // 获取用于显示的消息内容（将 assets 路径替换为 blob URL）
@@ -582,7 +606,8 @@
             !!(
                 modelConfig.capabilities?.thinking &&
                 (response.thinkingEnabled ?? modelConfig.thinkingEnabled ?? false)
-            )
+            ),
+            modelConfig.id
         );
 
         // 本次请求的 AbortController（用于单个模型的中断）
@@ -917,7 +942,9 @@
             messages,
             contextDocumentsWithLatestContent,
             userContent,
-            userMessage
+            userMessage,
+            !!(modelConfig.capabilities?.thinking && (modelConfig.thinkingEnabled || false)),
+            modelConfig.id
         );
 
         const localAbort = new AbortController();
@@ -956,7 +983,8 @@
                     enableThinking:
                         modelConfig.capabilities?.thinking &&
                         (modelConfig.thinkingEnabled || false),
-                    reasoningEffort: modelConfig.thinkingEffort || 'low', mode: chatMode,
+                    reasoningEffort: modelConfig.thinkingEffort || 'low',
+                    mode: chatMode,
                     onThinkingChunk: async (chunk: string) => {
                         thinking += chunk;
                         msg.multiModelResponses[responseIndex].thinking = thinking;
@@ -1024,6 +1052,43 @@
             plugin.saveSettings(settings);
         }
     }
+    $: currentSessionPinned = !!(
+        currentSessionId && sessions.find(session => session.id === currentSessionId)?.pinned
+    );
+
+    function setChatMode(nextMode: ChatMode) {
+        chatMode = nextMode;
+    }
+
+    function toggleChatMode() {
+        setChatMode(chatMode === 'plan' ? 'build' : 'plan');
+    }
+
+    function getConnectionLabel(status: ConnectionStatus) {
+        if (status.state === 'connected') return '已连接';
+        if (status.state === 'connecting') return '连接中';
+        return '未连接';
+    }
+
+    async function toggleCurrentSessionPin() {
+        if (!currentSessionId) {
+            if (messages.filter(m => m.role !== 'system').length > 0) {
+                await saveCurrentSession(true);
+            } else {
+                pushErrMsg(t('aiSidebar.errors.emptySession'));
+                return;
+            }
+        }
+
+        const session = sessions.find(item => item.id === currentSessionId);
+        if (!session) return;
+
+        session.pinned = !session.pinned;
+        sessions = [...sessions];
+        await saveSessions();
+        pushMsg(session.pinned ? t('aiSidebar.session.pinned') : t('aiSidebar.session.unpinned'));
+    }
+
     let toolCallsInProgress: Set<string> = new Set(); // 正在执行的工具调用ID
     let toolCallsExpanded: Record<string, boolean> = {}; // 工具调用是否展开，默认折叠
     let toolCallResultsExpanded: Record<string, boolean> = {}; // 工具结果是否展开，默认折叠
@@ -1034,9 +1099,9 @@
     }
 
     function getOpenCodeToolStatusIcon(status: string): string {
-        if (status === 'completed') return '✅';
-        if (status === 'error') return '❌';
-        if (status === 'running') return '⏳';
+        if (status === 'completed') return '✓';
+        if (status === 'error') return '!';
+        if (status === 'running') return '…';
         return '…';
     }
 
@@ -1061,6 +1126,23 @@
         if (!chunk) return;
         isThinkingPhase = true;
         streamingThinking += chunk;
+        const lastItem = openCodeTimeline[openCodeTimeline.length - 1];
+        if (lastItem?.type === 'thinking') {
+            openCodeTimeline = openCodeTimeline.map(item =>
+                item.id === lastItem.id && item.type === 'thinking'
+                    ? { ...item, content: item.content + chunk }
+                    : item
+            );
+        } else {
+            openCodeTimeline = [
+                ...openCodeTimeline,
+                {
+                    type: 'thinking',
+                    id: `thinking-${Date.now()}-${openCodeTimelineCounter++}`,
+                    content: chunk,
+                },
+            ];
+        }
         if (!streamingThinkingCollapsed) {
             await scrollToBottom();
         }
@@ -1074,6 +1156,19 @@
                 [collapseKey]: true,
             };
         }
+    }
+
+    function resetOpenCodeTimeline() {
+        openCodeTimeline = [];
+        openCodeTimelineCounter = 0;
+    }
+
+    function cloneOpenCodeTimeline() {
+        return openCodeTimeline.map(item =>
+            item.type === 'thinking'
+                ? { ...item }
+                : { ...item, toolPart: { ...item.toolPart } }
+        );
     }
 
     function updateOpenCodeToolPart(update: any) {
@@ -1091,6 +1186,26 @@
             openCodeToolParts = next;
         } else {
             openCodeToolParts = [...openCodeToolParts, update];
+        }
+
+        const timelineToolIndex = openCodeTimeline.findIndex(
+            item => item.type === 'tool' && getOpenCodeToolPartKey(item.toolPart) === updateKey
+        );
+        if (timelineToolIndex >= 0) {
+            openCodeTimeline = openCodeTimeline.map((item, index) =>
+                index === timelineToolIndex && item.type === 'tool'
+                    ? { ...item, toolPart: { ...item.toolPart, ...update } }
+                    : item
+            );
+        } else {
+            openCodeTimeline = [
+                ...openCodeTimeline,
+                {
+                    type: 'tool',
+                    id: `tool-${updateKey}-${openCodeTimelineCounter++}`,
+                    toolPart: { ...update },
+                },
+            ];
         }
 
         if (isTerminalStatus) {
@@ -1122,6 +1237,8 @@
 
     // 权限确认对话框
     let activePermissionRequest: { permissionID: string; sessionID: string; tool: string; input: string; description: string } | null = null;
+    let activeQuestionRequest: QuestionRequest | null = null;
+    let questionDrafts: Array<{ selected: string[]; custom: string }> = [];
 
     async function handlePermissionResponse(response: 'once' | 'always' | 'reject') {
         if (!activePermissionRequest) return;
@@ -1133,6 +1250,85 @@
             await respondToPermission(serverUrl, req.sessionID, req.permissionID, response);
         } catch (err) {
             console.warn('[Permission] Failed to respond:', err);
+        }
+    }
+
+    function handleOpenCodeQuestionAsked(req: QuestionRequest) {
+        activeQuestionRequest = req;
+        questionDrafts = req.questions.map((question) => ({
+            selected: question.multiple ? [] : (question.options[0]?.label ? [question.options[0].label] : []),
+            custom: '',
+        }));
+    }
+
+    function toggleQuestionOption(questionIndex: number, option: string, multiple?: boolean) {
+        questionDrafts = questionDrafts.map((draft, index) => {
+            if (index !== questionIndex) return draft;
+            if (!multiple) {
+                return { ...draft, selected: [option] };
+            }
+            const exists = draft.selected.includes(option);
+            return {
+                ...draft,
+                selected: exists
+                    ? draft.selected.filter((item) => item !== option)
+                    : [...draft.selected, option],
+            };
+        });
+    }
+
+    function updateQuestionCustom(questionIndex: number, value: string) {
+        questionDrafts = questionDrafts.map((draft, index) =>
+            index === questionIndex ? { ...draft, custom: value } : draft
+        );
+    }
+
+    function buildQuestionAnswers(): string[][] {
+        if (!activeQuestionRequest) return [];
+        return activeQuestionRequest.questions.map((_question, index) => {
+            const draft = questionDrafts[index] || { selected: [], custom: '' };
+            const answers = [...draft.selected];
+            const custom = draft.custom.trim();
+            if (custom) answers.push(custom);
+            return answers;
+        });
+    }
+
+    async function submitQuestionAnswer() {
+        if (!activeQuestionRequest) return;
+        const answers = buildQuestionAnswers();
+        const hasAnswer = answers.every((answer) => answer.length > 0);
+        if (!hasAnswer) {
+            pushErrMsg('请先选择或输入回答');
+            return;
+        }
+        const request = activeQuestionRequest;
+        activeQuestionRequest = null;
+        questionDrafts = [];
+        try {
+            const serverUrl = settings?.aiProviders?.opencode?.serverUrl || 'http://localhost:4096';
+            const { replyToQuestion } = await import('./ai-chat');
+            const ok = await replyToQuestion(serverUrl, request.requestID, answers);
+            if (!ok) {
+                pushErrMsg('回答发送失败，请检查 OpenCode 服务状态');
+            }
+        } catch (err) {
+            console.warn('[Question] Failed to reply:', err);
+            pushErrMsg('回答发送失败');
+        }
+    }
+
+    async function rejectQuestionAnswer() {
+        if (!activeQuestionRequest) return;
+        const request = activeQuestionRequest;
+        activeQuestionRequest = null;
+        questionDrafts = [];
+        try {
+            const serverUrl = settings?.aiProviders?.opencode?.serverUrl || 'http://localhost:4096';
+            const { rejectQuestion } = await import('./ai-chat');
+            await rejectQuestion(serverUrl, request.requestID);
+        } catch (err) {
+            console.warn('[Question] Failed to reject:', err);
         }
     }
     type PendingDocDiff = {
@@ -1147,6 +1343,7 @@
     const pendingDocDiffsByMessage = new Map<number, Map<string, PendingDocDiff>>();
     let pendingToolCall: ToolCall | null = null; // 待批准的工具调用
     let isToolApprovalDialogOpen = false; // 工具批准对话框是否打开
+    let pendingToolApprovalResolve: ((approved: boolean) => void) | null = null;
     let isToolConfigLoaded = false; // 标记工具配置是否已加载
     let lastSavedToolsConfigSnapshot = JSON.stringify({
         selectedTools: [],
@@ -1438,6 +1635,7 @@
         document.removeEventListener('copy', handleCopyEvent);
         // 移除文档总结事件监听器
         window.removeEventListener(SUMMARY_EVENT, handleSummarizeDoc as EventListener);
+        revokeLoadedAssetUrls();
 
         // 如果有未保存的更改，自动保存当前会话
         if (hasUnsavedChanges && messages.filter(m => m.role !== 'system').length > 0) {
@@ -2004,7 +2202,7 @@
             modelSelectionEnabled: newSettings.modelSelectionEnabled ?? false,
             selectedModels: newSettings.selectedModels || [],
             enableMultiModel: newSettings.enableMultiModel ?? false,
-            chatMode: newSettings.chatMode ?? 'ask',
+            chatMode: newSettings.chatMode ?? 'plan',
         };
 
         // 应用聊天模式
@@ -2293,6 +2491,9 @@
         const modelConfig = providerConfig.models?.find((m: any) => m.id === currentModelId);
         return (modelConfig?.thinkingEffort || 'low') as ThinkingEffort;
     })();
+    $: currentThinkingSelectValue = (
+        showThinkingToggle && isThinkingModeEnabled ? currentThinkingEffort : 'off'
+    ) as ThinkingSelectValue;
 
     // 更新思考程度
     async function updateThinkingEffort(effort: ThinkingEffort) {
@@ -2358,10 +2559,21 @@
         await plugin.saveSettings(settings);
     }
 
-    // 处理思考程度选择器变化
-    function handleThinkingEffortChange(event: Event) {
+    async function handleThinkingSelectChange(event: Event) {
         const target = event.currentTarget as HTMLSelectElement;
-        updateThinkingEffort(target.value as ThinkingEffort);
+        const nextValue = target.value as ThinkingSelectValue;
+
+        if (nextValue === 'off') {
+            if (isThinkingModeEnabled) {
+                await toggleThinkingMode();
+            }
+            return;
+        }
+
+        if (!isThinkingModeEnabled) {
+            await toggleThinkingMode();
+        }
+        await updateThinkingEffort(nextValue);
     }
 
     // 切换思考模式
@@ -2616,7 +2828,7 @@
             if (userMessages.length === 1 && !currentSessionId) {
                 const now = Date.now();
                 const newSession: ChatSession = {
-                    id: `session_${now}`,
+                    id: createSessionId(),
                     title: generateSessionTitle(),
                     messages: [...messages],
                     createdAt: now,
@@ -3116,7 +3328,8 @@
         contextDocumentsWithLatestContent: ContextDocument[],
         userContent: string,
         lastUserMessage: Message,
-        thinkingEnabled: boolean = false
+        thinkingEnabled: boolean = false,
+        modelId: string = currentModelId
     ) {
         // 过滤掉空的 assistant 消息，防止某些 Provider（例如 Kimi）报错
         // 但保留有生图的 assistant 消息
@@ -3151,7 +3364,9 @@
 
                 // 只有在启用 thinking 模式时才保留相关内容
                 // 特别是 Kimi 等模型，如果启用了 thinking，历史 assistant 消息必须包含 reasoning_content
-                const shouldKeepReasoning = thinkingEnabled && userToolCount > 0;
+                const isDeepSeekReasonerModel = /deepseek-(reasoner|r1)/i.test(modelId || '');
+                const shouldKeepReasoning =
+                    (thinkingEnabled && userToolCount > 0) || isDeepSeekReasonerModel;
 
                 if (msg.tool_calls) {
                     baseMsg.tool_calls = msg.tool_calls;
@@ -3269,8 +3484,15 @@
 
         // 处理最后一条用户消息
         if (messagesToSend.length > 0) {
-            const lastMessage = messagesToSend[messagesToSend.length - 1];
-            if (lastMessage.role === 'user') {
+            let lastUserMessageIndex = -1;
+            for (let i = messagesToSend.length - 1; i >= 0; i--) {
+                if (messagesToSend[i].role === 'user') {
+                    lastUserMessageIndex = i;
+                    break;
+                }
+            }
+            if (lastUserMessageIndex >= 0) {
+                const lastMessage = messagesToSend[lastUserMessageIndex];
                 const hasImages = lastUserMessage.attachments?.some(att => att.type === 'image');
 
                 // 查找上一条assistant消息是否有生成的图片（用于图片编辑）
@@ -3853,17 +4075,20 @@
         const providerConfig = getCurrentProviderConfig();
         if (!providerConfig) {
             pushErrMsg(t('aiSidebar.errors.noProvider'));
+            isLoading = false;
             return;
         }
 
         if (providerRequiresApiKey(currentProvider) && !providerConfig.apiKey) {
             pushErrMsg(t('aiSidebar.errors.noApiKey'));
+            isLoading = false;
             return;
         }
 
         const modelConfig = getCurrentModelConfig();
         if (!modelConfig) {
             pushErrMsg(t('aiSidebar.errors.noModel'));
+            isLoading = false;
             return;
         }
 
@@ -3875,6 +4100,7 @@
             } catch (e) {
                 console.error('Failed to parse custom body:', e);
                 pushErrMsg('自定义参数 JSON 格式错误');
+                isLoading = false;
                 return;
             }
         }
@@ -3960,6 +4186,7 @@
         streamingMessage = '';
         streamingThinking = '';
         openCodeToolParts = [];
+        resetOpenCodeTimeline();
         streamingThinkingCollapsed = false;
         streamingToolCallsCollapsed = true;
         thinkingBeforeToolCalls = ''; // 重置工具调用前的思考内容
@@ -3974,7 +4201,7 @@
         if (userMessages.length === 1 && !currentSessionId) {
             const now = Date.now();
             const newSession: ChatSession = {
-                id: `session_${now}`,
+                id: createSessionId(),
                 title: generateSessionTitle(),
                 messages: [...messages],
                 createdAt: now,
@@ -3991,11 +4218,7 @@
         await scrollToBottom(true);
 
         // DeepSeek 思考模式：开启新一轮对话前清理历史消息中的 reasoning_content，保留工具调用链
-        if (
-            chatMode === 'plan' &&
-            userToolCount > 0 &&
-            currentProvider === 'deepseek'
-        ) {
+        if (chatMode === 'plan' && userToolCount > 0 && currentProvider === 'deepseek') {
             messages = messages.map(msg => {
                 if (msg.role === 'assistant' && msg.reasoning_content) {
                     const { reasoning_content, ...rest } = msg as any;
@@ -4011,446 +4234,21 @@
             modelConfig.capabilities?.thinking &&
             (modelConfig.thinkingEnabled || false);
 
-        // 准备发送给AI的消息（包含系统提示词和上下文文档）
-        // 深拷贝消息数组，避免修改原始消息
-        // 保留工具调用相关字段（如果存在），以便在 Agent 模式下正确处理历史工具调用
-        // 过滤掉空的 assistant 消息，防止部分 Provider（例如 Kimi）返回错误
-        let messagesToSend = messages
-            .filter(msg => {
-                if (msg.role === 'system') return false;
-                if (msg.role === 'assistant') {
-                    const text =
-                        typeof msg.content === 'string'
-                            ? msg.content
-                            : getMessageText(msg.content || []);
-                    const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
-                    const hasReasoning = !!msg.reasoning_content;
-                    // 保留有 tool_calls 或 reasoning_content 的 assistant 消息，即便正文为空
-                    return (text && text.toString().trim() !== '') || hasToolCalls || hasReasoning;
-                }
-                return true;
-            })
-            .map((msg, index, array) => {
-                const baseMsg: any = {
-                    role: msg.role,
-                    content: msg.content,
-                };
-
-                // 只在字段存在时才包含，避免传递 undefined 字段给 API
-                if (msg.tool_calls) {
-                    baseMsg.tool_calls = msg.tool_calls;
-                }
-                if (msg.tool_call_id) {
-                    baseMsg.tool_call_id = msg.tool_call_id;
-                    baseMsg.name = msg.name;
-                }
-
-                // 检测是否是 DeepSeek 推理模型
-                const isDeepSeekReasonerModel = /deepseek-(reasoner|r1)/i.test(modelConfig.id);
-
-                // 只有在启用 thinking 模式或者是 DeepSeek 推理模型时才保留 reasoning_content
-                // Kimi 等模型在未启用 thinking 时看到 reasoning_content 会报错
-                const shouldKeepReasoning = isDeepseekThinkingAgent || isDeepSeekReasonerModel;
-                if (shouldKeepReasoning && msg.reasoning_content !== undefined) {
-                    baseMsg.reasoning_content = msg.reasoning_content;
-                }
-
-                // 在启用 thinking 模式或是 DeepSeek 推理模型且有 tool_calls 时，确保 reasoning_content 字段存在
-                if (shouldKeepReasoning && msg.tool_calls && msg.tool_calls.length > 0) {
-                    if (baseMsg.reasoning_content === undefined) {
-                        baseMsg.reasoning_content = '';
-                    }
-                }
-
-                // 只处理历史用户消息的上下文（不是最后一条消息）
-                // 最后一条消息将在后面用最新内容处理
-                const isLastMessage = index === array.length - 1;
-                if (
-                    !isLastMessage &&
-                    msg.role === 'user' &&
-                    msg.contextDocuments &&
-                    msg.contextDocuments.length > 0
-                ) {
-                    const hasImages = msg.attachments?.some(att => att.type === 'image');
-
-                    // 获取原始消息内容
-                    const originalContent =
-                        typeof msg.content === 'string' ? msg.content : getMessageText(msg.content);
-
-                    // 构建上下文文本（agent模式下，文档块只传递ID）
-                    const contextText = msg.contextDocuments
-                        .map(doc => {
-                            const label =
-                                doc.type === 'doc'
-                                    ? '文档'
-                                    : doc.type === 'webpage'
-                                      ? '网页'
-                                      : '块';
-
-                            // agent模式或启用工具的问答模式：文档块只传递ID，不传递内容
-                            if (
-                                chatMode === 'plan' &&
-                                userToolCount > 0 &&
-                                doc.type === 'doc'
-                            ) {
-                                return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\``;
-                            }
-
-                            // 其他情况：传递完整内容
-                            if (doc.content) {
-                                return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\`\n\n\`\`\`markdown\n${doc.content}\n\`\`\``;
-                            } else {
-                                // 如果没有内容（agent模式下的文档），只传递ID
-                                return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\``;
-                            }
-                        })
-                        .join('\n\n---\n\n');
-
-                    // 如果有图片附件，使用多模态格式
-                    if (hasImages) {
-                        const contentParts: any[] = [];
-
-                        // 添加文本内容和上下文
-                        let textContent = originalContent;
-                        textContent += `\n\n---\n\n以下是相关内容作为上下文：\n\n${contextText}`;
-                        contentParts.push({ type: 'text', text: textContent });
-
-                        // 添加图片
-                        msg.attachments?.forEach(att => {
-                            if (att.type === 'image') {
-                                contentParts.push({
-                                    type: 'image_url',
-                                    image_url: { url: att.data },
-                                });
-                            }
-                        });
-
-                        // 添加文本文件内容
-                        const fileTexts = msg.attachments
-                            ?.filter(att => att.type === 'file')
-                            .map(att => `## 文件: ${att.name}\n\n\`\`\`\n${att.data}\n\`\`\`\n`)
-                            .join('\n\n---\n\n');
-
-                        if (fileTexts) {
-                            contentParts.push({
-                                type: 'text',
-                                text: `\n\n以下是附件文件内容：\n\n${fileTexts}`,
-                            });
-                        }
-
-                        baseMsg.content = contentParts;
-                    } else {
-                        // 纯文本格式
-                        let enhancedContent = originalContent;
-
-                        // 添加文本文件附件
-                        if (msg.attachments && msg.attachments.length > 0) {
-                            const attachmentTexts = msg.attachments
-                                .map(att => {
-                                    if (att.type === 'file') {
-                                        return `## 文件: ${att.name}\n\n\`\`\`\n${att.data}\n\`\`\`\n`;
-                                    }
-                                    return '';
-                                })
-                                .filter(Boolean)
-                                .join('\n\n---\n\n');
-
-                            if (attachmentTexts) {
-                                enhancedContent += `\n\n---\n\n以下是附件内容：\n\n${attachmentTexts}`;
-                            }
-                        }
-
-                        // 添加上下文文档
-                        enhancedContent += `\n\n---\n\n以下是相关内容作为上下文：\n\n${contextText}`;
-
-                        baseMsg.content = enhancedContent;
-                    }
-                }
-
-                return baseMsg;
-            });
-
-        // 处理最后一条用户消息，添加附件和上下文文档
-        if (messagesToSend.length > 0) {
-            const lastMessage = messagesToSend[messagesToSend.length - 1];
-            if (lastMessage.role === 'user') {
-                const lastUserMessage = messages[messages.length - 1];
-                const hasImages = lastUserMessage.attachments?.some(att => att.type === 'image');
-
-                // 查找上一条assistant消息是否有生成的图片（用于图片编辑）
-                let previousGeneratedImages: any[] = [];
-                const lastAssistantMsg = [...messages].reverse().find(m => m.role === 'assistant');
-                if (lastAssistantMsg) {
-                    // 检查generatedImages或attachments中的图片
-                    if (
-                        lastAssistantMsg.generatedImages &&
-                        lastAssistantMsg.generatedImages.length > 0
-                    ) {
-                        previousGeneratedImages = lastAssistantMsg.generatedImages.map(img => ({
-                            type: 'image_url' as const,
-                            image_url: {
-                                url: `data:${img.mimeType || 'image/png'};base64,${img.data}`,
-                            },
-                        }));
-                    } else if (
-                        lastAssistantMsg.attachments &&
-                        lastAssistantMsg.attachments.length > 0
-                    ) {
-                        previousGeneratedImages = lastAssistantMsg.attachments
-                            .filter(att => att.type === 'image')
-                            .map(att => ({
-                                type: 'image_url' as const,
-                                image_url: { url: att.data },
-                            }));
-                    } else if (typeof lastAssistantMsg.content === 'string') {
-                        // 从Markdown内容中提取图片 ![alt](url)
-                        const imageRegex = /!\[.*?\]\(([^)]+)\)/g;
-                        const content = lastAssistantMsg.content;
-                        let match;
-                        while ((match = imageRegex.exec(content)) !== null) {
-                            const url = match[1];
-                            // 处理 assets 路径的图片
-                            if (
-                                isPluginAssetPath(url)
-                            ) {
-                                try {
-                                    const blobUrl = await loadAsset(url);
-                                    if (blobUrl) {
-                                        previousGeneratedImages.push({
-                                            type: 'image_url' as const,
-                                            image_url: { url: blobUrl },
-                                        });
-                                    }
-                                } catch (error) {
-                                    console.error('Failed to load asset image:', error);
-                                }
-                            } else if (url.startsWith('http://') || url.startsWith('https://')) {
-                                // HTTP/HTTPS URL 直接使用
-                                previousGeneratedImages.push({
-                                    type: 'image_url' as const,
-                                    image_url: { url: url },
-                                });
-                            }
-                        }
-                    }
-                }
-
-                // 如果有图片附件或上一条有生成的图片，使用多模态格式
-                if (hasImages || previousGeneratedImages.length > 0) {
-                    const contentParts: any[] = [];
-
-                    // 先添加用户输入
-                    let textContent = userContent;
-
-                    // 然后添加上下文文档（如果有）
-                    if (contextDocumentsWithLatestContent.length > 0) {
-                        const contextText = contextDocumentsWithLatestContent
-                            .map(doc => {
-                                const label =
-                                    doc.type === 'doc'
-                                        ? '文档'
-                                        : doc.type === 'webpage'
-                                          ? '网页'
-                                          : '块';
-
-                                // agent模式或启用工具的问答模式：文档块只传递ID，不传递内容
-                                if (
-                                    chatMode === 'plan' &&
-                                    userToolCount > 0 &&
-                                    doc.type === 'doc'
-                                ) {
-                                    return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\``;
-                                }
-
-                                // 其他情况：传递完整内容
-                                if (doc.content) {
-                                    return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\`\n\n\`\`\`markdown\n${doc.content}\n\`\`\``;
-                                } else {
-                                    // 如果没有内容（agent模式下的文档），只传递ID
-                                    return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\``;
-                                }
-                            })
-                            .join('\n\n---\n\n');
-                        textContent += `\n\n---\n\n以下是相关内容作为上下文：\n\n${contextText}`;
-                    }
-
-                    contentParts.push({ type: 'text', text: textContent });
-
-                    // 添加用户上传的图片
-                    lastUserMessage.attachments?.forEach(att => {
-                        if (att.type === 'image') {
-                            contentParts.push({
-                                type: 'image_url',
-                                image_url: { url: att.data },
-                            });
-                        }
-                    });
-
-                    // 添加上一次生成的图片（用于图片编辑）
-                    previousGeneratedImages.forEach(img => {
-                        contentParts.push(img);
-                    });
-
-                    // 添加文本文件内容
-                    const fileTexts = lastUserMessage.attachments
-                        ?.filter(att => att.type === 'file')
-                        .map(att => `## 文件: ${att.name}\n\n\`\`\`\n${att.data}\n\`\`\`\n`)
-                        .join('\n\n---\n\n');
-
-                    if (fileTexts) {
-                        contentParts.push({
-                            type: 'text',
-                            text: `\n\n以下是附件文件内容：\n\n${fileTexts}`,
-                        });
-                    }
-
-                    lastMessage.content = contentParts;
-                } else {
-                    // 纯文本格式
-                    let enhancedContent = userContent;
-
-                    // 添加文本文件附件
-                    if (lastUserMessage.attachments && lastUserMessage.attachments.length > 0) {
-                        const attachmentTexts = lastUserMessage.attachments
-                            .map(att => {
-                                if (att.type === 'file') {
-                                    return `## 文件: ${att.name}\n\n\`\`\`\n${att.data}\n\`\`\`\n`;
-                                }
-                                return '';
-                            })
-                            .filter(Boolean)
-                            .join('\n\n---\n\n');
-
-                        if (attachmentTexts) {
-                            enhancedContent += `\n\n---\n\n以下是附件内容：\n\n${attachmentTexts}`;
-                        }
-                    }
-
-                    // 添加上下文文档
-                    if (contextDocumentsWithLatestContent.length > 0) {
-                        const contextText = contextDocumentsWithLatestContent
-                            .map(doc => {
-                                const label =
-                                    doc.type === 'doc'
-                                        ? '文档'
-                                        : doc.type === 'webpage'
-                                          ? '网页'
-                                          : '块';
-
-                                // agent模式或启用工具的问答模式：文档块只传递ID，不传递内容
-                                if (
-                                    chatMode === 'plan' &&
-                                    userToolCount > 0 &&
-                                    doc.type === 'doc'
-                                ) {
-                                    return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\``;
-                                }
-
-                                // 其他情况：传递完整内容
-                                if (doc.content) {
-                                    return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\`\n\n\`\`\`markdown\n${doc.content}\n\`\`\``;
-                                } else {
-                                    // 如果没有内容（agent模式下的文档），只传递ID
-                                    return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\``;
-                                }
-                            })
-                            .join('\n\n---\n\n');
-                        enhancedContent += `\n\n---\n\n以下是相关内容作为上下文：\n\n${contextText}`;
-                    }
-
-                    lastMessage.content = enhancedContent;
-                }
-            }
-        }
-
-        // 根据模式添加系统提示词
-        if (chatMode === 'plan' && userToolCount > 0) {
-            // Agent 模式或启用工具的问答模式下添加工具使用强制规则
-            let baseSystemPrompt = settings.aiSystemPrompt || '';
-            if (baseSystemPrompt.trim()) {
-            } else {
-            }
-            messagesToSend.unshift({ role: 'system', content: baseSystemPrompt });
-        } else if (settings.aiSystemPrompt) {
-            messagesToSend.unshift({ role: 'system', content: settings.aiSystemPrompt });
-        }
-
-        // 使用临时系统提示词（如果设置了）
-        if (tempModelSettings.systemPrompt.trim()) {
-            // 如果已有系统提示词，替换它；否则添加新的
-            const systemMsgIndex = messagesToSend.findIndex(msg => msg.role === 'system');
-            if (systemMsgIndex !== -1) {
-                messagesToSend[systemMsgIndex].content = tempModelSettings.systemPrompt;
-            } else {
-                messagesToSend.unshift({ role: 'system', content: tempModelSettings.systemPrompt });
-            }
-        }
-
-        // 限制上下文消息数量
-        const systemMessages = messagesToSend.filter(msg => msg.role === 'system');
-        const otherMessages = messagesToSend.filter(msg => msg.role !== 'system');
-        const limitedMessages =
-            tempModelSettings.contextCount < 0
-                ? otherMessages
-                : otherMessages.slice(-tempModelSettings.contextCount);
-
-        // 建立 tool_call_id => tool 消息的索引，便于补全被截断的链条
-        const toolResultById = new Map<string, Message>();
-        for (const msg of otherMessages) {
-            if (msg.role === 'tool' && msg.tool_call_id) {
-                toolResultById.set(msg.tool_call_id, msg);
-            }
-        }
-
-        const limitedMessagesWithToolFix: Message[] = [];
-        const includedToolCallIds = new Set<string>();
-
-        for (const msg of limitedMessages) {
-            if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
-                // 先推入 assistant
-                limitedMessagesWithToolFix.push(msg);
-
-                // 紧跟补全每一个 tool_call 的结果，保持顺序
-                for (const tc of msg.tool_calls) {
-                    const toolMsg = toolResultById.get(tc.id);
-                    if (toolMsg && !includedToolCallIds.has(tc.id)) {
-                        limitedMessagesWithToolFix.push(toolMsg);
-                        includedToolCallIds.add(tc.id);
-                    }
-                }
-                continue;
-            }
-
-            if (msg.role === 'tool') {
-                // 仅在前一条是对应的 assistant 且未加入过时保留，避免孤立 tool
-                const prev = limitedMessagesWithToolFix[limitedMessagesWithToolFix.length - 1];
-                if (
-                    prev &&
-                    prev.role === 'assistant' &&
-                    prev.tool_calls?.some(tc => tc.id === msg.tool_call_id) &&
-                    msg.tool_call_id &&
-                    !includedToolCallIds.has(msg.tool_call_id)
-                ) {
-                    limitedMessagesWithToolFix.push(msg);
-                    includedToolCallIds.add(msg.tool_call_id);
-                }
-                continue;
-            }
-
-            // 其他消息正常保留
-            limitedMessagesWithToolFix.push(msg);
-        }
-
-        messagesToSend = [...systemMessages, ...limitedMessagesWithToolFix];
+        const enableThinking =
+            !!(modelConfig.capabilities?.thinking && (modelConfig.thinkingEnabled || false));
+        let messagesToSend = await prepareMessagesForAI(
+            messages,
+            contextDocumentsWithLatestContent,
+            userContent,
+            userMessage,
+            enableThinking,
+            modelConfig.id
+        );
 
         // 创建新的 AbortController
         setController(currentSessionId, new AbortController());
 
         try {
-            // 检查是否启用思考模式
-            const enableThinking =
-                modelConfig.capabilities?.thinking && (modelConfig.thinkingEnabled || false);
-
             // 准备工具列表
             let toolsForAgent: any[] | undefined = undefined;
             if (chatMode === 'plan' && userToolCount > 0) {
@@ -4537,13 +4335,15 @@
                             stream: true,
                             signal: abortController.signal,
                             enableThinking,
-                            reasoningEffort: modelConfig.thinkingEffort || 'low', mode: chatMode,
+                            reasoningEffort: modelConfig.thinkingEffort || 'low',
+                            mode: chatMode,
                             tools: toolsForAgent,
                             customBody,
                             onThinkingChunk: appendStreamingThinking,
                             onThinkingComplete: () => finishStreamingThinking(messages.length),
                             onToolPartUpdate: updateOpenCodeToolPart,
                             onPermissionAsked: handleOpenCodePermissionAsked,
+                            onQuestionAsked: handleOpenCodeQuestionAsked,
                             onToolCallComplete: async (toolCalls: ToolCall[]) => {
                                 receivedToolCalls = true;
 
@@ -4671,16 +4471,7 @@
                                             console.log(
                                                 `Tool call requires approval: ${toolCall.function.name}`
                                             );
-
-                                            // 显示批准对话框
-                                            pendingToolCall = toolCall;
-                                            isToolApprovalDialogOpen = true;
-
-                                            // 等待用户批准或拒绝
-                                            const approved = await new Promise<boolean>(resolve => {
-                                                // 临时保存 resolve 函数
-                                                (window as any).__toolApprovalResolve = resolve;
-                                            });
+                                            const approved = await requestToolApproval(toolCall);
 
                                             if (approved) {
                                                 toolResult = await executeToolCall(toolCall);
@@ -4730,86 +4521,21 @@
 
                                 hasUnsavedChanges = true;
 
-                                // 更新 messagesToSend，准备下一次循环
-                                // 只在字段存在时才包含，避免传递 undefined 字段给 API
-                                messagesToSend = messages
-                                    .filter(msg => msg.role !== 'system') // 过滤掉旧的系统消息
-                                    .map(msg => {
-                                        const baseMsg: any = {
-                                            role: msg.role,
-                                            content: msg.content,
-                                        };
-
-                                        // 只在有工具调用相关字段时才包含
-                                        if (msg.tool_calls) {
-                                            baseMsg.tool_calls = msg.tool_calls;
-                                        }
-                                        if (msg.tool_call_id) {
-                                            baseMsg.tool_call_id = msg.tool_call_id;
-                                            baseMsg.name = msg.name;
-                                        }
-
-                                        // 检测是否是 DeepSeek 推理模型
-                                        const isDeepSeekReasonerModel2 =
-                                            /deepseek-(reasoner|r1)/i.test(modelConfig.id);
-
-                                        // 只有在启用 thinking 模式或者是 DeepSeek 推理模型时才保留 reasoning_content
-                                        // Kimi 等模型在未启用 thinking 时看到 reasoning_content 会报错
-                                        const shouldKeepReasoning2 =
-                                            isDeepseekThinkingAgent || isDeepSeekReasonerModel2;
-                                        if (
-                                            shouldKeepReasoning2 &&
-                                            msg.reasoning_content !== undefined
-                                        ) {
-                                            baseMsg.reasoning_content = msg.reasoning_content;
-                                        }
-
-                                        // 在启用 thinking 模式或是 DeepSeek 推理模型且有 tool_calls 时，确保 reasoning_content 字段存在
-                                        if (
-                                            shouldKeepReasoning2 &&
-                                            msg.tool_calls &&
-                                            msg.tool_calls.length > 0
-                                        ) {
-                                            if (baseMsg.reasoning_content === undefined) {
-                                                baseMsg.reasoning_content = '';
-                                            }
-                                        }
-
-                                        // 对于用户消息，如果有上下文文档，需要重新注入上下文内容
-                                        // 因为 msg.content 只存储了原始输入，不包含上下文
-                                        if (
-                                            msg.role === 'user' &&
-                                            msg.contextDocuments &&
-                                            msg.contextDocuments.length > 0
-                                        ) {
-                                            const contextText = msg.contextDocuments
-                                                .map(doc => {
-                                                    const label =
-                                                        doc.type === 'doc'
-                                                            ? '文档'
-                                                            : doc.type === 'webpage'
-                                                              ? '网页'
-                                                              : '块';
-                                                    if (doc.type === 'doc') {
-                                                        return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\``;
-                                                    } else {
-                                                        return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\`\n\n\`\`\`markdown\n${doc.content}\n\`\`\``;
-                                                    }
-                                                })
-                                                .join('\n\n---\n\n');
-                                            baseMsg.content += `\n\n---\n\n以下是相关内容作为上下文：\n\n${contextText}`;
-                                        }
-
-                                        return baseMsg;
-                                    });
-
-                                // 添加系统提示词到消息列表开头（工具使用说明已在 prepareMessagesForAI 中添加）
-                                if (settings.aiSystemPrompt) {
-                                    messagesToSend.unshift({
-                                        role: 'system',
-                                        content: settings.aiSystemPrompt,
-                                    });
-                                }
+                                const latestUserMessage =
+                                    [...messages].reverse().find(msg => msg.role === 'user') ||
+                                    userMessage;
+                                const latestUserContent =
+                                    typeof latestUserMessage.content === 'string'
+                                        ? latestUserMessage.content
+                                        : getMessageText(latestUserMessage.content || []);
+                                messagesToSend = await prepareMessagesForAI(
+                                    messages,
+                                    contextDocumentsWithLatestContent,
+                                    latestUserContent,
+                                    latestUserMessage,
+                                    enableThinking,
+                                    modelConfig.id
+                                );
 
                                 // 通知工具执行完成
                                 toolExecutionComplete?.();
@@ -4956,7 +4682,8 @@
                         stream: true,
                         signal: abortController.signal,
                         enableThinking,
-                        reasoningEffort: modelConfig.thinkingEffort || 'low', mode: chatMode,
+                        reasoningEffort: modelConfig.thinkingEffort || 'low',
+                        mode: chatMode,
                         tools: webSearchTools, // 传递联网搜索工具
                         customBody,
                         enableImageGeneration,
@@ -4985,6 +4712,7 @@
                         onThinkingComplete: () => finishStreamingThinking(messages.length),
                         onToolPartUpdate: updateOpenCodeToolPart,
                         onPermissionAsked: handleOpenCodePermissionAsked,
+                        onQuestionAsked: handleOpenCodeQuestionAsked,
                         onChunk: async (chunk: string) => {
                             streamingMessage += chunk;
                             await scrollToBottom();
@@ -5016,6 +4744,9 @@
                                     ...part,
                                 }));
                             }
+                            if (openCodeTimeline.length > 0) {
+                                assistantMessage.openCodeTimeline = cloneOpenCodeTimeline();
+                            }
 
                             // 如果有生成的图片，保存到消息中
                             if (generatedImages.length > 0) {
@@ -5042,6 +4773,7 @@
                             streamingMessage = '';
                             streamingThinking = '';
                             openCodeToolParts = [];
+                            resetOpenCodeTimeline();
                             isThinkingPhase = false;
                             isLoading = false;
                             setController(currentSessionId, null);
@@ -5068,6 +4800,7 @@
                             streamingMessage = '';
                             streamingThinking = '';
                             openCodeToolParts = [];
+                            resetOpenCodeTimeline();
                             isThinkingPhase = false;
                             setController(currentSessionId, null);
                         },
@@ -5098,9 +4831,38 @@
                 streamingMessage = '';
                 streamingThinking = '';
                 openCodeToolParts = [];
+        resetOpenCodeTimeline();
                 isThinkingPhase = false;
             }
             setController(currentSessionId, null);
+        }
+    }
+
+    async function sendMessageDuringExecution() {
+        const trimmedInput = currentInput.trim();
+        if (!trimmedInput || !currentSessionId) return;
+
+        const executionMode = settings.executionMessageMode || 'guide';
+        const serverUrl = settings?.aiProviders?.opencode?.serverUrl || 'http://localhost:4096';
+        const userMessage: Message = {
+            role: 'user',
+            content: trimmedInput,
+        };
+
+        currentInput = '';
+        messages = [...messages, userMessage];
+        hasUnsavedChanges = true;
+        await saveCurrentSession(true);
+        await scrollToBottom(true);
+
+        try {
+            await sendStillPrompt(serverUrl, currentSessionId, trimmedInput, currentModelId, {
+                agent: chatMode,
+                noReply: executionMode === 'guide',
+            });
+            pushMsg(executionMode === 'guide' ? '已发送引导消息' : '已加入 OpenCode 队列');
+        } catch (err: any) {
+            pushErrMsg(`发送失败: ${err.message || err}`);
         }
     }
 
@@ -5167,11 +4929,13 @@
                 const tempStreamingMessage = streamingMessage;
                 const tempStreamingThinking = streamingThinking;
                 const tempOpenCodeToolParts = openCodeToolParts.map(part => ({ ...part }));
+                const tempOpenCodeTimeline = cloneOpenCodeTimeline();
 
                 // 立即清空流式消息和状态，避免重复渲染
                 streamingMessage = '';
                 streamingThinking = '';
                 openCodeToolParts = [];
+        resetOpenCodeTimeline();
                 isThinkingPhase = false;
                 isLoading = false;
 
@@ -5188,12 +4952,16 @@
                 if (tempOpenCodeToolParts.length > 0) {
                     message.openCodeToolParts = tempOpenCodeToolParts;
                 }
+                if (tempOpenCodeTimeline.length > 0) {
+                    message.openCodeTimeline = tempOpenCodeTimeline;
+                }
                 messages = [...messages, message];
                 hasUnsavedChanges = true;
             } else {
                 streamingMessage = '';
                 streamingThinking = '';
                 openCodeToolParts = [];
+        resetOpenCodeTimeline();
                 isThinkingPhase = false;
                 isLoading = false;
             }
@@ -5302,7 +5070,19 @@
     }
 
     // 处理键盘事件
+    function handleModeShortcut(e: KeyboardEvent): boolean {
+        if (e.defaultPrevented) return false;
+        if (e.key === 'Tab' && e.shiftKey) {
+            e.preventDefault();
+            toggleChatMode();
+            return true;
+        }
+        return false;
+    }
+
     function handleKeydown(e: KeyboardEvent) {
+        if (handleModeShortcut(e)) return;
+
         // 命令面板键盘导航
         if (showCommandPalette) {
             const commands = getFilteredCommands();
@@ -5340,7 +5120,11 @@
                     return;
                 }
                 if (isLoading) {
-                    abortMessage();
+                    if (currentInput.trim()) {
+                        sendMessageDuringExecution();
+                    } else {
+                        abortMessage();
+                    }
                 } else {
                     sendMessage();
                 }
@@ -5354,7 +5138,11 @@
                     return;
                 }
                 if (isLoading) {
-                    abortMessage();
+                    if (currentInput.trim()) {
+                        sendMessageDuringExecution();
+                    } else {
+                        abortMessage();
+                    }
                 } else {
                     sendMessage();
                 }
@@ -7383,7 +7171,7 @@
                 // 创建新会话
                 const userContent = messages.find(m => m.role === 'user')?.content || '';
                 const newSession: ChatSession = {
-                    id: `session_${now}`,
+                    id: createSessionId(),
                     title:
                         typeof userContent === 'string'
                             ? userContent.substring(0, 30)
@@ -7424,7 +7212,11 @@
             if (pendingSaveSilent !== null) {
                 const silentToUse = pendingSaveSilent;
                 pendingSaveSilent = null;
-                await saveCurrentSession(silentToUse);
+                setTimeout(() => {
+                    saveCurrentSession(silentToUse).catch(error => {
+                        console.error('Pending save session error:', error);
+                    });
+                }, 0);
             }
         }
     }
@@ -8422,22 +8214,29 @@
         return name === key ? toolName : name;
     }
 
+    function requestToolApproval(toolCall: ToolCall): Promise<boolean> {
+        if (pendingToolApprovalResolve) {
+            return Promise.resolve(false);
+        }
+        pendingToolCall = toolCall;
+        isToolApprovalDialogOpen = true;
+        return new Promise<boolean>(resolve => {
+            pendingToolApprovalResolve = resolve;
+        });
+    }
+
     // 批准工具调用
     function approveToolCall() {
-        if ((window as any).__toolApprovalResolve) {
-            (window as any).__toolApprovalResolve(true);
-            delete (window as any).__toolApprovalResolve;
-        }
+        pendingToolApprovalResolve?.(true);
+        pendingToolApprovalResolve = null;
         isToolApprovalDialogOpen = false;
         pendingToolCall = null;
     }
 
     // 拒绝工具调用
     function rejectToolCall() {
-        if ((window as any).__toolApprovalResolve) {
-            (window as any).__toolApprovalResolve(false);
-            delete (window as any).__toolApprovalResolve;
-        }
+        pendingToolApprovalResolve?.(false);
+        pendingToolApprovalResolve = null;
         isToolApprovalDialogOpen = false;
         pendingToolCall = null;
     }
@@ -8467,14 +8266,9 @@
 
         if (isPromptSelectorOpen) {
             const selector = document.querySelector('.ai-sidebar__prompt-selector');
-            const buttons = document.querySelectorAll('.ai-sidebar__prompt-actions button');
+            const promptTrigger = document.querySelector('.ai-sidebar__prompt-tool');
 
-            let clickedButton = false;
-            buttons.forEach(button => {
-                if (button.contains(target)) {
-                    clickedButton = true;
-                }
-            });
+            const clickedButton = !!promptTrigger && promptTrigger.contains(target);
 
             if (selector && !selector.contains(target) && !clickedButton) {
                 isPromptSelectorOpen = false;
@@ -9623,13 +9417,15 @@
                             stream: true,
                             signal: abortController.signal,
                             enableThinking,
-                            reasoningEffort: modelConfig.thinkingEffort || 'low', mode: chatMode,
+                            reasoningEffort: modelConfig.thinkingEffort || 'low',
+                            mode: chatMode,
                             tools: toolsForAgent,
                             customBody,
                             onThinkingChunk: appendStreamingThinking,
                             onThinkingComplete: () => finishStreamingThinking(messages.length),
                             onToolPartUpdate: updateOpenCodeToolPart,
                             onPermissionAsked: handleOpenCodePermissionAsked,
+                            onQuestionAsked: handleOpenCodeQuestionAsked,
                             onToolCallComplete: async (toolCalls: ToolCall[]) => {
                                 receivedToolCalls = true;
 
@@ -9774,16 +9570,7 @@
                                             console.log(
                                                 `Tool call requires approval: ${toolCall.function.name}`
                                             );
-
-                                            // 显示批准对话框
-                                            pendingToolCall = toolCall;
-                                            isToolApprovalDialogOpen = true;
-
-                                            // 等待用户批准或拒绝
-                                            const approved = await new Promise<boolean>(resolve => {
-                                                // 临时保存 resolve 函数
-                                                (window as any).__toolApprovalResolve = resolve;
-                                            });
+                                            const approved = await requestToolApproval(toolCall);
 
                                             if (approved) {
                                                 toolResult = await executeToolCall(toolCall);
@@ -10058,12 +9845,14 @@
                         signal: abortController.signal,
                         customBody,
                         enableThinking,
-                        reasoningEffort: modelConfig.thinkingEffort || 'low', mode: chatMode,
+                        reasoningEffort: modelConfig.thinkingEffort || 'low',
+                        mode: chatMode,
                         enableImageGeneration,
                         onThinkingChunk: appendStreamingThinking,
                         onThinkingComplete: () => finishStreamingThinking(messages.length),
                         onToolPartUpdate: updateOpenCodeToolPart,
                         onPermissionAsked: handleOpenCodePermissionAsked,
+                        onQuestionAsked: handleOpenCodeQuestionAsked,
                         onImageGenerated: async (images: any[]) => {
                             // 立即保存生成的图片到 SiYuan 资源文件夹并转换为 blob URL
                             generatedImages = await Promise.all(
@@ -10109,6 +9898,14 @@
                             if (streamingThinking) {
                                 assistantMessage.thinking = streamingThinking;
                             }
+                            if (openCodeToolParts.length > 0) {
+                                assistantMessage.openCodeToolParts = openCodeToolParts.map(part => ({
+                                    ...part,
+                                }));
+                            }
+                            if (openCodeTimeline.length > 0) {
+                                assistantMessage.openCodeTimeline = cloneOpenCodeTimeline();
+                            }
 
                             // 如果有生成的图片，保存到消息中
                             if (generatedImages.length > 0) {
@@ -10135,6 +9932,7 @@
                             streamingMessage = '';
                             streamingThinking = '';
                             openCodeToolParts = [];
+        resetOpenCodeTimeline();
                             isThinkingPhase = false;
                             isLoading = false;
                             setController(currentSessionId, null);
@@ -10157,6 +9955,7 @@
                             streamingMessage = '';
                             streamingThinking = '';
                             openCodeToolParts = [];
+        resetOpenCodeTimeline();
                             isThinkingPhase = false;
                             setController(currentSessionId, null);
                         },
@@ -10249,31 +10048,51 @@
     $: messageGroups = groupMessages(messages);
 </script>
 
-<div class="ai-sidebar" class:ai-sidebar--fullscreen={isFullscreen} bind:this={sidebarContainer}>
-    <ConnectionStatus showVersion={false} showRetry={true} />
+<div
+    class="ai-sidebar"
+    class:ai-sidebar--fullscreen={isFullscreen}
+    bind:this={sidebarContainer}
+    on:keydown={handleModeShortcut}
+>
     <!-- 顶部标题栏 -->
     <div class="ai-sidebar__header">
         <div class="ai-sidebar__brand">
             <div class="ai-sidebar__brand-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="16 18 22 12 16 6"></polyline>
-                    <polyline points="8 6 2 12 8 18"></polyline>
-                </svg>
+                <img src={openCodeIconUrl} alt="" aria-hidden="true" />
             </div>
             <div class="ai-sidebar__brand-text">
                 <div class="ai-sidebar__brand-name">OpenCode</div>
-                <div class="ai-sidebar__brand-status">
+                <div
+                    class="ai-sidebar__brand-status"
+                    class:ai-sidebar__brand-status--connected={$connectionStatusStore.state === 'connected'}
+                    class:ai-sidebar__brand-status--connecting={$connectionStatusStore.state === 'connecting'}
+                    class:ai-sidebar__brand-status--disconnected={$connectionStatusStore.state === 'disconnected'}
+                    title={$connectionStatusStore.error || $connectionStatusStore.serverUrl || 'OpenCode'}
+                >
                     <span class="ai-sidebar__status-dot"></span>
-                    <span>在线</span>
+                    <span>{getConnectionLabel($connectionStatusStore)}</span>
+                    {#if $connectionStatusStore.state === 'disconnected' && $connectionStatusStore.serverUrl}
+                        <button
+                            type="button"
+                            class="ai-sidebar__status-retry"
+                            on:click={refreshHealth}
+                        >
+                            重连
+                        </button>
+                    {/if}
                 </div>
             </div>
         </div>
         <div class="ai-sidebar__header-actions">
-            <button class="ai-sidebar__icon-btn" title="钉住" on:click={() => {}}>
-                <svg class="b3-button__icon"><use xlink:href="#iconPin"></use></svg>
-            </button>
-            <button class="ai-sidebar__icon-btn" title="更多" on:click={() => {}}>
-                <svg class="b3-button__icon"><use xlink:href="#iconMore"></use></svg>
+            <button
+                class="ai-sidebar__icon-btn"
+                class:ai-sidebar__icon-btn--active={currentSessionPinned}
+                title={currentSessionPinned ? t('aiSidebar.session.unpin') : t('aiSidebar.session.pin')}
+                on:click={toggleCurrentSessionPin}
+            >
+                <svg class="b3-button__icon">
+                    <use xlink:href={currentSessionPinned ? '#iconUnpin' : '#iconPin'}></use>
+                </svg>
             </button>
         </div>
     </div>
@@ -10304,21 +10123,23 @@
         <button class="ai-sidebar__toolbar-btn" title={t('aiSidebar.actions.clear')} on:click={clearChat}>
             <svg class="b3-button__icon"><use xlink:href="#iconTrashcan"></use></svg>
         </button>
-        <button class="ai-sidebar__toolbar-btn" title={t('aiSidebar.actions.openWindow') || '在新窗口打开'} on:click={toggleOpenWindowMenu}>
-            <svg class="b3-button__icon"><use xlink:href="#iconOpenWindow"></use></svg>
-        </button>
-        {#if showOpenWindowMenu}
-            <div class="ai-sidebar__open-window-menu">
-                <button class="b3-menu__item" on:click={openInTab}>
-                    <svg class="b3-menu__icon"><use xlink:href="#iconOpenWindow"></use></svg>
-                    <span class="b3-menu__label">在页签打开</span>
-                </button>
-                <button class="b3-menu__item" on:click={openInNewWindow}>
-                    <svg class="b3-menu__icon"><use xlink:href="#iconOpenWindow"></use></svg>
-                    <span class="b3-menu__label">在新窗口打开</span>
-                </button>
-            </div>
-        {/if}
+        <div class="ai-sidebar__open-window-menu-container">
+            <button class="ai-sidebar__toolbar-btn" title={t('aiSidebar.actions.openWindow') || '在新窗口打开'} on:click={toggleOpenWindowMenu}>
+                <svg class="b3-button__icon"><use xlink:href="#iconOpenWindow"></use></svg>
+            </button>
+            {#if showOpenWindowMenu}
+                <div class="ai-sidebar__open-window-menu">
+                    <button class="b3-menu__item" on:click={openInTab}>
+                        <svg class="b3-menu__icon"><use xlink:href="#iconOpenWindow"></use></svg>
+                        <span class="b3-menu__label">在页签打开</span>
+                    </button>
+                    <button class="b3-menu__item" on:click={openInNewWindow}>
+                        <svg class="b3-menu__icon"><use xlink:href="#iconOpenWindow"></use></svg>
+                        <span class="b3-menu__label">在新窗口打开</span>
+                    </button>
+                </div>
+            {/if}
+        </div>
         <button class="ai-sidebar__toolbar-btn" title={isFullscreen ? '退出全屏' : '全屏查看'} on:click={toggleFullscreen}>
             <svg class="b3-button__icon">
                 <use xlink:href={isFullscreen ? '#iconFullscreenExit' : '#iconFullscreen'}></use>
@@ -10557,8 +10378,113 @@
                                 {/if}
                             {/each}
                         {:else}
+                            {#if message.role === 'assistant' && message.openCodeTimeline && message.openCodeTimeline.length > 0 && !(message.multiModelResponses && message.multiModelResponses.length > 0)}
+                                <div class="ai-message__timeline">
+                                    {#each message.openCodeTimeline as item, timelineIndex (item.id)}
+                                        {#if item.type === 'thinking'}
+                                            {@const timelineThinkingKey = `timeline-thinking-${messageIndex}-${msgIndex}-${timelineIndex}`}
+                                            <div class="ai-message__thinking">
+                                                <div
+                                                    class="ai-message__thinking-header"
+                                                    on:click={() => {
+                                                        thinkingCollapsed[timelineThinkingKey] =
+                                                            !thinkingCollapsed[timelineThinkingKey];
+                                                        thinkingCollapsed = { ...thinkingCollapsed };
+                                                    }}
+                                                >
+                                                    <svg
+                                                        class="ai-message__thinking-icon"
+                                                        class:collapsed={thinkingCollapsed[timelineThinkingKey]}
+                                                    >
+                                                        <use xlink:href="#iconRight"></use>
+                                                    </svg>
+                                                    <span class="ai-message__thinking-title">
+                                                        思考 {timelineIndex + 1}
+                                                    </span>
+                                                </div>
+                                                {#if !thinkingCollapsed[timelineThinkingKey]}
+                                                    {@const timelineThinkingDisplay = getDisplayContent(item.content)}
+                                                    <div class="ai-message__thinking-content b3-typography">
+                                                        {@html timelineThinkingDisplay}
+                                                    </div>
+                                                {/if}
+                                            </div>
+                                        {:else}
+                                            {@const toolPart = item.toolPart}
+                                            {@const toolPartKey = getOpenCodeToolPartKey(toolPart)}
+                                            {@const toolPartCollapsed = !toolCallsExpanded[toolPartKey]}
+                                            {@const toolPartInput = formatOpenCodeToolValue(toolPart.input)}
+                                            {@const toolPartOutput = formatOpenCodeToolValue(toolPart.output)}
+                                            {@const toolPartError = formatOpenCodeToolValue(toolPart.error)}
+                                            <div class="ai-message__tool-calls ai-message__tool-calls--timeline">
+                                                <div class="ai-message__tool-calls-title">
+                                                    工具 {timelineIndex + 1}
+                                                </div>
+                                                <div
+                                                    class="ai-message__tool-call"
+                                                    class:ai-message__tool-call--running={toolPart.status === 'running' ||
+                                                        toolPart.status === 'pending'}
+                                                    class:ai-message__tool-call--error={toolPart.status === 'error'}
+                                                >
+                                                    <div
+                                                        class="ai-message__tool-call-header"
+                                                        on:click={() => {
+                                                            toolCallsExpanded[toolPartKey] =
+                                                                !toolCallsExpanded[toolPartKey];
+                                                            toolCallsExpanded = { ...toolCallsExpanded };
+                                                        }}
+                                                    >
+                                                        <div class="ai-message__tool-call-name">
+                                                            <svg
+                                                                class="ai-message__tool-call-icon"
+                                                                class:collapsed={toolPartCollapsed}
+                                                            >
+                                                                <use xlink:href="#iconRight"></use>
+                                                            </svg>
+                                                            <span>{toolPart.title || toolPart.toolName}</span>
+                                                            <span class="ai-message__tool-call-status">
+                                                                {getOpenCodeToolStatusIcon(toolPart.status)}
+                                                                {getOpenCodeToolStatusText(toolPart.status)}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                    {#if !toolPartCollapsed && (toolPartInput || toolPartOutput || toolPartError)}
+                                                        <div class="ai-message__tool-call-details">
+                                                            {#if toolPartInput}
+                                                                <div class="ai-message__tool-call-params">
+                                                                    <div class="ai-message__tool-call-section-header">
+                                                                        <strong>输入</strong>
+                                                                    </div>
+                                                                    <pre class="ai-message__tool-call-code">{toolPartInput}</pre>
+                                                                </div>
+                                                            {/if}
+                                                            {#if toolPartOutput}
+                                                                <div class="ai-message__tool-call-result">
+                                                                    <div class="ai-message__tool-call-section-header">
+                                                                        <strong>{t('tools.result')}</strong>
+                                                                    </div>
+                                                                    <pre class="ai-message__tool-call-code">{toolPartOutput}</pre>
+                                                                </div>
+                                                            {/if}
+                                                            {#if toolPartError}
+                                                                <div class="ai-message__tool-call-result">
+                                                                    <div class="ai-message__tool-call-section-header">
+                                                                        <strong>错误</strong>
+                                                                    </div>
+                                                                    <pre class="ai-message__tool-call-code">{toolPartError}</pre>
+                                                                </div>
+                                                            {/if}
+                                                        </div>
+                                                    {/if}
+                                                </div>
+                                            </div>
+                                        {/if}
+                                    {/each}
+                                </div>
+                            {/if}
+
                             <!-- 兼容旧数据：显示工具调用前的思考过程 -->
-                            {#if message.role === 'assistant' && (message.thinkingBeforeToolCalls || (message.thinking && !message.tool_calls)) && !(message.multiModelResponses && message.multiModelResponses.length > 0)}
+                            {#if message.role === 'assistant' && (message.thinkingBeforeToolCalls || (message.thinking && !message.tool_calls)) && !(message.openCodeTimeline && message.openCodeTimeline.length > 0) && !(message.multiModelResponses && message.multiModelResponses.length > 0)}
                                 {@const thinkingIndex = messageIndex + msgIndex}
                                 {@const thinkingContent =
                                     message.thinkingBeforeToolCalls || message.thinking}
@@ -10738,7 +10664,7 @@
                                 </div>
                             {/if}
 
-                            {#if message.role === 'assistant' && message.openCodeToolParts && message.openCodeToolParts.length > 0 && !(message.multiModelResponses && message.multiModelResponses.length > 0)}
+                            {#if message.role === 'assistant' && message.openCodeToolParts && message.openCodeToolParts.length > 0 && !(message.openCodeTimeline && message.openCodeTimeline.length > 0) && !(message.multiModelResponses && message.multiModelResponses.length > 0)}
                                 {@const openCodeToolGroupKey = `opencode-tools-${messageIndex}-${msgIndex}`}
                                 {@const openCodeToolGroupCollapsed = isToolCallGroupCollapsed(toolCallGroupsCollapsed, openCodeToolGroupKey)}
                                 <div class="ai-message__tool-calls">
@@ -12118,8 +12044,113 @@
                     <span class="ai-message__role">🤖 AI</span>
                 </div>
 
+                {#if openCodeTimeline.length > 0}
+                    <div class="ai-message__timeline ai-message__timeline--streaming">
+                        {#each openCodeTimeline as item, timelineIndex (item.id)}
+                            {#if item.type === 'thinking'}
+                                {@const streamingTimelineThinkingKey = `streaming-timeline-thinking-${timelineIndex}`}
+                                <div class="ai-message__thinking">
+                                    <div
+                                        class="ai-message__thinking-header"
+                                        on:click={() => {
+                                            thinkingCollapsed[streamingTimelineThinkingKey] =
+                                                !thinkingCollapsed[streamingTimelineThinkingKey];
+                                            thinkingCollapsed = { ...thinkingCollapsed };
+                                        }}
+                                    >
+                                        <svg
+                                            class="ai-message__thinking-icon"
+                                            class:collapsed={thinkingCollapsed[streamingTimelineThinkingKey]}
+                                        >
+                                            <use xlink:href="#iconRight"></use>
+                                        </svg>
+                                        <span class="ai-message__thinking-title">
+                                            思考中 {timelineIndex + 1}
+                                        </span>
+                                    </div>
+                                    {#if !thinkingCollapsed[streamingTimelineThinkingKey]}
+                                        {@const streamingTimelineThinkingDisplay = getDisplayContent(item.content)}
+                                        <div class="ai-message__thinking-content ai-message__thinking-content--streaming b3-typography">
+                                            {@html streamingTimelineThinkingDisplay}
+                                        </div>
+                                    {/if}
+                                </div>
+                            {:else}
+                                {@const toolPart = item.toolPart}
+                                {@const toolPartKey = getOpenCodeToolPartKey(toolPart)}
+                                {@const toolPartCollapsed = !toolCallsExpanded[toolPartKey]}
+                                {@const toolPartInput = formatOpenCodeToolValue(toolPart.input)}
+                                {@const toolPartOutput = formatOpenCodeToolValue(toolPart.output)}
+                                {@const toolPartError = formatOpenCodeToolValue(toolPart.error)}
+                                <div class="ai-message__tool-calls ai-message__tool-calls--streaming ai-message__tool-calls--timeline">
+                                    <div class="ai-message__tool-calls-title">
+                                        工具 {timelineIndex + 1}
+                                    </div>
+                                    <div
+                                        class="ai-message__tool-call"
+                                        class:ai-message__tool-call--running={toolPart.status === 'running' ||
+                                            toolPart.status === 'pending'}
+                                        class:ai-message__tool-call--error={toolPart.status === 'error'}
+                                    >
+                                        <div
+                                            class="ai-message__tool-call-header"
+                                            on:click={() => {
+                                                toolCallsExpanded[toolPartKey] =
+                                                    !toolCallsExpanded[toolPartKey];
+                                                toolCallsExpanded = { ...toolCallsExpanded };
+                                            }}
+                                        >
+                                            <div class="ai-message__tool-call-name">
+                                                <svg
+                                                    class="ai-message__tool-call-icon"
+                                                    class:collapsed={toolPartCollapsed}
+                                                >
+                                                    <use xlink:href="#iconRight"></use>
+                                                </svg>
+                                                <span>{toolPart.title || toolPart.toolName}</span>
+                                                <span class="ai-message__tool-call-status">
+                                                    {getOpenCodeToolStatusIcon(toolPart.status)}
+                                                    {getOpenCodeToolStatusText(toolPart.status)}
+                                                </span>
+                                            </div>
+                                        </div>
+                                        {#if !toolPartCollapsed && (toolPartInput || toolPartOutput || toolPartError)}
+                                            <div class="ai-message__tool-call-details">
+                                                {#if toolPartInput}
+                                                    <div class="ai-message__tool-call-params">
+                                                        <div class="ai-message__tool-call-section-header">
+                                                            <strong>输入</strong>
+                                                        </div>
+                                                        <pre class="ai-message__tool-call-code">{toolPartInput}</pre>
+                                                    </div>
+                                                {/if}
+                                                {#if toolPartOutput}
+                                                    <div class="ai-message__tool-call-result">
+                                                        <div class="ai-message__tool-call-section-header">
+                                                            <strong>{t('tools.result')}</strong>
+                                                        </div>
+                                                        <pre class="ai-message__tool-call-code">{toolPartOutput}</pre>
+                                                    </div>
+                                                {/if}
+                                                {#if toolPartError}
+                                                    <div class="ai-message__tool-call-result">
+                                                        <div class="ai-message__tool-call-section-header">
+                                                            <strong>错误</strong>
+                                                        </div>
+                                                        <pre class="ai-message__tool-call-code">{toolPartError}</pre>
+                                                    </div>
+                                                {/if}
+                                            </div>
+                                        {/if}
+                                    </div>
+                                </div>
+                            {/if}
+                        {/each}
+                    </div>
+                {/if}
+
                 <!-- 显示流式思考过程 -->
-                {#if streamingThinking}
+                {#if streamingThinking && openCodeTimeline.length === 0}
                     <div class="ai-message__thinking">
                         <div
                             class="ai-message__thinking-header"
@@ -12156,7 +12187,7 @@
                     </div>
                 {/if}
 
-                {#if openCodeToolParts.length > 0}
+                {#if openCodeToolParts.length > 0 && openCodeTimeline.length === 0}
                     <div class="ai-message__tool-calls ai-message__tool-calls--streaming">
                         <div
                             class="ai-message__tool-calls-title ai-message__tool-calls-title--clickable"
@@ -13070,21 +13101,10 @@
         {#if messages.filter(msg => msg.role !== 'system').length === 0 && !isLoading}
             <div class="ai-sidebar__empty">
                 <div class="ai-sidebar__empty-illustration">
-                    <svg viewBox="0 0 120 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <ellipse cx="60" cy="88" rx="35" ry="6" fill="var(--b3-theme-surface)" opacity="0.6"/>
-                        <path d="M25 40C25 28.954 33.954 20 45 20H75C86.046 20 95 28.954 95 40V55C95 66.046 86.046 75 75 75H55L40 88V75H35C33.954 75 25 66.046 25 55V40Z" fill="#EBF2FF" stroke="#C7D8F7" stroke-width="1.5"/>
-                        <path d="M45 30C45 22.268 51.268 16 59 16H81C88.732 16 95 22.268 95 30V43C95 50.732 88.732 57 81 57H65L52 68V57H51C51 57 45 50.732 45 43V30Z" fill="#F5F9FF" stroke="#D6E4FA" stroke-width="1.5"/>
-                        <circle cx="50" cy="42" r="3.5" fill="#3B82F6"/>
-                        <circle cx="62" cy="42" r="3.5" fill="#3B82F6"/>
-                        <circle cx="74" cy="42" r="3.5" fill="#3B82F6"/>
-                        <path d="M18 32L22 28M98 28L102 32" stroke="#D6E4FA" stroke-width="1.5" stroke-linecap="round"/>
-                        <path d="M15 48L19 46M101 46L105 48" stroke="#D6E4FA" stroke-width="1.5" stroke-linecap="round"/>
-                        <circle cx="18" cy="58" r="2" fill="#D6E4FA"/>
-                        <circle cx="102" cy="38" r="2" fill="#D6E4FA"/>
-                    </svg>
+                    <img src={openCodeIconUrl} alt="" aria-hidden="true" />
                 </div>
-                <h2 class="ai-sidebar__empty-title">开始与 AI 对话吧！</h2>
-                <p class="ai-sidebar__empty-subtitle">你可以向我提问、分析文档或生成内容。</p>
+                <h2 class="ai-sidebar__empty-title">准备好处理笔记与代码</h2>
+                <p class="ai-sidebar__empty-subtitle">选择模式、模型和思考强度，然后输入你的请求。</p>
             </div>
         {/if}
     </div>
@@ -13231,6 +13251,74 @@
             </div>
         </div>
     {/if}
+    {#if activeQuestionRequest}
+        <div class="question-dialog" role="dialog" aria-modal="true" aria-label="OpenCode 需要确认">
+            <div class="question-dialog__scrim"></div>
+            <div class="question-dialog__panel">
+                <div class="question-dialog__header">
+                    <div class="question-dialog__mark">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path>
+                            <path d="M9 9h6M9 13h4"></path>
+                        </svg>
+                    </div>
+                    <div class="question-dialog__heading">
+                        <div class="question-dialog__title">OpenCode 需要你的确认</div>
+                        <div class="question-dialog__subtitle">选择一个选项，或在底部输入自己的回答。</div>
+                    </div>
+                </div>
+
+                <div class="question-dialog__body">
+                    {#each activeQuestionRequest.questions as question, questionIndex}
+                        <section class="question-dialog__item">
+                            {#if question.header}
+                                <div class="question-dialog__item-header">{question.header}</div>
+                            {/if}
+                            <div class="question-dialog__question">{question.question}</div>
+                            {#if question.options.length > 0}
+                                <div class="question-dialog__options">
+                                    {#each question.options as option}
+                                        <button
+                                            type="button"
+                                            class="question-dialog__option"
+                                            class:question-dialog__option--active={(questionDrafts[questionIndex]?.selected || []).includes(option.label)}
+                                            on:click={() => toggleQuestionOption(questionIndex, option.label, question.multiple)}
+                                        >
+                                            <span class="question-dialog__option-check"></span>
+                                            <span class="question-dialog__option-text">
+                                                <span class="question-dialog__option-label">{option.label}</span>
+                                                {#if option.description}
+                                                    <span class="question-dialog__option-desc">{option.description}</span>
+                                                {/if}
+                                            </span>
+                                        </button>
+                                    {/each}
+                                </div>
+                            {/if}
+                            <label class="question-dialog__custom">
+                                <span>其他</span>
+                                <textarea
+                                    rows="3"
+                                    value={questionDrafts[questionIndex]?.custom || ''}
+                                    on:input={(event) => updateQuestionCustom(questionIndex, event.currentTarget.value)}
+                                    placeholder="输入自定义回答..."
+                                ></textarea>
+                            </label>
+                        </section>
+                    {/each}
+                </div>
+
+                <div class="question-dialog__actions">
+                    <button class="question-dialog__button question-dialog__button--ghost" type="button" on:click={rejectQuestionAnswer}>
+                        取消
+                    </button>
+                    <button class="question-dialog__button question-dialog__button--primary" type="button" on:click={submitQuestionAnswer}>
+                        发送回答
+                    </button>
+                </div>
+            </div>
+        </div>
+    {/if}
     <div
         class="ai-sidebar__input-container"
         class:ai-sidebar__input-container--drag-over={isDragOver && contextDocuments.length === 0}
@@ -13240,24 +13328,54 @@
         on:drop={handleDrop}
     >
         <!-- 顶部选择器栏 -->
-        <div class="ai-sidebar__selectors-bar">
-            <div class="ai-sidebar__selector">
-                <svg class="ai-sidebar__selector-icon" style="width:14px;height:14px"><use xlink:href="#iconCode"></use></svg>
-                <select class="ai-sidebar__selector-select" bind:value={chatMode}>
-                    <option value="plan">模式: {t('aiSidebar.mode.plan') || 'Plan'}</option>
-                    <option value="build">模式: {t('aiSidebar.mode.build') || 'Build'}</option>
-                </select>
-                <svg class="ai-sidebar__selector-chevron" style="width:12px;height:12px"><use xlink:href="#iconDown"></use></svg>
+        <div class="ai-sidebar__composer-controls">
+            <div class="ai-sidebar__mode-switch" role="group" aria-label={t('aiSidebar.mode.label')}>
+                <button
+                    type="button"
+                    class:ai-sidebar__mode-switch-btn--active={chatMode === 'plan'}
+                    class="ai-sidebar__mode-switch-btn"
+                    on:click={() => setChatMode('plan')}
+                    title={`${t('aiSidebar.mode.planDescription')} / Shift + Tab`}
+                >
+                    Plan
+                </button>
+                <button
+                    type="button"
+                    class:ai-sidebar__mode-switch-btn--active={chatMode === 'build'}
+                    class="ai-sidebar__mode-switch-btn"
+                    on:click={() => setChatMode('build')}
+                    title={`${t('aiSidebar.mode.buildDescription')} / Shift + Tab`}
+                >
+                    Build
+                </button>
             </div>
-            <div class="ai-sidebar__selector">
-                <span class="ai-sidebar__selector-icon" style="font-size:13px">💡</span>
-                <select class="ai-sidebar__selector-select">
-                    <option>中</option>
+            <div
+                class="ai-sidebar__thinking-control"
+                class:ai-sidebar__thinking-control--disabled={!showThinkingToggle}
+                title={showThinkingToggle ? '思考强度' : '当前模型不支持思考'}
+            >
+                <button
+                    type="button"
+                    class="ai-sidebar__thinking-chip"
+                    class:ai-sidebar__thinking-chip--active={isThinkingModeEnabled}
+                    disabled={!showThinkingToggle}
+                    on:click={toggleThinkingMode}
+                >
+                    思考
+                </button>
+                <select
+                    class="ai-sidebar__thinking-select"
+                    value={currentThinkingSelectValue}
+                    on:change={handleThinkingSelectChange}
+                    disabled={!showThinkingToggle}
+                >
+                    <option value="off">关闭</option>
+                    {#each THINKING_EFFORT_OPTIONS as option}
+                        <option value={option.value}>{option.label}</option>
+                    {/each}
                 </select>
-                <svg class="ai-sidebar__selector-chevron" style="width:12px;height:12px"><use xlink:href="#iconDown"></use></svg>
             </div>
-            <div class="ai-sidebar__selector ai-sidebar__selector--model">
-                <svg class="ai-sidebar__selector-icon" style="width:14px;height:14px"><use xlink:href="#iconEmoji"></use></svg>
+            <div class="ai-sidebar__model-control">
                 {#if chatMode === 'plan'}
                     <MultiModelSelector
                         {providers}
@@ -13364,21 +13482,23 @@
                     </button>
                     <div class="ai-sidebar__chat-input-divider"></div>
                     <button
-                        class="ai-sidebar__chat-input-tool"
+                        class="ai-sidebar__chat-input-tool ai-sidebar__prompt-tool"
                         on:click={() => (isPromptSelectorOpen = !isPromptSelectorOpen)}
-                        title={t('aiSidebar.prompt.title')}
+                        title="常用提示词和指令"
                     >
-                        <svg class="b3-button__icon"><use xlink:href="#iconSettings"></use></svg>
+                        <svg class="b3-button__icon"><use xlink:href="#iconEdit"></use></svg>
+                        <span class="ai-sidebar__prompt-tool-label">提示词</span>
                     </button>
                 </div>
                 <button
                     class="ai-sidebar__chat-send-btn"
-                    class:ai-sidebar__chat-send-btn--abort={isLoading}
-                    on:click={isLoading ? abortMessage : sendMessage}
+                    class:ai-sidebar__chat-send-btn--abort={isLoading && !currentInput.trim()}
+                    class:ai-sidebar__chat-send-btn--followup={isLoading && !!currentInput.trim()}
+                    on:click={isLoading ? (currentInput.trim() ? sendMessageDuringExecution : abortMessage) : sendMessage}
                     disabled={!isLoading && !currentInput.trim() && currentAttachments.length === 0}
-                    title={isLoading ? '中断生成' : '发送消息'}
+                    title={isLoading ? (currentInput.trim() ? '执行中发送消息' : '中断生成') : '发送消息'}
                 >
-                    {#if isLoading}
+                    {#if isLoading && !currentInput.trim()}
                         <svg class="b3-button__icon"><use xlink:href="#iconPause"></use></svg>
                     {:else}
                         <svg class="b3-button__icon" style="width:18px;height:18px"><use xlink:href="#iconUp"></use></svg>
@@ -14163,6 +14283,7 @@
         height: 100%;
         background-color: var(--b3-theme-background);
         overflow: hidden;
+        container-type: inline-size;
     }
 
     .ai-sidebar__header {
@@ -14552,36 +14673,95 @@
     }
 
     // 思考过程样式
+    .ai-message__timeline {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin: 4px 0 12px 0;
+        padding-left: 12px;
+        border-left: 1px solid var(--b3-border-color);
+
+        .ai-message__thinking,
+        .ai-message__tool-calls {
+            margin-bottom: 0;
+        }
+    }
+
+    .ai-message__timeline--streaming {
+        animation: fadeIn 0.2s ease-out;
+    }
+
     .ai-message__thinking {
-        margin-bottom: 12px;
-        border: 1px solid var(--b3-border-color);
+        margin-bottom: 8px;
+        border: none;
         border-radius: 8px;
-        overflow: hidden;
-        background: var(--b3-theme-surface);
+        overflow: visible;
+        background: transparent;
     }
 
     .ai-message__thinking-header {
         display: flex;
         align-items: center;
         gap: 6px;
-        padding: 8px 12px;
+        position: relative;
+        min-height: 28px;
+        padding: 4px 8px;
         cursor: pointer;
         user-select: none;
-        background: var(--b3-theme-surface);
+        background: transparent;
         border-radius: $radius-sm;
         transition: background $transition;
 
         &:hover {
-            background: var(--b3-theme-background);
+            background: rgba($primary, 0.06);
+        }
+    }
+
+    .ai-message__timeline .ai-message__thinking-header::before,
+    .ai-message__timeline .ai-message__tool-calls-title::before {
+        content: '';
+        position: absolute;
+        left: -16px;
+        top: 50%;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        transform: translateY(-50%);
+        background: var(--b3-theme-primary);
+        box-shadow: 0 0 0 3px rgba($primary, 0.12);
+    }
+
+    .ai-message__timeline .ai-message__tool-calls-title::before {
+        background: var(--b3-theme-on-surface-light);
+        box-shadow: 0 0 0 3px rgba(120, 120, 120, 0.12);
+    }
+
+    .ai-message__timeline--streaming .ai-message__thinking-header::before {
+        animation: opencode-process-pulse 1.1s ease-in-out infinite;
+    }
+
+    @keyframes opencode-process-pulse {
+        0% {
+            opacity: 0.45;
+            transform: translateY(-50%) scale(0.82);
+        }
+        50% {
+            opacity: 1;
+            transform: translateY(-50%) scale(1);
+        }
+        100% {
+            opacity: 0.45;
+            transform: translateY(-50%) scale(0.82);
         }
     }
 
     .ai-message__thinking-icon {
-        width: 14px;
-        height: 14px;
+        width: 12px;
+        height: 12px;
         color: var(--b3-theme-on-surface-light);
         transition: transform 0.2s;
         transform: rotate(90deg);
+        flex-shrink: 0;
 
         &.collapsed {
             transform: rotate(0deg);
@@ -14590,13 +14770,18 @@
 
     .ai-message__thinking-title {
         font-size: 12px;
-        font-weight: 500;
+        font-weight: 600;
         color: var(--b3-theme-on-surface);
+        line-height: 1.2;
     }
 
     .ai-message__thinking-content {
-        border-top: 1px solid var(--b3-border-color);
+        border-top: none;
+        border-left: 1px dashed var(--b3-border-color);
         background: var(--b3-theme-background);
+        border-radius: 6px;
+        margin: 2px 0 2px 20px;
+        padding: 8px 10px;
         font-size: 13px;
         color: var(--b3-theme-on-surface-light);
         line-height: 1.6;
@@ -14612,24 +14797,33 @@
 
     // 工具调用样式
     .ai-message__tool-calls {
-        border: 1px solid var(--b3-border-color);
+        border: none;
         border-radius: 8px;
-        overflow: hidden;
-        background: var(--b3-theme-surface);
-        margin-bottom: 12px;
+        overflow: visible;
+        background: transparent;
+        margin-bottom: 8px;
 
         &--streaming {
-            border-color: var(--b3-theme-primary-light);
+            border-color: transparent;
+        }
+
+        &--timeline {
+            border-color: transparent;
         }
     }
 
     .ai-message__tool-calls-title {
-        padding: 8px 12px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        position: relative;
+        min-height: 28px;
+        padding: 4px 8px;
         font-size: 12px;
-        font-weight: 500;
+        font-weight: 600;
         color: var(--b3-theme-on-surface);
-        background: var(--b3-theme-surface);
-        border-bottom: 1px solid var(--b3-border-color);
+        background: transparent;
+        border-bottom: none;
 
         &--clickable {
             display: flex;
@@ -14649,10 +14843,13 @@
     }
 
     .ai-message__tool-call {
-        border-bottom: 1px solid var(--b3-border-color);
+        border: 1px solid var(--b3-border-color);
+        border-radius: 7px;
+        background: var(--b3-theme-background);
+        overflow: hidden;
 
         &:last-child {
-            border-bottom: none;
+            border-bottom: 1px solid var(--b3-border-color);
         }
 
         &--running .ai-message__tool-call-status {
@@ -14668,10 +14865,10 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 8px 12px;
+        padding: 6px 8px;
         cursor: pointer;
         user-select: none;
-        background: var(--b3-theme-background);
+        background: transparent;
         border-radius: $radius-sm;
         transition: background $transition;
 
@@ -14684,17 +14881,27 @@
         display: flex;
         align-items: center;
         gap: 6px;
+        min-width: 0;
+        width: 100%;
         font-size: 13px;
         font-weight: 500;
         color: var(--b3-theme-on-surface);
+
+        > span:first-of-type {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
     }
 
     .ai-message__tool-call-icon {
-        width: 14px;
-        height: 14px;
+        width: 12px;
+        height: 12px;
         color: var(--b3-theme-on-surface-light);
         transition: transform 0.2s;
         transform: rotate(90deg);
+        flex-shrink: 0;
 
         &.collapsed {
             transform: rotate(0deg);
@@ -14702,16 +14909,45 @@
     }
 
     .ai-message__tool-call-status {
-        font-size: 14px;
+        position: relative;
+        font-size: 12px;
         margin-left: auto;
+        padding-left: 8px;
         display: inline-flex;
         align-items: center;
         gap: 4px;
+        white-space: nowrap;
+        color: var(--b3-theme-on-surface-light);
+        flex-shrink: 0;
+    }
+
+    .ai-message__tool-call--running .ai-message__tool-call-status::before {
+        content: '';
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--b3-theme-primary);
+        animation: opencode-status-pulse 1.1s ease-in-out infinite;
+    }
+
+    @keyframes opencode-status-pulse {
+        0% {
+            opacity: 0.45;
+            transform: scale(0.82);
+        }
+        50% {
+            opacity: 1;
+            transform: scale(1);
+        }
+        100% {
+            opacity: 0.45;
+            transform: scale(0.82);
+        }
     }
 
     .ai-message__tool-call-details {
-        padding: 12px;
-        background: var(--b3-theme-background);
+        padding: 8px;
+        background: var(--b3-theme-surface);
         border-top: 1px solid var(--b3-border-color);
     }
 
@@ -14762,18 +14998,18 @@
 
     .ai-message__tool-call-code {
         margin: 0;
-        padding: 8px 12px;
-        background: var(--b3-theme-surface);
+        padding: 7px 9px;
+        background: var(--b3-theme-background);
         border: 1px solid var(--b3-border-color);
         border-radius: 4px;
         font-family: var(--b3-font-family-code);
-        font-size: 12px;
+        font-size: 11.5px;
         line-height: 1.5;
         color: var(--b3-theme-on-surface);
         white-space: pre-wrap;
         word-wrap: break-word;
         overflow-x: auto;
-        max-height: 300px;
+        max-height: 260px;
         overflow-y: auto;
         user-select: text; // 允许鼠标选择文本进行复制
         cursor: text; // 显示文本选择光标
@@ -17538,7 +17774,262 @@
         text-overflow: ellipsis;
     }
 
-    // ── Permission Dialog ────────────────────────────────────────
+    // ── OpenCode Confirmation Dialogs ────────────────────────────
+    .question-dialog {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 18px;
+    }
+
+    .question-dialog__scrim {
+        position: absolute;
+        inset: 0;
+        background: rgba(18, 18, 24, 0.34);
+        backdrop-filter: blur(4px);
+    }
+
+    .question-dialog__panel {
+        position: relative;
+        width: min(520px, 100%);
+        max-height: min(680px, calc(100vh - 36px));
+        display: flex;
+        flex-direction: column;
+        background: var(--b3-theme-surface);
+        border: 1px solid var(--b3-border-color);
+        border-radius: 12px;
+        box-shadow: 0 18px 48px rgba(20, 20, 30, 0.24);
+        overflow: hidden;
+        animation: permissionIn 180ms ease-out;
+    }
+
+    .question-dialog__header {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 18px 18px 14px;
+        border-bottom: 1px solid var(--b3-border-color);
+    }
+
+    .question-dialog__mark {
+        width: 40px;
+        height: 40px;
+        flex: 0 0 40px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 10px;
+        color: $primary;
+        background: rgba($primary, 0.1);
+
+        svg {
+            width: 22px;
+            height: 22px;
+        }
+    }
+
+    .question-dialog__heading {
+        min-width: 0;
+    }
+
+    .question-dialog__title {
+        font-size: 15px;
+        font-weight: 700;
+        color: var(--b3-theme-on-surface);
+    }
+
+    .question-dialog__subtitle {
+        margin-top: 3px;
+        font-size: 12px;
+        color: var(--b3-theme-on-surface-light);
+        line-height: 1.45;
+    }
+
+    .question-dialog__body {
+        padding: 16px 18px;
+        overflow-y: auto;
+    }
+
+    .question-dialog__item {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+
+        & + & {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid var(--b3-border-color);
+        }
+    }
+
+    .question-dialog__item-header {
+        font-size: 12px;
+        font-weight: 700;
+        color: $primary;
+    }
+
+    .question-dialog__question {
+        font-size: 14px;
+        font-weight: 650;
+        line-height: 1.55;
+        color: var(--b3-theme-on-surface);
+        word-break: break-word;
+    }
+
+    .question-dialog__options {
+        display: grid;
+        gap: 8px;
+    }
+
+    .question-dialog__option {
+        display: grid;
+        grid-template-columns: 18px minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 8px;
+        background: var(--b3-theme-background);
+        color: var(--b3-theme-on-surface);
+        text-align: left;
+        cursor: pointer;
+        transition: border-color $transition, background $transition, box-shadow $transition;
+
+        &:hover {
+            border-color: rgba($primary, 0.45);
+            background: rgba($primary, 0.04);
+        }
+
+        &--active {
+            border-color: $primary;
+            background: rgba($primary, 0.09);
+            box-shadow: 0 0 0 2px rgba($primary, 0.08);
+
+            .question-dialog__option-check {
+                border-color: $primary;
+                background: $primary;
+
+                &::after {
+                    opacity: 1;
+                }
+            }
+        }
+    }
+
+    .question-dialog__option-check {
+        width: 18px;
+        height: 18px;
+        margin-top: 1px;
+        border: 2px solid var(--b3-border-color);
+        border-radius: 50%;
+        position: relative;
+        transition: all $transition;
+
+        &::after {
+            content: '';
+            position: absolute;
+            inset: 4px;
+            border-radius: 50%;
+            background: #fff;
+            opacity: 0;
+        }
+    }
+
+    .question-dialog__option-text {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+    }
+
+    .question-dialog__option-label {
+        font-size: 13px;
+        font-weight: 650;
+        line-height: 1.35;
+        word-break: break-word;
+    }
+
+    .question-dialog__option-desc {
+        font-size: 12px;
+        line-height: 1.45;
+        color: var(--b3-theme-on-surface-light);
+        word-break: break-word;
+    }
+
+    .question-dialog__custom {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 12px;
+        font-weight: 650;
+        color: var(--b3-theme-on-surface-light);
+
+        textarea {
+            width: 100%;
+            box-sizing: border-box;
+            resize: vertical;
+            min-height: 72px;
+            max-height: 160px;
+            padding: 10px 12px;
+            border: 1px solid var(--b3-border-color);
+            border-radius: 8px;
+            background: var(--b3-theme-background);
+            color: var(--b3-theme-on-surface);
+            font: inherit;
+            line-height: 1.5;
+            outline: none;
+
+            &:focus {
+                border-color: $primary;
+                box-shadow: 0 0 0 2px rgba($primary, 0.12);
+            }
+        }
+    }
+
+    .question-dialog__actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        padding: 14px 18px 18px;
+        border-top: 1px solid var(--b3-border-color);
+    }
+
+    .question-dialog__button {
+        min-width: 96px;
+        height: 36px;
+        padding: 0 14px;
+        border-radius: 8px;
+        border: 1px solid var(--b3-border-color);
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all $transition;
+
+        &--ghost {
+            background: transparent;
+            color: var(--b3-theme-on-surface-light);
+
+            &:hover {
+                background: var(--b3-theme-background);
+                color: var(--b3-theme-on-surface);
+            }
+        }
+
+        &--primary {
+            border-color: $primary;
+            background: $primary;
+            color: #fff;
+
+            &:hover {
+                background: $primary-dark;
+            }
+        }
+    }
+
     .permission-dialog {
         margin: 8px 12px;
         padding: 12px;
@@ -17648,31 +18139,40 @@
     .ai-sidebar__header {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        padding: 12px 16px;
+        justify-content: flex-start;
+        padding: 10px 14px;
         border-bottom: 1px solid var(--b3-border-color);
+        background: var(--b3-theme-background);
         flex-shrink: 0;
         min-width: 0;
+        gap: 12px;
     }
 
     .ai-sidebar__brand {
         display: flex;
         align-items: center;
         gap: 10px;
+        min-width: 0;
+        margin-right: auto;
     }
 
     .ai-sidebar__brand-icon {
-        width: 36px;
-        height: 36px;
+        width: 34px;
+        height: 34px;
         display: flex;
         align-items: center;
         justify-content: center;
-        background: linear-gradient(135deg, #FEF3E2, #FFF8F0);
-        border-radius: 10px;
-        color: #F97316;
-        svg {
-            width: 20px;
-            height: 20px;
+        background: transparent;
+        border: none;
+        border-radius: 0;
+        overflow: hidden;
+        flex-shrink: 0;
+
+        img {
+            width: 24px;
+            height: 34px;
+            object-fit: contain;
+            display: block;
         }
     }
 
@@ -17680,6 +18180,7 @@
         display: flex;
         flex-direction: column;
         gap: 2px;
+        min-width: 0;
     }
 
     .ai-sidebar__brand-name {
@@ -17695,20 +18196,49 @@
         gap: 5px;
         font-size: 12px;
         color: var(--b3-theme-on-surface-light);
+        white-space: nowrap;
     }
 
     .ai-sidebar__status-dot {
         width: 8px;
         height: 8px;
         border-radius: 50%;
-        background: #22C55E;
+        background: var(--b3-theme-on-surface-light);
         flex-shrink: 0;
+    }
+
+    .ai-sidebar__brand-status--connected .ai-sidebar__status-dot {
+        background: $success;
+        box-shadow: 0 0 0 3px rgba($success, 0.14);
+    }
+
+    .ai-sidebar__brand-status--connecting .ai-sidebar__status-dot {
+        background: $warning;
+        animation: pulse 1.2s ease-in-out infinite;
+    }
+
+    .ai-sidebar__brand-status--disconnected .ai-sidebar__status-dot {
+        background: $error;
+    }
+
+    .ai-sidebar__status-retry {
+        border: none;
+        background: transparent;
+        color: var(--b3-theme-primary);
+        cursor: pointer;
+        font-size: 12px;
+        padding: 0 2px;
+
+        &:hover {
+            text-decoration: underline;
+        }
     }
 
     .ai-sidebar__header-actions {
         display: flex;
         align-items: center;
         gap: 4px;
+        margin-left: auto;
     }
 
     .ai-sidebar__icon-btn {
@@ -17731,20 +18261,31 @@
             background: var(--b3-theme-surface);
             color: var(--b3-theme-on-surface);
         }
+
+        &--active {
+            background: var(--b3-theme-primary-lightest);
+            color: var(--b3-theme-primary);
+        }
     }
 
     // ── Toolbar ──────────────────────────────────────────────────
     .ai-sidebar__toolbar {
         display: flex;
         align-items: center;
-        gap: 6px;
-        padding: 8px 12px;
+        gap: 8px;
+        justify-content: space-between;
+        padding: 8px 14px;
         border-bottom: 1px solid var(--b3-border-color);
+        background: var(--b3-theme-surface);
         flex-shrink: 0;
         overflow-x: auto;
         scrollbar-width: none;
         -ms-overflow-style: none;
         &::-webkit-scrollbar { display: none; }
+    }
+
+    .ai-sidebar__toolbar > * {
+        flex: 0 0 auto;
     }
 
     .ai-sidebar__toolbar-btn {
@@ -17766,9 +18307,18 @@
         }
         &:hover {
             background: var(--b3-theme-surface);
-            color: $accent;
-            border-color: rgba($accent, 0.4);
+            color: var(--b3-theme-primary);
+            border-color: var(--b3-theme-primary-light);
         }
+    }
+
+    .ai-sidebar__open-window-menu-container {
+        position: relative;
+        flex-shrink: 0;
+    }
+
+    .ai-sidebar__open-window-menu {
+        z-index: 20;
     }
 
     // ── Empty State ──────────────────────────────────────────────
@@ -17784,12 +18334,17 @@
     }
 
     .ai-sidebar__empty-illustration {
-        width: 140px;
-        height: 120px;
+        width: 96px;
+        height: 128px;
         margin-bottom: 20px;
-        svg {
+        border-radius: 0;
+        overflow: hidden;
+
+        img {
             width: 100%;
             height: 100%;
+            object-fit: contain;
+            display: block;
         }
     }
 
@@ -17806,8 +18361,8 @@
         margin: 0;
     }
 
-    // ── Bottom Selectors ─────────────────────────────────────────
-    .ai-sidebar__selectors-bar {
+    // ── Composer Controls ────────────────────────────────────────
+    .ai-sidebar__composer-controls {
         display: flex;
         align-items: center;
         gap: 8px;
@@ -17815,56 +18370,116 @@
         flex-wrap: wrap;
     }
 
-    .ai-sidebar__selector {
-        display: flex;
+    .ai-sidebar__mode-switch {
+        display: inline-flex;
         align-items: center;
-        gap: 4px;
-        padding: 4px 8px;
-        background: var(--b3-theme-surface);
+        padding: 2px;
         border: 1px solid var(--b3-border-color);
         border-radius: 8px;
-        cursor: pointer;
-        transition: all 0.2s ease;
-        font-size: 13px;
-        color: var(--b3-theme-on-surface);
-        &:hover {
-            border-color: var(--b3-theme-primary-light);
-        }
-    }
-
-    .ai-sidebar__selector-icon {
-        color: var(--b3-theme-on-surface-light);
+        background: var(--b3-theme-background);
         flex-shrink: 0;
     }
 
-    .ai-sidebar__selector-select {
+    .ai-sidebar__mode-switch-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 56px;
+        height: 28px;
+        padding: 0 10px;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--b3-theme-on-surface-light);
+        &:hover {
+            color: var(--b3-theme-on-surface);
+            background: var(--b3-theme-surface);
+        }
+    }
+
+    .ai-sidebar__mode-switch-btn--active {
+        color: var(--b3-theme-primary);
+        background: var(--b3-theme-primary-lightest);
+    }
+
+    .ai-sidebar__thinking-control {
+        display: inline-flex;
+        align-items: center;
+        height: 34px;
+        width: fit-content;
+        min-width: 142px;
+        max-width: 184px;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 8px;
+        background: var(--b3-theme-background);
+        overflow: hidden;
+        flex: 0 0 auto;
+    }
+
+    .ai-sidebar__thinking-chip {
+        height: 100%;
+        width: 52px;
+        min-width: 52px;
+        flex: 0 0 52px;
+        padding: 0;
+        border: none;
+        background: transparent;
+        color: var(--b3-theme-on-surface-light);
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        border-right: 1px solid var(--b3-border-color);
+    }
+
+    .ai-sidebar__thinking-chip--active {
+        color: var(--b3-theme-primary);
+        background: var(--b3-theme-primary-lightest);
+    }
+
+    .ai-sidebar__thinking-select {
+        height: 100%;
+        width: 96px;
+        min-width: 82px;
+        flex: 0 1 96px;
         border: none;
         background: transparent;
         color: var(--b3-theme-on-surface);
         font-size: 13px;
-        cursor: pointer;
         outline: none;
-        appearance: none;
-        -webkit-appearance: none;
-        padding-right: 4px;
-        max-width: 120px;
+        padding: 0 8px;
+        cursor: pointer;
     }
 
-    .ai-sidebar__selector-chevron {
-        color: var(--b3-theme-on-surface-light);
-        flex-shrink: 0;
+    .ai-sidebar__thinking-control--disabled {
+        opacity: 0.5;
     }
 
-    .ai-sidebar__selector--model {
+    .ai-sidebar__thinking-control--disabled,
+    .ai-sidebar__thinking-control--disabled * {
+        cursor: not-allowed;
+    }
+
+    .ai-sidebar__model-control {
+        display: flex;
+        align-items: center;
+        min-width: 180px;
+        max-width: 100%;
+        flex: 1 1 220px;
+
         :global(.multi-model-selector) {
             min-width: 0;
+            width: 100%;
         }
+
         :global(.model-selector__button) {
-            border: none;
-            background: transparent;
-            padding: 0;
+            width: 100%;
+            min-height: 34px;
+            border-radius: 8px;
             font-size: 13px;
-            color: var(--b3-theme-on-surface);
         }
     }
 
@@ -17915,6 +18530,8 @@
         display: flex;
         align-items: center;
         gap: 2px;
+        flex-wrap: wrap;
+        min-width: 0;
     }
 
     .ai-sidebar__chat-input-tool {
@@ -17922,7 +18539,10 @@
         align-items: center;
         justify-content: center;
         width: 28px;
+        min-width: 28px;
+        max-width: 28px;
         height: 28px;
+        flex: 0 0 28px;
         border: none;
         background: transparent;
         color: var(--b3-theme-on-surface-light);
@@ -17943,6 +18563,23 @@
         }
     }
 
+    .ai-sidebar__prompt-tool {
+        width: auto;
+        max-width: none;
+        min-width: 68px;
+        flex: 0 0 auto;
+        padding: 0 8px;
+        gap: 4px;
+        color: var(--b3-theme-primary);
+        background: var(--b3-theme-primary-lightest);
+    }
+
+    .ai-sidebar__prompt-tool-label {
+        font-size: 12px;
+        font-weight: 500;
+        white-space: nowrap;
+    }
+
     .ai-sidebar__chat-input-divider {
         width: 1px;
         height: 16px;
@@ -17955,7 +18592,10 @@
         align-items: center;
         justify-content: center;
         width: 36px;
+        min-width: 36px;
+        max-width: 36px;
         height: 36px;
+        flex: 0 0 36px;
         border: none;
         border-radius: 50%;
         background: $primary;
@@ -17981,11 +18621,138 @@
                 background: var(--b3-theme-error-lighter) !important;
             }
         }
+
+        &--followup {
+            background: $primary;
+        }
     }
 
     // Override old input styles for compatibility
     .ai-sidebar__input-container {
         gap: 8px;
         padding: 12px 14px;
+    }
+
+    @container (max-width: 430px) {
+        .ai-sidebar__header {
+            padding: 8px 10px;
+        }
+
+        .ai-sidebar__brand {
+            min-width: 0;
+        }
+
+        .ai-sidebar__brand-icon {
+            width: 30px;
+            height: 30px;
+        }
+
+        .ai-sidebar__toolbar {
+            padding: 6px 8px;
+            gap: 4px;
+            justify-content: space-between;
+        }
+
+        .ai-sidebar__toolbar-btn,
+        .ai-sidebar__icon-btn {
+            width: 30px;
+            min-width: 30px;
+            max-width: 30px;
+            height: 30px;
+            flex: 0 0 30px;
+        }
+
+        .ai-sidebar__input-container {
+            padding: 10px;
+        }
+
+        .ai-sidebar__composer-controls {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 6px;
+        }
+
+        .ai-sidebar__mode-switch,
+        .ai-sidebar__model-control {
+            width: 100%;
+            min-width: 0;
+        }
+
+        .ai-sidebar__thinking-control {
+            width: min(172px, 100%);
+            min-width: 142px;
+            max-width: 172px;
+            justify-self: start;
+        }
+
+        .ai-sidebar__mode-switch-btn {
+            flex: 1 1 0;
+            min-width: 0;
+        }
+
+        .ai-sidebar__thinking-chip {
+            width: 52px;
+            min-width: 52px;
+            flex: 0 0 52px;
+        }
+
+        .ai-sidebar__thinking-select {
+            flex: 0 1 96px;
+            min-width: 78px;
+        }
+
+        .ai-sidebar__chat-textarea {
+            min-height: 72px;
+            padding: 12px;
+        }
+
+        .ai-sidebar__chat-input-toolbar {
+            align-items: flex-end;
+            gap: 8px;
+            padding: 8px;
+        }
+
+        .ai-sidebar__chat-input-tools {
+            flex: 1 1 auto;
+            max-width: calc(100% - 44px);
+            gap: 4px;
+        }
+
+        .ai-sidebar__prompt-tool {
+            min-width: 76px;
+        }
+
+        .ai-sidebar__prompt-selector {
+            left: 10px;
+            right: 10px;
+            max-height: min(320px, 60vh);
+        }
+    }
+
+    @container (max-width: 320px) {
+        .ai-sidebar__brand-icon {
+            display: none;
+        }
+
+        .ai-sidebar__brand-name {
+            font-size: 14px;
+        }
+
+        .ai-sidebar__toolbar-btn,
+        .ai-sidebar__icon-btn,
+        .ai-sidebar__chat-input-tool {
+            width: 30px;
+            min-width: 30px;
+            max-width: 30px;
+            height: 30px;
+            flex: 0 0 30px;
+        }
+
+        .ai-sidebar__prompt-tool {
+            width: auto;
+            max-width: none;
+            min-width: 72px;
+            flex: 0 0 auto;
+        }
     }
 </style>

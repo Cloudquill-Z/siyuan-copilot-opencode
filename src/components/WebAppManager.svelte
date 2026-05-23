@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { createEventDispatcher } from 'svelte';
+    import { createEventDispatcher, onDestroy } from 'svelte';
     import { pushMsg, pushErrMsg } from '../api';
 
     export let isOpen = false;
@@ -25,6 +25,8 @@
         icon: '',
     };
     let iconFile: File | null = null;
+    let lastIconFile: File | null = null;
+    let iconPreviewUrl = '';
     let fileInputElement: HTMLInputElement;
     let isUploadingIcon = false;
 
@@ -41,6 +43,20 @@
     let draggedIndex: number | null = null;
     let dragOverIndex: number | null = null;
     let dropPosition: 'before' | 'after' | null = null; // 插入位置：之前或之后
+
+    $: if (iconFile !== lastIconFile) {
+        if (iconPreviewUrl) {
+            URL.revokeObjectURL(iconPreviewUrl);
+        }
+        iconPreviewUrl = iconFile ? URL.createObjectURL(iconFile) : '';
+        lastIconFile = iconFile;
+    }
+
+    onDestroy(() => {
+        if (iconPreviewUrl) {
+            URL.revokeObjectURL(iconPreviewUrl);
+        }
+    });
 
     // 打开添加小程序对话框
     function openAddDialog() {
@@ -446,10 +462,7 @@
     // 获取图标 URL（如果是base64直接返回）
     function getIconUrl(icon: string): string {
         if (!icon) return '';
-        // 如果已经是base64格式，直接返回
-        if (icon.startsWith('data:')) {
-            return icon;
-        }
+        return icon;
     }
 
     // 关闭对话框
@@ -682,7 +695,7 @@
                                     <div class="webapp-manager__icon-preview">
                                         {#if iconFile}
                                             <img
-                                                src={URL.createObjectURL(iconFile)}
+                                                src={iconPreviewUrl}
                                                 alt="Preview"
                                             />
                                         {:else if editForm.icon}

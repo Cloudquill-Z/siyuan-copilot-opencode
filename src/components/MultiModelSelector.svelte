@@ -609,6 +609,7 @@ return emojis.length > 0 ? ' ' + emojis.join(' ') : '';
                                                 <option value="low">低</option>
                                                 <option value="medium">中</option>
                                                 <option value="high">高</option>
+                                                <option value="max">Max</option>
                                                 <option value="auto">自动</option>
                                             </select>
                                         {/if}

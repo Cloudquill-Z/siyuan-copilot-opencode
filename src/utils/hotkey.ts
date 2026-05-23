@@ -167,15 +167,10 @@ export const matchHotKey = (hotKey: string, event: KeyboardEvent) => {
 
     let hotKeys = hotKey.split("");
     if (hotKey.indexOf("F") > -1) {
-        hotKeys.forEach((item, index) => {
-            if (item === "F") {
-                // F1-F12
-                hotKeys[index] = "F" + hotKeys.splice(index + 1, 1);
-                if (hotKeys[index + 1]) {
-                    hotKeys[index + 1] += hotKeys.splice(index + 1, 1);
-                }
-            }
-        });
+        const match = hotKey.match(/F\d{1,2}/);
+        if (match) {
+            hotKeys = replaceDirect(hotKey, match[0]);
+        }
     } else if (hotKey.indexOf("PageUp") > -1) {
         hotKeys = replaceDirect(hotKey, "PageUp");
     } else if (hotKey.indexOf("PageDown") > -1) {

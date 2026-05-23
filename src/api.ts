@@ -81,7 +81,9 @@ export async function lsNotebooks(): Promise<IReslsNotebooks> {
     try {
         if (res && res.notebooks && Array.isArray(res.notebooks)) {
             // 只返回未关闭的笔记本
-            res.notebooks = res.notebooks.filter((n: any) => n.closed === false || n.closed === 0 || n.closed === 'false' ? true : false);
+            res.notebooks = res.notebooks.filter((n: any) =>
+                n.closed === false || n.closed === 0 || n.closed === 'false'
+            );
         }
     } catch (e) {
         console.error('Filter notebooks error:', e);
@@ -422,7 +424,8 @@ export async function sql(sql: string): Promise<any[]> {
 }
 
 export async function getBlockByID(blockId: string): Promise<Block> {
-    let sqlScript = `select * from blocks where id ='${blockId}'`;
+    const escapedBlockId = blockId.replace(/'/g, "''");
+    let sqlScript = `select * from blocks where id ='${escapedBlockId}'`;
     let data = await sql(sqlScript);
     return data[0];
 }

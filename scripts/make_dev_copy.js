@@ -10,28 +10,21 @@ import fs from 'fs';
 import path from 'path';
 import { log, error, getSiYuanDir, chooseTarget, getThisPluginName, copyDirectory } from './utils.js';
 
-let targetDir = `D:\\Notes\\Siyuan\\Achuan-2\\data\\plugins`;
-// let targetDir =`C:\\Users\\wangmin\\Documents\\siyuan_plugins_test\\data\\plugins`;
-// let targetDir =`C:\\Users\\wangmin\\Documents\\Project Code\\notebook\\data\\plugins`;
+let targetDir = process.env?.SIYUAN_PLUGIN_DIR || '';
 
 /**
  * 1. Get the parent directory to install the plugin
  */
-log('>>> Try to visit constant "targetDir" in make_dev_copy.js...');
-if (targetDir === '') {
-    log('>>> Constant "targetDir" is empty, try to get SiYuan directory automatically....');
+log('>>> Resolve SiYuan plugin directory...');
+if (targetDir) {
+    log(`\tGot target directory from environment variable "SIYUAN_PLUGIN_DIR": ${targetDir}`);
+} else {
+    log('>>> Environment variable "SIYUAN_PLUGIN_DIR" is not set, try to get SiYuan directory automatically....');
     let res = await getSiYuanDir();
 
     if (!res || res.length === 0) {
-        log('>>> Can not get SiYuan directory automatically, try to visit environment variable "SIYUAN_PLUGIN_DIR"....');
-        let env = process.env?.SIYUAN_PLUGIN_DIR;
-        if (env) {
-            targetDir = env;
-            log(`\tGot target directory from environment variable "SIYUAN_PLUGIN_DIR": ${targetDir}`);
-        } else {
-            error('\tCan not get SiYuan directory from environment variable "SIYUAN_PLUGIN_DIR", failed!');
-            process.exit(1);
-        }
+        error('\tCan not get SiYuan directory automatically. Set "SIYUAN_PLUGIN_DIR" and retry.');
+        process.exit(1);
     } else {
         targetDir = await chooseTarget(res);
     }
@@ -40,7 +33,7 @@ if (targetDir === '') {
 }
 if (!fs.existsSync(targetDir)) {
     error(`Failed! Plugin directory not exists: "${targetDir}"`);
-    error('Please set the plugin directory in scripts/make_dev_copy.js');
+    error('Please set "SIYUAN_PLUGIN_DIR" to your SiYuan plugins directory.');
     process.exit(1);
 }
 

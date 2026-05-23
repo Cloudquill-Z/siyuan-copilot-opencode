@@ -2,7 +2,7 @@
  * AI Chat API 调用模块
  * 仅支持 OpenCode 提供商
  */
-import { chatOpenCode, fetchOpenCodeModels, deleteOpenCodeSession, invalidateModelCache, type OpenCodeToolPartUpdate, listCommands as fetchOpenCodeCommands, executeCommand as execOpenCodeCommand, sendPromptAsync as sendOpenCodePromptAsync, initSession as initOpenCodeSession, type OpenCodeCommand, respondToPermission as respondOpenCodePermission, type PermissionRequest } from './providers/opencode-provider';
+import { chatOpenCode, fetchOpenCodeModels, deleteOpenCodeSession, type OpenCodeToolPartUpdate, listCommands as fetchOpenCodeCommands, executeCommand as execOpenCodeCommand, sendPromptAsync as sendOpenCodePromptAsync, initSession as initOpenCodeSession, type OpenCodeCommand, respondToPermission as respondOpenCodePermission, replyToQuestion as replyOpenCodeQuestion, rejectQuestion as rejectOpenCodeQuestion, type PermissionRequest, type QuestionRequest } from './providers/opencode-provider';
 
 export interface MessageAttachment {
     type: 'image' | 'file';
@@ -19,6 +19,15 @@ export interface MessageContent {
     text?: string;
     image_url?: {
         url: string;
+    };
+}
+
+export interface ToolCall {
+    id: string;
+    type?: string;
+    function: {
+        name: string;
+        arguments: string;
     };
 }
 
@@ -46,12 +55,27 @@ export interface ContextDocument {
 }
 
 export interface Message {
-    role: "user" | "assistant" | "system";
+    role: "user" | "assistant" | "system" | "tool";
     content: string | MessageContent[];
+    tool_calls?: ToolCall[];
+    tool_call_id?: string;
+    name?: string;
+    reasoning_content?: string;
+    toolCallThinkings?: Array<{
+        toolCallIndex: number;
+        thinkingBefore: string;
+    }>;
+    thinkingBeforeToolCalls?: string;
+    thinkingAfterToolCalls?: string;
+    finalReply?: string;
     attachments?: MessageAttachment[];
     contextDocuments?: ContextDocument[];
     thinking?: string;
     openCodeToolParts?: OpenCodeToolPartUpdate[];
+    openCodeTimeline?: Array<
+        | { type: 'thinking'; id: string; content: string }
+        | { type: 'tool'; id: string; toolPart: OpenCodeToolPartUpdate }
+    >;
     editOperations?: EditOperation[];
     multiModelResponses?: Array<{
         provider: string;
@@ -76,7 +100,7 @@ export interface GeneratedImageData {
     path?: string;
 }
 
-export type ThinkingEffort = 'low' | 'medium' | 'high' | 'auto';
+export type ThinkingEffort = 'low' | 'medium' | 'high' | 'max' | 'auto';
 
 export interface ChatOptions {
     apiKey: string;
@@ -96,8 +120,9 @@ export interface ChatOptions {
     onThinkingComplete?: (thinking: string) => void;
     onToolPartUpdate?: (update: OpenCodeToolPartUpdate) => void;
     tools?: any;
-    onToolCallComplete?: (toolCalls: any[]) => void;
-    onPermissionAsked?: (req: import('./providers/opencode-provider').PermissionRequest) => void;
+    onToolCallComplete?: (toolCalls: ToolCall[]) => void;
+    onPermissionAsked?: (req: PermissionRequest) => void;
+    onQuestionAsked?: (req: QuestionRequest) => void;
     customBody?: any;
     enableImageGeneration?: boolean;
     onImageGenerated?: (images: GeneratedImageData[]) => void;
@@ -110,7 +135,7 @@ export interface ModelInfo {
     provider: string;
     providerID?: string;
     enableThinking?: boolean;
-    reasoningEffort?: 'low' | 'medium' | 'high' | 'auto';
+    reasoningEffort?: ThinkingEffort;
 }
 
 export type AIProvider = 'opencode';
@@ -119,6 +144,7 @@ export const EFFORT_RATIO: Record<ThinkingEffort, number> = {
     low: 0.2,
     medium: 0.5,
     high: 0.8,
+    max: 1,
     auto: 0.5
 };
 
@@ -150,7 +176,6 @@ export async function fetchModels(
     _advancedConfig?: { customModelsUrl?: string; customChatUrl?: string }
 ): Promise<ModelInfo[]> {
     const serverUrl = (customApiUrl || '').trim() || 'http://localhost:4096';
-    invalidateModelCache(serverUrl);
     const models = await fetchOpenCodeModels({ serverUrl });
     return models.map(model => ({
         id: model.providerID ? `${model.providerID}/${model.id}` : model.id,
@@ -213,6 +238,7 @@ export async function chat(
             tools: options.tools,
             customBody: options.customBody,
             onPermissionAsked: options.onPermissionAsked,
+            onQuestionAsked: options.onQuestionAsked,
             mode: options.mode
         },
         { serverUrl }
@@ -315,7 +341,11 @@ export async function sendStillPrompt(
     serverUrl: string,
     sessionId: string,
     prompt: string = 'Continue.',
-    modelId?: string
+    modelId?: string,
+    options?: {
+        agent?: 'plan' | 'build';
+        noReply?: boolean;
+    }
 ): Promise<void> {
     let model: { providerID: string; modelID: string } | undefined;
     if (modelId?.includes('/')) {
@@ -324,7 +354,7 @@ export async function sendStillPrompt(
         const pid = parts.join('/');
         if (pid && mid) model = { providerID: pid, modelID: mid };
     }
-    return sendOpenCodePromptAsync({ serverUrl }, sessionId, prompt, model);
+    return sendOpenCodePromptAsync({ serverUrl }, sessionId, prompt, model, options);
 }
 
 export async function sessionInit(
@@ -342,7 +372,7 @@ export async function sessionInit(
     return initOpenCodeSession({ serverUrl }, sessionId, undefined, model);
 }
 
-export { type PermissionRequest } from './providers/opencode-provider';
+export { type PermissionRequest, type QuestionRequest } from './providers/opencode-provider';
 
 export async function respondToPermission(
     serverUrl: string,
@@ -351,4 +381,19 @@ export async function respondToPermission(
     response: 'once' | 'always' | 'reject'
 ): Promise<boolean> {
     return respondOpenCodePermission({ serverUrl }, sessionId, permissionID, response);
+}
+
+export async function replyToQuestion(
+    serverUrl: string,
+    requestID: string,
+    answers: string[][]
+): Promise<boolean> {
+    return replyOpenCodeQuestion({ serverUrl }, requestID, answers);
+}
+
+export async function rejectQuestion(
+    serverUrl: string,
+    requestID: string
+): Promise<boolean> {
+    return rejectOpenCodeQuestion({ serverUrl }, requestID);
 }

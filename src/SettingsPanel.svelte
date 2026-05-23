@@ -170,6 +170,19 @@
                     },
                 },
                 {
+                    key: 'executionMessageMode',
+                    value: settings.executionMessageMode,
+                    type: 'select',
+                    title: t('settings.executionMessageMode.title') || '执行中发送',
+                    description:
+                        t('settings.executionMessageMode.description') ||
+                        '选择 AI 正在执行时继续发送消息的处理方式',
+                    options: {
+                        guide: t('settings.executionMessageMode.options.guide') || '引导',
+                        queue: t('settings.executionMessageMode.options.queue') || '排队',
+                    },
+                },
+                {
                     key: 'messageFontSize',
                     value: settings.messageFontSize,
                     type: 'number',
@@ -179,17 +192,6 @@
                         min: 5,
                         max: 32,
                         step: 1,
-                    },
-                },
-                {
-                    key: 'multiModelViewMode',
-                    value: settings.multiModelViewMode,
-                    type: 'select',
-                    title: t('settings.multiModelViewMode.title'),
-                    description: t('settings.multiModelViewMode.description'),
-                    options: {
-                        tab: t('settings.multiModelViewMode.options.tab'),
-                        card: t('settings.multiModelViewMode.options.card'),
                     },
                 },
             ],
@@ -243,31 +245,6 @@
                     placeholder:
                         t('settings.soulDocId.placeholder') ||
                         '输入文档块 ID，如 20260312120000-xxxxxxxx',
-                },
-            ],
-        },
-        {
-            name: t('settings.settingsGroup.webApp') || '网页小程序',
-            items: [
-                {
-                    key: 'openLinksInWebView',
-                    value: settings.openLinksInWebView,
-                    type: 'checkbox',
-                    title: t('settings.openLinksInWebView.title') || '在 WebView 中打开链接',
-                    description:
-                        t('settings.openLinksInWebView.description') ||
-                        '点击思源笔记中的 https 链接时，在内置 WebView 标签页中打开，而不是外部浏览器',
-                },
-                {
-                    key: 'searchEngine',
-                    value: settings.searchEngine,
-                    type: 'select',
-                    title: '搜索引擎',
-                    description: '选择地址栏使用的默认搜索引擎',
-                    options: {
-                        google: 'Google',
-                        bing: 'Bing',
-                    },
                 },
             ],
         },

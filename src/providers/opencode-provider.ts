@@ -33,13 +33,14 @@ export interface OpenCodeChatOptions {
     onError?: (error: Error) => void;
     signal?: AbortSignal;
     enableThinking?: boolean;
-    reasoningEffort?: 'low' | 'medium' | 'high' | 'auto';
+    reasoningEffort?: 'low' | 'medium' | 'high' | 'max' | 'auto';
     onThinkingChunk?: (text: string) => void;
     onThinkingComplete?: (thinking: string) => void;
     onToolPartUpdate?: (update: OpenCodeToolPartUpdate) => void;
     tools?: any;
     customBody?: any;
     onPermissionAsked?: (req: PermissionRequest) => void;
+    onQuestionAsked?: (req: QuestionRequest) => void;
     mode?: 'plan' | 'build';
 }
 
@@ -48,7 +49,7 @@ export interface OpenCodeModelInfo {
     name: string;
     providerID?: string;
     enableThinking?: boolean;
-    reasoningEffort?: 'low' | 'medium' | 'high' | 'auto';
+    reasoningEffort?: 'low' | 'medium' | 'high' | 'max' | 'auto';
 }
 
 const DEFAULT_SERVER_URL = 'http://localhost:4096';
@@ -253,14 +254,21 @@ function toolEventToUpdate(eventType: string, props: any): OpenCodeToolPartUpdat
         normalizeToolName(props?.toolName) ||
         normalizeToolName(props?.call?.tool) ||
         normalizeToolName(props?.call?.name);
-    const callID =
+    const explicitCallID =
         props?.callID ||
         props?.toolCallID ||
         props?.invocationID ||
         props?.id ||
         props?.call?.id ||
-        props?.call?.callID ||
-        tool;
+        props?.call?.callID;
+    const fallbackCallID = [
+        props?.sessionID || props?.sessionId || props?.call?.sessionID || props?.call?.sessionId,
+        props?.messageID || props?.messageId || props?.call?.messageID || props?.call?.messageId,
+        props?.partID || props?.partId || props?.call?.partID || props?.call?.partId,
+        tool,
+        stringifyToolValue(props?.input ?? props?.arguments ?? props?.args ?? props?.params ?? props?.call?.input ?? props?.call?.arguments),
+    ].filter(Boolean).join(':');
+    const callID = explicitCallID || fallbackCallID;
     if (!tool && !callID) return null;
 
     const error = props?.error || props?.call?.error;
@@ -589,6 +597,8 @@ interface EventStreamCallbacks {
     onSessionError?: (error: any) => void;
     onPermissionAsked?: (payload: PermissionRequest) => void;
     onPermissionActivity?: (isWaiting: boolean) => void;
+    onQuestionAsked?: (payload: QuestionRequest) => void;
+    onQuestionActivity?: (isWaiting: boolean) => void;
 }
 
 export interface PermissionRequest {
@@ -598,6 +608,72 @@ export interface PermissionRequest {
     input?: string;
     patterns?: string[];
     description?: string;
+}
+
+export interface QuestionOption {
+    label: string;
+    description?: string;
+}
+
+export interface QuestionInfo {
+    header?: string;
+    question: string;
+    options: QuestionOption[];
+    multiple?: boolean;
+    custom?: boolean;
+}
+
+export interface QuestionRequest {
+    requestID: string;
+    sessionID: string;
+    questions: QuestionInfo[];
+    tool?: any;
+}
+
+function normalizeQuestionOptions(options: any): QuestionOption[] {
+    if (!Array.isArray(options)) return [];
+    return options
+        .map((option: any) => {
+            if (typeof option === 'string') {
+                return { label: option };
+            }
+            const label = option?.label || option?.text || option?.value || option?.name || option?.id;
+            if (!label) return null;
+            return {
+                label: String(label),
+                description: option?.description ? String(option.description) : undefined,
+            };
+        })
+        .filter(Boolean) as QuestionOption[];
+}
+
+function normalizeQuestionInfo(question: any): QuestionInfo {
+    return {
+        header: question?.header ? String(question.header) : undefined,
+        question: String(question?.question || question?.prompt || question?.message || question?.title || 'OpenCode 需要你的回答'),
+        options: normalizeQuestionOptions(question?.options || question?.choices),
+        multiple: !!question?.multiple,
+        custom: question?.custom !== false,
+    };
+}
+
+function normalizeQuestionRequest(props: any, fallbackSessionId: string): QuestionRequest | null {
+    const request = props?.request || props?.question || props;
+    const requestID = props?.requestID || props?.requestId || props?.id || request?.requestID || request?.requestId || request?.id;
+    const sessionID = props?.sessionID || props?.sessionId || request?.sessionID || request?.sessionId || fallbackSessionId;
+    if (!requestID) return null;
+
+    const rawQuestions = Array.isArray(request?.questions)
+        ? request.questions
+        : [request?.questions || request];
+    const questions = rawQuestions.map(normalizeQuestionInfo).filter((question) => question.question);
+
+    return {
+        requestID: String(requestID),
+        sessionID: String(sessionID),
+        questions: questions.length > 0 ? questions : [normalizeQuestionInfo(request)],
+        tool: request?.tool || props?.tool,
+    };
 }
 
 class EventStreamClient {
@@ -616,6 +692,10 @@ class EventStreamClient {
 
     async connect(callbacks: EventStreamCallbacks, signal?: AbortSignal): Promise<void> {
         this.controller = new AbortController();
+        if (signal?.aborted) {
+            this.controller.abort();
+            throw new Error('Request aborted');
+        }
 
         const outerCleanup = signal
             ? (() => {
@@ -769,6 +849,16 @@ class EventStreamClient {
                         });
                     }
                 }
+            } else if (eventType === 'question.asked' || eventType === 'question.replied' || eventType === 'question.rejected') {
+                const request = normalizeQuestionRequest(props, this.targetSessionId);
+                if (request && (!request.sessionID || request.sessionID === this.targetSessionId)) {
+                    const isWaiting = eventType === 'question.asked';
+                    callbacks.onQuestionActivity?.(isWaiting);
+                    if (callbacks.onQuestionAsked && isWaiting) {
+                        console.log('[OpenCode] EventStream: question.asked', request.requestID);
+                        callbacks.onQuestionAsked(request);
+                    }
+                }
             }
         };
 
@@ -795,6 +885,7 @@ class EventStreamClient {
             } catch (err: any) {
                 if (err.name !== 'AbortError') {
                     console.warn('[OpenCode] Event stream read error:', err);
+                    callbacks.onSessionError?.(err);
                 }
             } finally {
                 console.log('[OpenCode] EventStream: closed, received', eventCount, 'events');
@@ -1022,7 +1113,7 @@ export async function fetchOpenCodeModels(config: OpenCodeProviderConfig): Promi
             if (typeof modelInfo?.enableThinking === 'boolean') {
                 m.enableThinking = modelInfo.enableThinking;
             }
-            if (modelInfo?.reasoningEffort && ['low', 'medium', 'high', 'auto'].includes(modelInfo.reasoningEffort)) {
+            if (modelInfo?.reasoningEffort && ['low', 'medium', 'high', 'max', 'auto'].includes(modelInfo.reasoningEffort)) {
                 m.reasoningEffort = modelInfo.reasoningEffort;
             }
             models.push(m);
@@ -1091,6 +1182,50 @@ export async function respondToPermission(
     }
 }
 
+export async function replyToQuestion(
+    config: OpenCodeProviderConfig,
+    requestID: string,
+    answers: string[][]
+): Promise<boolean> {
+    try {
+        const fetchResult = await openCodeFetch(
+            config.serverUrl,
+            `/question/${encodeURIComponent(requestID)}/reply`,
+            {
+                method: 'POST',
+                body: JSON.stringify({ answers }),
+            }
+        );
+        try {
+            return fetchResult.response.ok;
+        } finally {
+            fetchResult.clearTimeout();
+        }
+    } catch {
+        return false;
+    }
+}
+
+export async function rejectQuestion(
+    config: OpenCodeProviderConfig,
+    requestID: string
+): Promise<boolean> {
+    try {
+        const fetchResult = await openCodeFetch(
+            config.serverUrl,
+            `/question/${encodeURIComponent(requestID)}/reject`,
+            { method: 'POST' }
+        );
+        try {
+            return fetchResult.response.ok;
+        } finally {
+            fetchResult.clearTimeout();
+        }
+    } catch {
+        return false;
+    }
+}
+
 export async function deleteOpenCodeSession(
     config: OpenCodeProviderConfig,
     sessionId: string
@@ -1123,6 +1258,7 @@ export async function chatOpenCode(
     let realtimeText = '';
     let realtimeThinking = '';
     let realtimeHadUsefulActivity = false;
+    let deliveredPartialResponse = false;
 
     try {
         if (!sessionId) {
@@ -1225,6 +1361,14 @@ export async function chatOpenCode(
                         completionWatcher?.markActivity(isWaiting ? 'permission-asked' : 'permission-updated');
                         completionWatcher?.markPermissionWaiting(isWaiting);
                     },
+                    onQuestionAsked: (req) => {
+                        options.onQuestionAsked?.(req);
+                    },
+                    onQuestionActivity: (isWaiting) => {
+                        realtimeHadUsefulActivity = true;
+                        completionWatcher?.markActivity(isWaiting ? 'question-asked' : 'question-updated');
+                        completionWatcher?.markPermissionWaiting(isWaiting);
+                    },
                 }, options.signal);
             } catch (streamErr) {
                 console.warn('[OpenCode] Failed to connect event stream, falling back to sync mode:', streamErr);
@@ -1274,7 +1418,7 @@ export async function chatOpenCode(
                 body: JSON.stringify(promptBody)
             },
             options.signal,
-            eventStream ? null : IDLE_TIMEOUT_MS
+            IDLE_TIMEOUT_MS
         );
         const { response, resetTimeout } = messageFetchResult;
 
@@ -1293,6 +1437,7 @@ export async function chatOpenCode(
             let accumulatedThinking = '';
             try {
                 fullText = await parseSSEStream(response, (text) => {
+                    fullText += text;
                     if (!realtimeText) {
                         options.onChunk?.(text);
                     }
@@ -1306,9 +1451,11 @@ export async function chatOpenCode(
                 const partialText = fullText || realtimeText;
                 const partialThinking = accumulatedThinking || realtimeThinking;
                 if (partialText) {
+                    deliveredPartialResponse = true;
                     options.onComplete?.(partialText);
                 }
                 if (partialThinking) {
+                    deliveredPartialResponse = true;
                     options.onThinkingComplete?.(partialThinking);
                 }
                 eventStream?.close();
@@ -1334,6 +1481,7 @@ export async function chatOpenCode(
                     if (!realtimeText) {
                         options.onChunk?.(fullText);
                     }
+                    deliveredPartialResponse = true;
                     options.onComplete?.(fullText || realtimeText);
                     eventStream?.close();
                     return { sessionId: sessionId! };
@@ -1376,6 +1524,9 @@ export async function chatOpenCode(
                 }
             }
 
+            if (fullText || realtimeText) {
+                deliveredPartialResponse = true;
+            }
             options.onComplete?.(fullText || realtimeText);
         }
 
@@ -1390,7 +1541,7 @@ export async function chatOpenCode(
 
         const shouldPreserveRealtimeSession =
             wantRealtime && (realtimeHadUsefulActivity || !!realtimeText || !!realtimeThinking);
-        if (sessionCreated && sessionId && !shouldPreserveRealtimeSession) {
+        if (sessionCreated && sessionId && !shouldPreserveRealtimeSession && !deliveredPartialResponse) {
             deleteOpenCodeSession(config, sessionId).catch(() => {});
         }
 
@@ -1486,16 +1637,23 @@ export async function sendPromptAsync(
     config: OpenCodeProviderConfig,
     sessionId: string,
     prompt: string,
-    model?: { providerID: string; modelID: string }
+    model?: { providerID: string; modelID: string },
+    options?: {
+        agent?: 'plan' | 'build';
+        noReply?: boolean;
+    }
 ): Promise<void> {
+    const part: any = { type: 'text', text: prompt };
     const fetchResult = await openCodeFetch(
         config.serverUrl,
         `/session/${encodeURIComponent(sessionId)}/prompt_async`,
         {
             method: 'POST',
             body: JSON.stringify({
-                parts: [{ type: 'text', text: prompt }],
+                parts: [part],
                 ...(model ? { model: { providerID: model.providerID, modelID: model.modelID } } : {}),
+                ...(options?.agent ? { agent: options.agent } : {}),
+                ...(options?.noReply !== undefined ? { noReply: options.noReply } : {}),
             }),
         }
     );

@@ -163,7 +163,7 @@
         if (typeof enableThinking === 'boolean') {
             thinker.thinkingEnabled = enableThinking;
         }
-        if (reasoningEffort && ['low', 'medium', 'high', 'auto'].includes(reasoningEffort)) {
+        if (reasoningEffort && ['low', 'medium', 'high', 'max', 'auto'].includes(reasoningEffort)) {
             thinker.thinkingEffort = reasoningEffort;
         }
         const newModel: ModelConfig = {

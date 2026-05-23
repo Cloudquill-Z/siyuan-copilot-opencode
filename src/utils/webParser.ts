@@ -538,7 +538,7 @@ export async function fetchWithWebView(url: string): Promise<{ success: boolean;
         webview.setAttribute('partition', partitionName);
         webview.setAttribute('style', 'width:1px;height:1px;opacity:0;position:absolute;left:-9999px;');
         webview.setAttribute('nodeintegration', 'false');
-        webview.setAttribute('webpreferences', 'contextIsolation=true,allowRunningInsecureContent=true');
+        webview.setAttribute('webpreferences', 'contextIsolation=true');
         
         let timeoutId: NodeJS.Timeout;
         let isResolved = false;

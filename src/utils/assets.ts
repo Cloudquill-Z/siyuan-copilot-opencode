@@ -66,13 +66,27 @@ export async function saveAsset(data: Blob | ArrayBuffer, fileName: string): Pro
  */
 export async function loadAsset(path: string): Promise<string | null> {
     try {
+        const cached = assetBlobUrlCache.get(path);
+        if (cached) return cached;
+
         const blob = await getFileBlob(path);
         if (!blob) return null;
-        return URL.createObjectURL(blob);
+        const url = URL.createObjectURL(blob);
+        assetBlobUrlCache.set(path, url);
+        return url;
     } catch (e) {
         console.error('Failed to load asset:', path, e);
         return null;
     }
+}
+
+const assetBlobUrlCache = new Map<string, string>();
+
+export function revokeLoadedAssetUrls() {
+    for (const url of assetBlobUrlCache.values()) {
+        URL.revokeObjectURL(url);
+    }
+    assetBlobUrlCache.clear();
 }
 
 /**
