@@ -10051,6 +10051,8 @@
 <div
     class="ai-sidebar"
     class:ai-sidebar--fullscreen={isFullscreen}
+    class:ai-sidebar--sidebar={mode === 'sidebar'}
+    class:ai-sidebar--dialog={mode === 'dialog'}
     bind:this={sidebarContainer}
     on:keydown={handleModeShortcut}
 >
@@ -13252,7 +13254,7 @@
         </div>
     {/if}
     {#if activeQuestionRequest}
-        <div class="question-dialog" role="dialog" aria-modal="true" aria-label="OpenCode 需要确认">
+        <div class="question-dialog" role="dialog" aria-modal={mode === 'dialog'} aria-label="OpenCode 需要确认">
             <div class="question-dialog__scrim"></div>
             <div class="question-dialog__panel">
                 <div class="question-dialog__header">
@@ -17804,6 +17806,40 @@
         box-shadow: 0 18px 48px rgba(20, 20, 30, 0.24);
         overflow: hidden;
         animation: permissionIn 180ms ease-out;
+    }
+
+    .ai-sidebar--sidebar .question-dialog {
+        position: relative;
+        inset: auto;
+        z-index: 8;
+        display: flex;
+        align-items: stretch;
+        justify-content: center;
+        flex: 0 0 auto;
+        padding: 0 12px 12px;
+    }
+
+    .ai-sidebar--sidebar .question-dialog__scrim {
+        display: none;
+    }
+
+    .ai-sidebar--sidebar .question-dialog__panel {
+        width: 100%;
+        max-height: min(420px, 46vh);
+        border-radius: 10px;
+        box-shadow: 0 8px 24px rgba(20, 20, 30, 0.18);
+    }
+
+    .ai-sidebar--sidebar .question-dialog__header {
+        padding: 14px 14px 12px;
+    }
+
+    .ai-sidebar--sidebar .question-dialog__body {
+        padding: 12px 14px;
+    }
+
+    .ai-sidebar--sidebar .question-dialog__actions {
+        padding: 12px 14px 14px;
     }
 
     .question-dialog__header {
