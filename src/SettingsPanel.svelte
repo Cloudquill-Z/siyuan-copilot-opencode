@@ -271,10 +271,10 @@
                                     await saveSettings();
                                     await pushMsg(t('settings.reset.message'));
                                 },
-                                () => {
-                                    console.log('Reset cancelled');
-                                }
-                            );
+	                                () => {
+                                    // 用户取消重置，无需提示。
+	                                }
+	                            );
                         },
                     },
                 },
@@ -291,9 +291,11 @@
     }
 
     const onChanged = ({ detail }: CustomEvent<ChangeEvent>) => {
-        console.log(detail.key, detail.value);
         if (detail.key in settings) {
             settings[detail.key] = detail.value;
+            if (detail.key === 'autoRenameSession' && detail.value) {
+                settings.autoRenameProvider = 'opencode';
+            }
             saveSettings();
         }
     };
@@ -569,11 +571,14 @@
                                 class="config__item-control"
                                 style="display: flex; gap: 8px; align-items: center;"
                             >
-                                <select
-                                    class="b3-select"
-                                    bind:value={settings.autoRenameModelId}
-                                    on:change={saveSettings}
-                                >
+	                                <select
+	                                    class="b3-select"
+	                                    bind:value={settings.autoRenameModelId}
+	                                    on:change={() => {
+                                            settings.autoRenameProvider = 'opencode';
+                                            saveSettings();
+                                        }}
+	                                >
                                     <option value="">
                                         {t('settings.autoRenameSession.selectModel') ||
                                             '-- 选择模型 --'}

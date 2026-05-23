@@ -57,7 +57,14 @@ const IDLE_TIMEOUT_MS = 300_000;
 const SESSION_STATUS_POLL_INTERVAL_MS = 5_000;
 
 const MODEL_CACHE_TTL = 5 * 60 * 1000;
+const OPENCODE_DEBUG_LOGS = false;
 const modelCache = new Map<string, { models: OpenCodeModelInfo[]; timestamp: number }>();
+
+function debugOpenCode(...args: any[]) {
+    if (OPENCODE_DEBUG_LOGS) {
+        console.debug(...args);
+    }
+}
 
 function normalizeServerUrl(serverUrl: string): string {
     const trimmed = (serverUrl || '').trim();
@@ -706,7 +713,7 @@ class EventStreamClient {
             : null;
 
         const url = `${this.serverUrl}/global/event`;
-        console.log('[OpenCode] EventStream: connecting to', url);
+        debugOpenCode('[OpenCode] EventStream: connecting to', url);
         let response: Response;
         try {
             response = await fetch(url, { signal: this.controller.signal });
@@ -723,7 +730,7 @@ class EventStreamClient {
             throw new Error(`Event stream connection failed: ${response.status}`);
         }
 
-        console.log('[OpenCode] EventStream: connected, status', response.status);
+        debugOpenCode('[OpenCode] EventStream: connected, status', response.status);
 
         const reader = response.body?.getReader();
         if (!reader) {
@@ -784,7 +791,7 @@ class EventStreamClient {
 
                     eventCount++;
                     if (eventCount <= 5 || eventCount % 20 === 0) {
-                        console.log(`[OpenCode] EventStream: part #${eventCount}, event=${eventType}, type=${part.type}, delta=${(props.delta || '').slice(0, 50)}`);
+                        debugOpenCode(`[OpenCode] EventStream: part #${eventCount}, event=${eventType}, type=${part.type}, delta=${(props.delta || '').slice(0, 50)}`);
                     }
 
                     processRealtimePart(partWithRole, props, props.delta, this.partTextCache, callbacks);
@@ -815,13 +822,13 @@ class EventStreamClient {
             } else if (eventType === 'session.idle') {
                 const sid = props.sessionID;
                 if (!sid || sid === this.targetSessionId) {
-                    console.log('[OpenCode] EventStream: session.idle');
+                    debugOpenCode('[OpenCode] EventStream: session.idle');
                     callbacks.onSessionIdle?.();
                 }
             } else if (eventType === 'session.status') {
                 const sid = props.sessionID;
                 if ((!sid || sid === this.targetSessionId) && props?.status?.type === 'idle') {
-                    console.log('[OpenCode] EventStream: session.status idle');
+                    debugOpenCode('[OpenCode] EventStream: session.status idle');
                     callbacks.onSessionIdle?.();
                 }
             } else if (eventType === 'session.error') {
@@ -838,7 +845,7 @@ class EventStreamClient {
                     const isWaiting = eventType === 'permission.asked';
                     callbacks.onPermissionActivity?.(isWaiting);
                     if (callbacks.onPermissionAsked && isWaiting) {
-                        console.log('[OpenCode] EventStream: permission.asked', props.tool || permission?.tool, permId);
+                        debugOpenCode('[OpenCode] EventStream: permission.asked', props.tool || permission?.tool, permId);
                         callbacks.onPermissionAsked({
                             permissionID: permId,
                             sessionID: permSid || this.targetSessionId,
@@ -855,7 +862,7 @@ class EventStreamClient {
                     const isWaiting = eventType === 'question.asked';
                     callbacks.onQuestionActivity?.(isWaiting);
                     if (callbacks.onQuestionAsked && isWaiting) {
-                        console.log('[OpenCode] EventStream: question.asked', request.requestID);
+                        debugOpenCode('[OpenCode] EventStream: question.asked', request.requestID);
                         callbacks.onQuestionAsked(request);
                     }
                 }
@@ -888,7 +895,7 @@ class EventStreamClient {
                     callbacks.onSessionError?.(err);
                 }
             } finally {
-                console.log('[OpenCode] EventStream: closed, received', eventCount, 'events');
+                debugOpenCode('[OpenCode] EventStream: closed, received', eventCount, 'events');
                 try {
                     reader.releaseLock();
                 } catch {
@@ -1322,7 +1329,7 @@ export async function chatOpenCode(
                 eventStream = new EventStreamClient(serverUrl, sessionId);
                 await eventStream.connect({
                     onTextDelta: (delta) => {
-                        console.log('[OpenCode] EventStream onTextDelta:', delta.slice(0, 50));
+                        debugOpenCode('[OpenCode] EventStream onTextDelta:', delta.slice(0, 50));
                         realtimeHadUsefulActivity = true;
                         completionWatcher?.markPermissionWaiting(false);
                         completionWatcher?.markActivity('text-delta');
@@ -1330,7 +1337,7 @@ export async function chatOpenCode(
                         options.onChunk?.(delta);
                     },
                     onReasoningDelta: (delta) => {
-                        console.log('[OpenCode] EventStream onReasoningDelta:', delta.slice(0, 50));
+                        debugOpenCode('[OpenCode] EventStream onReasoningDelta:', delta.slice(0, 50));
                         realtimeHadUsefulActivity = true;
                         completionWatcher?.markPermissionWaiting(false);
                         completionWatcher?.markActivity('reasoning-delta');
@@ -1430,7 +1437,7 @@ export async function chatOpenCode(
 
         const contentType = response.headers.get('content-type') || '';
         let fullText = '';
-        console.log('[OpenCode] POST /message response content-type:', contentType, 'eventStream active:', !!eventStream);
+        debugOpenCode('[OpenCode] POST /message response content-type:', contentType, 'eventStream active:', !!eventStream);
 
         if (contentType.includes('text/event-stream')) {
             // SSE response from POST /message

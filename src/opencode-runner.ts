@@ -1,10 +1,17 @@
 const DEFAULT_PORT = 4096;
 const DEFAULT_HOSTNAME = '127.0.0.1';
 const DEFAULT_CLI_CMD = 'opencode';
+const OPENCODE_RUNNER_DEBUG_LOGS = false;
 
 let serveProcess: any = null;
 let serveRunning = false;
 let detectedPort: number = DEFAULT_PORT;
+
+function debugRunner(...args: any[]) {
+    if (OPENCODE_RUNNER_DEBUG_LOGS) {
+        console.debug(...args);
+    }
+}
 
 function isElectron(): boolean {
     return typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('electron');
@@ -143,7 +150,7 @@ export function startServe(options?: OpenCodeRunnerOptions): OpenCodeRunnerResul
         });
 
         serveProcess.on('exit', (code: number, signal: string) => {
-            console.log(`[OpenCode Runner] opencode serve exited with code ${code}, signal ${signal}`);
+            debugRunner(`[OpenCode Runner] opencode serve exited with code ${code}, signal ${signal}`);
             serveRunning = false;
             serveProcess = null;
         });
@@ -151,14 +158,14 @@ export function startServe(options?: OpenCodeRunnerOptions): OpenCodeRunnerResul
         serveProcess.stdout?.on('data', (data: Buffer) => {
             const text = data.toString().trim();
             if (text) {
-                console.log(`[OpenCode Serve] ${text}`);
+                debugRunner(`[OpenCode Serve] ${text}`);
             }
         });
 
         serveProcess.stderr?.on('data', (data: Buffer) => {
             const text = data.toString().trim();
             if (text) {
-                console.error(`[OpenCode Serve] ${text}`);
+                debugRunner(`[OpenCode Serve] ${text}`);
             }
         });
 

@@ -85,6 +85,12 @@
     export let initialMessage: string = ''; // 初始消息
     export let mode: 'sidebar' | 'dialog' = 'sidebar'; // 使用模式：sidebar或dialog
     export let respondToGlobalActions: boolean = false; // 是否响应全局事件（仅标签页实例）
+    const AI_SIDEBAR_DEBUG_LOGS = false;
+    function debugSidebar(...args: any[]) {
+        if (AI_SIDEBAR_DEBUG_LOGS) {
+            console.debug(...args);
+        }
+    }
 
     interface ChatSession {
         id: string;
@@ -100,7 +106,7 @@
     let currentInput = '';
     let isLoading = false;
     let streamingMessage = '';
-    let streamingThinkingCollapsed = false;
+    let streamingThinkingCollapsed = true;
     let streamingToolCallsCollapsed = true;
     let streamingThinking = ''; // 流式思考内容
     let isThinkingPhase = false; // 是否在思考阶段
@@ -117,8 +123,20 @@
     let isInitialLoading = true;
 
     // 思考过程折叠状态管理
-    let thinkingCollapsed: Record<number, boolean> = {};
+    let thinkingCollapsed: Record<string, any> = {};
     let toolCallGroupsCollapsed: Record<string, boolean> = {};
+
+    function isThinkingCollapsed(key: string | number): boolean {
+        return thinkingCollapsed[String(key)] ?? true;
+    }
+
+    function toggleThinkingCollapsed(key: string | number) {
+        const stateKey = String(key);
+        thinkingCollapsed = {
+            ...thinkingCollapsed,
+            [stateKey]: !isThinkingCollapsed(stateKey),
+        };
+    }
 
     function isToolCallGroupCollapsed(
         state: Record<string, boolean>,
@@ -764,12 +782,12 @@
 
                                 let toolResult: string;
                                 if (autoApprove) {
-                                    console.log(
+                                    debugSidebar(
                                         `[RegenerateMultiModel] Auto-approving tool: ${tc.function.name}`
                                     );
                                     toolResult = await executeToolCall(tc);
                                 } else {
-                                    console.log(
+                                    debugSidebar(
                                         `[RegenerateMultiModel] Skipping non-auto-approved tool: ${tc.function.name}`
                                     );
                                     toolResult = `工具 ${tc.function.name} 需要手动批准。在多模型对比模式下，为了避免 UI 冲突，该工具未被自动执行。请在设置中将该工具设为“自动批准”。`;
@@ -1052,10 +1070,6 @@
             plugin.saveSettings(settings);
         }
     }
-    $: currentSessionPinned = !!(
-        currentSessionId && sessions.find(session => session.id === currentSessionId)?.pinned
-    );
-
     function setChatMode(nextMode: ChatMode) {
         chatMode = nextMode;
     }
@@ -1068,25 +1082,6 @@
         if (status.state === 'connected') return '已连接';
         if (status.state === 'connecting') return '连接中';
         return '未连接';
-    }
-
-    async function toggleCurrentSessionPin() {
-        if (!currentSessionId) {
-            if (messages.filter(m => m.role !== 'system').length > 0) {
-                await saveCurrentSession(true);
-            } else {
-                pushErrMsg(t('aiSidebar.errors.emptySession'));
-                return;
-            }
-        }
-
-        const session = sessions.find(item => item.id === currentSessionId);
-        if (!session) return;
-
-        session.pinned = !session.pinned;
-        sessions = [...sessions];
-        await saveSessions();
-        pushMsg(session.pinned ? t('aiSidebar.session.pinned') : t('aiSidebar.session.unpinned'));
     }
 
     let toolCallsInProgress: Set<string> = new Set(); // 正在执行的工具调用ID
@@ -3089,13 +3084,13 @@
 
                                     let toolResult: string;
                                     if (autoApprove) {
-                                        console.log(
+                                        debugSidebar(
                                             `[MultiModel] Auto-approving tool: ${tc.function.name}`
                                         );
                                         toolResult = await executeToolCall(tc);
                                     } else {
                                         // 多模型模式下，非自动批准的工具暂时直接拒绝，避免 UI 冲突
-                                        console.log(
+                                        debugSidebar(
                                             `[MultiModel] Skipping non-auto-approved tool: ${tc.function.name}`
                                         );
                                         toolResult = `工具 ${tc.function.name} 需要手动批准。在多模型对比模式下，为了避免 UI 冲突，该工具未被自动执行。请在选择该模型后的单模型模式下重新尝试，或在设置中将该工具设为“自动批准”。`;
@@ -3902,33 +3897,28 @@
     async function autoRenameSession(content: string) {
         // 检查是否启用自动重命名
         if (!settings.autoRenameSession) {
-            console.log('Auto-rename disabled');
             return;
         }
 
         // 检查是否配置了重命名模型
-        if (!settings.autoRenameProvider || !settings.autoRenameModelId) {
-            console.log('Auto-rename model not configured');
+        const renameProvider = settings.autoRenameProvider || 'opencode';
+        if (!settings.autoRenameModelId) {
             return;
         }
 
         // 获取重命名模型配置
         const config = getProviderAndModelConfig(
-            settings.autoRenameProvider,
+            renameProvider,
             settings.autoRenameModelId
         );
         if (!config) {
-            console.log('Auto-rename model config not found');
             return;
         }
 
         const { providerConfig, modelConfig } = config;
-        if (providerRequiresApiKey(settings.autoRenameProvider) && !providerConfig.apiKey) {
-            console.log('Auto-rename model API key not configured');
+        if (providerRequiresApiKey(renameProvider) && !providerConfig.apiKey) {
             return;
         }
-
-        console.log('Starting auto-rename for session:', currentSessionId);
 
         try {
             // 使用自定义提示词模板，替换 {message} 占位符
@@ -3941,7 +3931,7 @@
 
             // 调用AI生成标题
             await chat(
-                settings.autoRenameProvider,
+                renameProvider,
                 {
                     apiKey: providerConfig.apiKey,
                     model: modelConfig.id,
@@ -3954,7 +3944,7 @@
                     },
                     onComplete: async (text: string) => {
                         // 清理生成的标题（移除引号和多余空格）
-                        const cleanTitle = text
+                        const cleanTitle = (text || generatedTitle)
                             .trim()
                             .replace(/^["']|["']$/g, '')
                             .substring(0, 50);
@@ -3965,20 +3955,7 @@
                                 session.title = cleanTitle;
                                 sessions = [...sessions];
                                 await saveSessions();
-                                console.log('Auto-renamed session to:', cleanTitle);
-                            } else {
-                                console.error(
-                                    'Session not found for auto-rename:',
-                                    currentSessionId
-                                );
                             }
-                        } else {
-                            console.log(
-                                'Auto-rename failed: cleanTitle=',
-                                cleanTitle,
-                                'currentSessionId=',
-                                currentSessionId
-                            );
                         }
                     },
                     onError: (error: Error) => {
@@ -3986,8 +3963,9 @@
                         // 静默失败，不影响用户体验
                     },
                 },
-                providerConfig.customApiUrl,
-                providerConfig.advancedConfig
+                providerConfig.customApiUrl || providerConfig.serverUrl,
+                providerConfig.advancedConfig,
+                providerConfig.serverUrl
             );
         } catch (error) {
             console.error('Auto-rename session error:', error);
@@ -4187,7 +4165,7 @@
         streamingThinking = '';
         openCodeToolParts = [];
         resetOpenCodeTimeline();
-        streamingThinkingCollapsed = false;
+        streamingThinkingCollapsed = true;
         streamingToolCallsCollapsed = true;
         thinkingBeforeToolCalls = ''; // 重置工具调用前的思考内容
         isThinkingPhase = false;
@@ -4444,7 +4422,7 @@
 
                                         if (autoApprove) {
                                             // 自动批准：直接执行工具
-                                            console.log(
+                                            debugSidebar(
                                                 `Auto-approving tool call: ${toolCall.function.name}`
                                             );
                                             toolResult = await executeToolCall(toolCall);
@@ -4468,7 +4446,7 @@
                                             }
                                         } else {
                                             // 需要手动批准：显示批准对话框
-                                            console.log(
+                                            debugSidebar(
                                                 `Tool call requires approval: ${toolCall.function.name}`
                                             );
                                             const approved = await requestToolApproval(toolCall);
@@ -5267,7 +5245,7 @@
                 // 替换为 assets 路径
                 result = result.replace(fullMatch, `![${altText}](${assetPath})`);
 
-                console.log(`Saved generated image to assets: ${assetPath}`);
+                debugSidebar(`Saved generated image to assets: ${assetPath}`);
             } catch (error) {
                 console.error('Failed to save base64 image:', error);
             }
@@ -5414,7 +5392,7 @@
                         }
                         let highlighted;
                         // 如果指定了语言且可识别，使用 hljs.highlight
-                        console.log(language);
+                        debugSidebar(language);
                         if (language) {
                             const code = block.textContent || '';
                             hljs.highlight(code, {
@@ -6925,7 +6903,7 @@
         if (type.startsWith(Constants.SIYUAN_DROP_GUTTER)) {
             const meta = type.replace(Constants.SIYUAN_DROP_GUTTER, '');
             const info = meta.split(Constants.ZWSP);
-            console.log('Dropped gutter info:', info);
+            debugSidebar('Dropped gutter info:', info);
             const blockIdStr = info[2];
             const blockIds = blockIdStr
                 .split(',')
@@ -6978,8 +6956,8 @@
 
             // 判断是否是 webview 网页标签页：customModelType 包含 copilot-webapp
             const isWebViewTab = customModelType && customModelType.includes(WEBAPP_TAB_TYPE);
-            console.log(isWebViewTab, webviewUrl);
-            console.log(payload);
+            debugSidebar(isWebViewTab, webviewUrl);
+            debugSidebar(payload);
             if (isWebViewTab && webviewUrl) {
                 // 是 webview 网页，直接使用 WebView 模式获取内容（因为已经是 webview 打开的）
                 pushMsg(`正在获取网页内容: ${tabTitle || webviewUrl}`);
@@ -7344,7 +7322,7 @@
                                     );
 
                                     sessionModified = true;
-                                    console.log(
+                                    debugSidebar(
                                         `Migrated content base64 image to assets: ${assetPath}`
                                     );
                                 } catch (error) {
@@ -7396,7 +7374,7 @@
                                         att.mimeType = mimeType;
 
                                         sessionModified = true;
-                                        console.log(
+                                        debugSidebar(
                                             `Migrated attachment base64 image to assets: ${assetPath}`
                                         );
                                     } catch (error) {
@@ -7448,7 +7426,7 @@
                                     }
 
                                     sessionModified = true;
-                                    console.log(`Migrated generated image to assets: ${assetPath}`);
+                                    debugSidebar(`Migrated generated image to assets: ${assetPath}`);
                                 } catch (error) {
                                     console.error('Failed to migrate generated image:', error);
                                 }
@@ -7487,7 +7465,7 @@
                                     }
                                 });
                                 sessionModified = true;
-                                console.log(
+                                debugSidebar(
                                     `Auto-selected first successful model (index ${firstSuccessIndex}) for message`
                                 );
                             }
@@ -7511,7 +7489,7 @@
 
                 // 如果会话被修改（迁移了 base64 图片或自动选择了模型），自动保存
                 if (sessionModified) {
-                    console.log('Session was modified during load, saving...');
+                    debugSidebar('Session was modified during load, saving...');
                     await saveCurrentSession(true); // 静默保存
                 }
 
@@ -9543,7 +9521,7 @@
 
                                         if (autoApprove) {
                                             // 自动批准：直接执行工具
-                                            console.log(
+                                            debugSidebar(
                                                 `Auto-approving tool call: ${toolCall.function.name}`
                                             );
                                             toolResult = await executeToolCall(toolCall);
@@ -9567,7 +9545,7 @@
                                             }
                                         } else {
                                             // 需要手动批准：显示批准对话框
-                                            console.log(
+                                            debugSidebar(
                                                 `Tool call requires approval: ${toolCall.function.name}`
                                             );
                                             const approved = await requestToolApproval(toolCall);
@@ -10085,18 +10063,6 @@
                 </div>
             </div>
         </div>
-        <div class="ai-sidebar__header-actions">
-            <button
-                class="ai-sidebar__icon-btn"
-                class:ai-sidebar__icon-btn--active={currentSessionPinned}
-                title={currentSessionPinned ? t('aiSidebar.session.unpin') : t('aiSidebar.session.pin')}
-                on:click={toggleCurrentSessionPin}
-            >
-                <svg class="b3-button__icon">
-                    <use xlink:href={currentSessionPinned ? '#iconUnpin' : '#iconPin'}></use>
-                </svg>
-            </button>
-        </div>
     </div>
 
     <!-- 工具栏 -->
@@ -10183,14 +10149,11 @@
                                     <div class="ai-message__thinking">
                                         <div
                                             class="ai-message__thinking-header"
-                                            on:click={() => {
-                                                thinkingCollapsed[baseIndex] =
-                                                    !thinkingCollapsed[baseIndex];
-                                            }}
+                                            on:click={() => toggleThinkingCollapsed(baseIndex)}
                                         >
                                             <svg
                                                 class="ai-message__thinking-icon"
-                                                class:collapsed={thinkingCollapsed[baseIndex]}
+                                                class:collapsed={isThinkingCollapsed(baseIndex)}
                                             >
                                                 <use xlink:href="#iconRight"></use>
                                             </svg>
@@ -10198,7 +10161,7 @@
                                                 💭 思考过程
                                             </span>
                                         </div>
-                                        {#if !thinkingCollapsed[baseIndex]}
+                                        {#if !isThinkingCollapsed(baseIndex)}
                                             {@const thinkDisplay = getDisplayContent(
                                                 round.thinkingBefore
                                             )}
@@ -10388,23 +10351,19 @@
                                             <div class="ai-message__thinking">
                                                 <div
                                                     class="ai-message__thinking-header"
-                                                    on:click={() => {
-                                                        thinkingCollapsed[timelineThinkingKey] =
-                                                            !thinkingCollapsed[timelineThinkingKey];
-                                                        thinkingCollapsed = { ...thinkingCollapsed };
-                                                    }}
+                                                    on:click={() => toggleThinkingCollapsed(timelineThinkingKey)}
                                                 >
                                                     <svg
                                                         class="ai-message__thinking-icon"
-                                                        class:collapsed={thinkingCollapsed[timelineThinkingKey]}
+                                                        class:collapsed={isThinkingCollapsed(timelineThinkingKey)}
                                                     >
                                                         <use xlink:href="#iconRight"></use>
                                                     </svg>
                                                     <span class="ai-message__thinking-title">
-                                                        思考 {timelineIndex + 1}
+                                                        思考
                                                     </span>
                                                 </div>
-                                                {#if !thinkingCollapsed[timelineThinkingKey]}
+                                                {#if !isThinkingCollapsed(timelineThinkingKey)}
                                                     {@const timelineThinkingDisplay = getDisplayContent(item.content)}
                                                     <div class="ai-message__thinking-content b3-typography">
                                                         {@html timelineThinkingDisplay}
@@ -10420,7 +10379,7 @@
                                             {@const toolPartError = formatOpenCodeToolValue(toolPart.error)}
                                             <div class="ai-message__tool-calls ai-message__tool-calls--timeline">
                                                 <div class="ai-message__tool-calls-title">
-                                                    工具 {timelineIndex + 1}
+                                                    工具
                                                 </div>
                                                 <div
                                                     class="ai-message__tool-call"
@@ -10493,20 +10452,17 @@
                                 <div class="ai-message__thinking">
                                     <div
                                         class="ai-message__thinking-header"
-                                        on:click={() => {
-                                            thinkingCollapsed[thinkingIndex] =
-                                                !thinkingCollapsed[thinkingIndex];
-                                        }}
+                                        on:click={() => toggleThinkingCollapsed(thinkingIndex)}
                                     >
                                         <svg
                                             class="ai-message__thinking-icon"
-                                            class:collapsed={thinkingCollapsed[thinkingIndex]}
+                                            class:collapsed={isThinkingCollapsed(thinkingIndex)}
                                         >
                                             <use xlink:href="#iconRight"></use>
                                         </svg>
                                         <span class="ai-message__thinking-title">💭 思考过程</span>
                                     </div>
-                                    {#if !thinkingCollapsed[thinkingIndex]}
+                                    {#if !isThinkingCollapsed(thinkingIndex)}
                                         {@const thinkDisplay = getDisplayContent(thinkingContent)}
                                         <div class="ai-message__thinking-content b3-typography">
                                             {@html thinkDisplay}
@@ -10681,7 +10637,7 @@
                                         >
                                             <use xlink:href="#iconRight"></use>
                                         </svg>
-                                        🔧 工具执行 ({message.openCodeToolParts.length})
+                                        🔧 工具执行
                                     </div>
                                     {#if !openCodeToolGroupCollapsed}
                                     {#each message.openCodeToolParts as toolPart (getOpenCodeToolPartKey(toolPart))}
@@ -10759,14 +10715,11 @@
                                 >
                                     <div
                                         class="ai-message__thinking-header"
-                                        on:click={() => {
-                                            thinkingCollapsed[thinkingAfterIndex] =
-                                                !thinkingCollapsed[thinkingAfterIndex];
-                                        }}
+                                        on:click={() => toggleThinkingCollapsed(thinkingAfterIndex)}
                                     >
                                         <svg
                                             class="ai-message__thinking-icon"
-                                            class:collapsed={thinkingCollapsed[thinkingAfterIndex]}
+                                            class:collapsed={isThinkingCollapsed(thinkingAfterIndex)}
                                         >
                                             <use xlink:href="#iconRight"></use>
                                         </svg>
@@ -10774,7 +10727,7 @@
                                             💭 思考过程（续）
                                         </span>
                                     </div>
-                                    {#if !thinkingCollapsed[thinkingAfterIndex]}
+                                    {#if !isThinkingCollapsed(thinkingAfterIndex)}
                                         {@const thinkAfterDisplay = getDisplayContent(
                                             message.thinkingAfterToolCalls
                                         )}
@@ -10982,22 +10935,11 @@
                                                                 <div class="ai-message__thinking">
                                                                     <div
                                                                         class="ai-message__thinking-header"
-                                                                        on:click={() => {
-                                                                            const key = `hist-mm-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`;
-                                                                            thinkingCollapsed[key] =
-                                                                                !thinkingCollapsed[
-                                                                                    key
-                                                                                ];
-                                                                            thinkingCollapsed = {
-                                                                                ...thinkingCollapsed,
-                                                                            };
-                                                                        }}
+                                                                        on:click={() => toggleThinkingCollapsed(`hist-mm-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`)}
                                                                     >
                                                                         <svg
                                                                             class="ai-message__thinking-icon"
-                                                                            class:collapsed={thinkingCollapsed[
-                                                                                `hist-mm-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`
-                                                                            ]}
+                                                                            class:collapsed={isThinkingCollapsed(`hist-mm-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`)}
                                                                         >
                                                                             <use
                                                                                 xlink:href="#iconRight"
@@ -11011,7 +10953,7 @@
                                                                             )}
                                                                         </span>
                                                                     </div>
-                                                                    {#if !thinkingCollapsed[`hist-mm-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`]}
+                                                                    {#if !isThinkingCollapsed(`hist-mm-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`)}
                                                                         {@const groupThinkDisplay =
                                                                             getDisplayContent(
                                                                                 group.thinking
@@ -11050,8 +10992,7 @@
                                                                             xlink:href="#iconRight"
                                                                         ></use>
                                                                     </svg>
-                                                                    🔧 {t('tools.calling')} ({group
-                                                                        .toolCalls.length})
+                                                                    🔧 {t('tools.calling')}
                                                                 </div>
                                                                 {#if !historyCardToolGroupCollapsed}
                                                                 {#each group.toolCalls as toolCall}
@@ -11465,25 +11406,11 @@
                                                                     >
                                                                         <div
                                                                             class="ai-message__thinking-header"
-                                                                            on:click={() => {
-                                                                                const key = `hist-tab-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`;
-                                                                                thinkingCollapsed[
-                                                                                    key
-                                                                                ] =
-                                                                                    !thinkingCollapsed[
-                                                                                        key
-                                                                                    ];
-                                                                                thinkingCollapsed =
-                                                                                    {
-                                                                                        ...thinkingCollapsed,
-                                                                                    };
-                                                                            }}
+                                                                            on:click={() => toggleThinkingCollapsed(`hist-tab-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`)}
                                                                         >
                                                                             <svg
                                                                                 class="ai-message__thinking-icon"
-                                                                                class:collapsed={thinkingCollapsed[
-                                                                                    `hist-tab-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`
-                                                                                ]}
+                                                                                class:collapsed={isThinkingCollapsed(`hist-tab-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`)}
                                                                             >
                                                                                 <use
                                                                                     xlink:href="#iconRight"
@@ -11497,7 +11424,7 @@
                                                                                 )}
                                                                             </span>
                                                                         </div>
-                                                                        {#if !thinkingCollapsed[`hist-tab-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`]}
+                                                                        {#if !isThinkingCollapsed(`hist-tab-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`)}
                                                                             {@const groupThinkDisplay =
                                                                                 getDisplayContent(
                                                                                     group.thinking
@@ -11536,8 +11463,7 @@
                                                                                 xlink:href="#iconRight"
                                                                             ></use>
                                                                         </svg>
-                                                                        🔧 {t('tools.calling')} ({group
-                                                                            .toolCalls.length})
+                                                                        🔧 {t('tools.calling')}
                                                                     </div>
                                                                     {#if !historyTabToolGroupCollapsed}
                                                                     {#each group.toolCalls as toolCall}
@@ -12054,23 +11980,19 @@
                                 <div class="ai-message__thinking">
                                     <div
                                         class="ai-message__thinking-header"
-                                        on:click={() => {
-                                            thinkingCollapsed[streamingTimelineThinkingKey] =
-                                                !thinkingCollapsed[streamingTimelineThinkingKey];
-                                            thinkingCollapsed = { ...thinkingCollapsed };
-                                        }}
+                                        on:click={() => toggleThinkingCollapsed(streamingTimelineThinkingKey)}
                                     >
                                         <svg
                                             class="ai-message__thinking-icon"
-                                            class:collapsed={thinkingCollapsed[streamingTimelineThinkingKey]}
+                                            class:collapsed={isThinkingCollapsed(streamingTimelineThinkingKey)}
                                         >
                                             <use xlink:href="#iconRight"></use>
                                         </svg>
                                         <span class="ai-message__thinking-title">
-                                            思考中 {timelineIndex + 1}
+                                            思考中
                                         </span>
                                     </div>
-                                    {#if !thinkingCollapsed[streamingTimelineThinkingKey]}
+                                    {#if !isThinkingCollapsed(streamingTimelineThinkingKey)}
                                         {@const streamingTimelineThinkingDisplay = getDisplayContent(item.content)}
                                         <div class="ai-message__thinking-content ai-message__thinking-content--streaming b3-typography">
                                             {@html streamingTimelineThinkingDisplay}
@@ -12086,7 +12008,7 @@
                                 {@const toolPartError = formatOpenCodeToolValue(toolPart.error)}
                                 <div class="ai-message__tool-calls ai-message__tool-calls--streaming ai-message__tool-calls--timeline">
                                     <div class="ai-message__tool-calls-title">
-                                        工具 {timelineIndex + 1}
+                                        工具
                                     </div>
                                     <div
                                         class="ai-message__tool-call"
@@ -12204,7 +12126,7 @@
                             >
                                 <use xlink:href="#iconRight"></use>
                             </svg>
-                            🔧 工具执行 ({openCodeToolParts.length})
+                            🔧 工具执行
                         </div>
                         {#if !streamingToolCallsCollapsed}
                             {#each openCodeToolParts as toolPart (getOpenCodeToolPartKey(toolPart))}
@@ -12430,20 +12352,11 @@
                                                 <div class="ai-message__thinking">
                                                     <div
                                                         class="ai-message__thinking-header"
-                                                        on:click={() => {
-                                                            const key = `mm-${index}-group-${groupIndex}`;
-                                                            thinkingCollapsed[key] =
-                                                                !thinkingCollapsed[key];
-                                                            thinkingCollapsed = {
-                                                                ...thinkingCollapsed,
-                                                            };
-                                                        }}
+                                                        on:click={() => toggleThinkingCollapsed(`mm-${index}-group-${groupIndex}`)}
                                                     >
                                                         <svg
                                                             class="ai-message__thinking-icon"
-                                                            class:collapsed={thinkingCollapsed[
-                                                                `mm-${index}-group-${groupIndex}`
-                                                            ]}
+                                                            class:collapsed={isThinkingCollapsed(`mm-${index}-group-${groupIndex}`)}
                                                         >
                                                             <use xlink:href="#iconRight"></use>
                                                         </svg>
@@ -12451,7 +12364,7 @@
                                                             💭 {t('aiSidebar.messages.thinking')}
                                                         </span>
                                                     </div>
-                                                    {#if !thinkingCollapsed[`mm-${index}-group-${groupIndex}`]}
+                                                    {#if !isThinkingCollapsed(`mm-${index}-group-${groupIndex}`)}
                                                         {@const streamCardThink = getDisplayContent(
                                                             group.thinking
                                                         )}
@@ -12485,8 +12398,7 @@
                                                     >
                                                         <use xlink:href="#iconRight"></use>
                                                     </svg>
-                                                    🔧 {t('tools.calling')} ({group.toolCalls
-                                                        .length})
+                                                    🔧 {t('tools.calling')}
                                                 </div>
                                                 {#if !liveCardToolGroupCollapsed}
                                                 {#each group.toolCalls as toolCall}
@@ -12831,20 +12743,11 @@
                                                 <div class="ai-message__thinking">
                                                     <div
                                                         class="ai-message__thinking-header"
-                                                        on:click={() => {
-                                                            const key = `mm-tab-${selectedTabIndex}-group-${groupIndex}`;
-                                                            thinkingCollapsed[key] =
-                                                                !thinkingCollapsed[key];
-                                                            thinkingCollapsed = {
-                                                                ...thinkingCollapsed,
-                                                            };
-                                                        }}
+                                                        on:click={() => toggleThinkingCollapsed(`mm-tab-${selectedTabIndex}-group-${groupIndex}`)}
                                                     >
                                                         <svg
                                                             class="ai-message__thinking-icon"
-                                                            class:collapsed={thinkingCollapsed[
-                                                                `mm-tab-${selectedTabIndex}-group-${groupIndex}`
-                                                            ]}
+                                                            class:collapsed={isThinkingCollapsed(`mm-tab-${selectedTabIndex}-group-${groupIndex}`)}
                                                         >
                                                             <use xlink:href="#iconRight"></use>
                                                         </svg>
@@ -12852,7 +12755,7 @@
                                                             💭 思考过程
                                                         </span>
                                                     </div>
-                                                    {#if !thinkingCollapsed[`mm-tab-${selectedTabIndex}-group-${groupIndex}`]}
+                                                    {#if !isThinkingCollapsed(`mm-tab-${selectedTabIndex}-group-${groupIndex}`)}
                                                         {@const streamTabThink = getDisplayContent(
                                                             group.thinking
                                                         )}
@@ -12886,8 +12789,7 @@
                                                     >
                                                         <use xlink:href="#iconRight"></use>
                                                     </svg>
-                                                    🔧 {t('tools.calling')} ({group.toolCalls
-                                                        .length})
+                                                    🔧 {t('tools.calling')}
                                                 </div>
                                                 {#if !liveTabToolGroupCollapsed}
                                                 {#each group.toolCalls as toolCall}
@@ -13331,26 +13233,20 @@
     >
         <!-- 顶部选择器栏 -->
         <div class="ai-sidebar__composer-controls">
-            <div class="ai-sidebar__mode-switch" role="group" aria-label={t('aiSidebar.mode.label')}>
-                <button
-                    type="button"
-                    class:ai-sidebar__mode-switch-btn--active={chatMode === 'plan'}
-                    class="ai-sidebar__mode-switch-btn"
-                    on:click={() => setChatMode('plan')}
-                    title={`${t('aiSidebar.mode.planDescription')} / Shift + Tab`}
-                >
-                    Plan
-                </button>
-                <button
-                    type="button"
-                    class:ai-sidebar__mode-switch-btn--active={chatMode === 'build'}
-                    class="ai-sidebar__mode-switch-btn"
-                    on:click={() => setChatMode('build')}
-                    title={`${t('aiSidebar.mode.buildDescription')} / Shift + Tab`}
-                >
-                    Build
-                </button>
-            </div>
+            <button
+                type="button"
+                class="ai-sidebar__mode-toggle"
+                class:ai-sidebar__mode-toggle--build={chatMode === 'build'}
+                role="switch"
+                aria-checked={chatMode === 'build'}
+                aria-label={`${t('aiSidebar.mode.label')}：${chatMode === 'build' ? 'Build' : 'Plan'}`}
+                on:click={toggleChatMode}
+                title={`${chatMode === 'build' ? t('aiSidebar.mode.buildDescription') : t('aiSidebar.mode.planDescription')} / Shift + Tab`}
+            >
+                <span class="ai-sidebar__mode-toggle-thumb"></span>
+                <span class="ai-sidebar__mode-toggle-label ai-sidebar__mode-toggle-label--plan">Plan</span>
+                <span class="ai-sidebar__mode-toggle-label ai-sidebar__mode-toggle-label--build">Build</span>
+            </button>
             <div
                 class="ai-sidebar__thinking-control"
                 class:ai-sidebar__thinking-control--disabled={!showThinkingToggle}
@@ -13489,7 +13385,6 @@
                         title="常用提示词和指令"
                     >
                         <svg class="b3-button__icon"><use xlink:href="#iconEdit"></use></svg>
-                        <span class="ai-sidebar__prompt-tool-label">提示词</span>
                     </button>
                 </div>
                 <button
@@ -18406,40 +18301,64 @@
         flex-wrap: wrap;
     }
 
-    .ai-sidebar__mode-switch {
-        display: inline-flex;
+    .ai-sidebar__mode-toggle {
+        position: relative;
+        display: inline-grid;
+        grid-template-columns: 1fr 1fr;
         align-items: center;
+        width: 142px;
+        height: 34px;
+        flex: 0 0 142px;
         padding: 2px;
         border: 1px solid var(--b3-border-color);
         border-radius: 8px;
         background: var(--b3-theme-background);
-        flex-shrink: 0;
-    }
-
-    .ai-sidebar__mode-switch-btn {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        min-width: 56px;
-        height: 28px;
-        padding: 0 10px;
-        border: none;
-        border-radius: 6px;
-        background: transparent;
-        cursor: pointer;
-        transition: all 0.2s ease;
-        font-size: 13px;
-        font-weight: 500;
         color: var(--b3-theme-on-surface-light);
+        cursor: pointer;
+        overflow: hidden;
+        transition: border-color 0.2s ease, background 0.2s ease;
+
         &:hover {
-            color: var(--b3-theme-on-surface);
-            background: var(--b3-theme-surface);
+            border-color: var(--b3-theme-primary-light);
+        }
+
+        &:focus-visible {
+            outline: 2px solid var(--b3-theme-primary-light);
+            outline-offset: 2px;
         }
     }
 
-    .ai-sidebar__mode-switch-btn--active {
-        color: var(--b3-theme-primary);
+    .ai-sidebar__mode-toggle-thumb {
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: calc(50% - 4px);
+        height: calc(100% - 6px);
+        border-radius: 6px;
         background: var(--b3-theme-primary-lightest);
+        transition: transform 0.18s ease;
+    }
+
+    .ai-sidebar__mode-toggle--build .ai-sidebar__mode-toggle-thumb {
+        transform: translateX(calc(100% + 2px));
+    }
+
+    .ai-sidebar__mode-toggle-label {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        font-size: 13px;
+        font-weight: 600;
+        line-height: 1;
+        transition: color 0.18s ease;
+    }
+
+    .ai-sidebar__mode-toggle:not(.ai-sidebar__mode-toggle--build) .ai-sidebar__mode-toggle-label--plan,
+    .ai-sidebar__mode-toggle--build .ai-sidebar__mode-toggle-label--build {
+        color: var(--b3-theme-primary);
     }
 
     .ai-sidebar__thinking-control {
@@ -18600,20 +18519,13 @@
     }
 
     .ai-sidebar__prompt-tool {
-        width: auto;
-        max-width: none;
-        min-width: 68px;
-        flex: 0 0 auto;
-        padding: 0 8px;
-        gap: 4px;
+        width: 28px;
+        min-width: 28px;
+        max-width: 28px;
+        flex: 0 0 28px;
+        padding: 0;
         color: var(--b3-theme-primary);
         background: var(--b3-theme-primary-lightest);
-    }
-
-    .ai-sidebar__prompt-tool-label {
-        font-size: 12px;
-        font-weight: 500;
-        white-space: nowrap;
     }
 
     .ai-sidebar__chat-input-divider {
@@ -18708,10 +18620,15 @@
             gap: 6px;
         }
 
-        .ai-sidebar__mode-switch,
         .ai-sidebar__model-control {
             width: 100%;
             min-width: 0;
+        }
+
+        .ai-sidebar__mode-toggle {
+            width: 142px;
+            flex-basis: 142px;
+            justify-self: start;
         }
 
         .ai-sidebar__thinking-control {
@@ -18719,11 +18636,6 @@
             min-width: 142px;
             max-width: 172px;
             justify-self: start;
-        }
-
-        .ai-sidebar__mode-switch-btn {
-            flex: 1 1 0;
-            min-width: 0;
         }
 
         .ai-sidebar__thinking-chip {
@@ -18755,7 +18667,7 @@
         }
 
         .ai-sidebar__prompt-tool {
-            min-width: 76px;
+            min-width: 30px;
         }
 
         .ai-sidebar__prompt-selector {
@@ -18785,10 +18697,10 @@
         }
 
         .ai-sidebar__prompt-tool {
-            width: auto;
+            width: 30px;
             max-width: none;
-            min-width: 72px;
-            flex: 0 0 auto;
+            min-width: 30px;
+            flex: 0 0 30px;
         }
     }
 </style>
