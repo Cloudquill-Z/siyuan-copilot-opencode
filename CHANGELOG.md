@@ -1,3 +1,28 @@
+## v2.0.0 / 20260524
+- ✨ Plan/Build 模式切换重构为单个 toggle 开关，带滑动动画
+- 🎨 思考/工具折叠状态管理重构，提取统一 `toggleThinkingCollapsed`/`isThinkingCollapsed` 函数
+- 🎨 移除会话固定按钮、工具调用次数徽标、提示词文字标签
+- 🎨 调试日志全面清理：`console.log` 替换为带开关控制的 `debugSidebar`/`debugRunner`/`debugOpenCode` 函数
+- 🔥 `graphify-out` 加入 `.gitignore`
+
+## v1.2.1 / 20260523
+- ✨ 实时流稳定性提升：EventStream 断线重连、超时保护
+- ✨ 聊天 UI 全新设计，对齐 OpenCode 视觉风格
+- 🎨 移除 WebApp Manager，简化标签页管理
+- 🐛 修复 OpenCode 工具任务超时不响应的问题
+- 🐛 修复提问对话框在侧边栏中的位置问题
+- 🎨 实时思考/工具执行流支持时间线分组显示
+
+## v1.2.0 / 20260515
+- ✨ 实时事件流重构：EventStream 客户端支持 Tool/Thinking/Permission/Question 实时推送
+- ✨ 异步提示模式：支持自定义 API URL，灵活对接不同 OpenCode 端点
+- ✨ WebApp 增强：嵌入式浏览器标签页（Electron `<webview>` / fallback `<iframe>`）
+- ✨ WebApp 功能：地址栏、历史搜索、收藏夹图标自动获取
+- 🎨 工具调用卡片：pending → running → completed 三种状态流转
+- 🎨 思考折叠区支持增量流式输出
+- 🐛 修复 OpenCode 工具任务超时后连接卡死
+- 🐛 修复 Session 切换时的竞态条件
+
 ## v1.1.0 / 20260513
 - ✨ 全新 UI 设计：Dark Mode OLED 深黑主题，Inter 字体，消息气泡/输入区/会话列表全面重制
 - ✨ 连接状态指示器：健康轮询 + ConnectionStatus 组件，已连接/断连状态实时显示

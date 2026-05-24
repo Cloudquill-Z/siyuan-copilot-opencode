@@ -1,5 +1,3 @@
-<img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118224558-e1kdo6x.png" />
-
 # SiYuan OpenCode
 
 > 独立的思源笔记 OpenCode AI 对话插件
@@ -11,14 +9,17 @@
 
 ## 这是什么
 
-一个独立的思源笔记 AI 对话插件，将 [OpenCode](https://opencode.ai) 作为唯一的 AI 后端接入思源笔记。支持基于笔记上下文进行智能对话，通过 OpenCode 服务统一管理多个模型供应商。
+独立的思源笔记 AI 对话插件，将 [OpenCode](https://opencode.ai) 作为唯一的 AI 后端。支持 Plan/Build 双模式、实时思考/工具执行流、嵌入式浏览器标签页，可在 Electron 环境中自动启动 OpenCode 服务。
 
 ## 功能特点
 
-- **独立插件**：不依赖其他 Copilot 插件，开箱即用
-- **多模型支持**：通过 OpenCode `/provider` API 自动获取所有可用模型（Anthropic、OpenAI 等多供应商模型）
-- **流式响应**：支持 SSE 流式输出，实时显示 AI 回复
-- **Session 管理**：自动管理 OpenCode 会话，支持多轮对话上下文
+- **Plan / Build 双模式**：Switch 式切换，Plan 模式用于需求分析与方案设计，Build 模式用于编码执行
+- **实时流式响应**：EventStream 实时推送文本增量、思考过程、工具调用，pending→running→completed 状态流转
+- **OpenCode 工具系统**：支持工具调用手动/自动批准、时间线分组展示、思考→工具→结果完整链路可视化
+- **嵌入式 WebView 标签页**：Electron `<webview>` / fallback `<iframe>` 浏览器，支持地址栏、历史搜索、Favicon 自动获取
+- **自动启动 OpenCode**：Electron 环境下自动检测并启动 `opencode serve`，无需手动启动
+- **多模型支持**：通过 OpenCode `/provider` 自动获取所有可用模型，支持独立配置参数
+- **Session 管理**：自动创建/清理 OpenCode 会话，支持多轮对话上下文
 - **思源原生 UI**：使用思源原生组件和主题变量，完美适配亮/暗主题
 
 ---
@@ -29,28 +30,26 @@
 用户输入（思源侧边栏）
     |
     v
-ai-chat.ts（始终路由到 OpenCode）
+ai-chat.ts（路由到 OpenCode）
     |
     v
-opencode-provider.ts（OpenCode 客户端）
+opencode-provider.ts（REST + SSE 客户端）
     |
-    +-- chatOpenCode() -> POST /session/{id}/message（SSE 流式）
-    +-- fetchOpenCodeModels() -> GET /provider
-    +-- deleteOpenCodeSession() -> DELETE /session/{id}
+    +-- GET  /global/health           健康检查
+    +-- GET  /provider                获取模型列表
+    +-- POST /session                 创建会话
+    +-- POST /session/{id}/message    发送消息（SSE 流式）
+    +-- DELETE /session/{id}          清理会话
     |
     v
 OpenCode 本地服务 (localhost:4096)
     |
     v
-SSE streaming -> onChunk -> 聊天 UI
+EventStream → onTextDelta / onReasoningDelta / onToolCall / onPermissionAsked / onQuestion
+    |
+    v
+聊天 UI（实时渲染文本 + 思考折叠区 + 工具卡片 + 时间线）
 ```
-
-OpenCode Provider 直接调用 OpenCode REST API：
-
-- `GET /provider` — 获取模型列表
-- `POST /session` — 创建会话
-- `POST /session/{id}/message` — 发送消息（SSE 流式响应）
-- `DELETE /session/{id}` — 清理会话
 
 ---
 
@@ -65,7 +64,7 @@ npm install
 npm run build
 ```
 
-将构建输出（`dist/`、`plugin.json`、`icon.png`、`i18n/` 等）复制到思源插件目录：
+将构建输出复制到思源插件目录：
 
 - **Linux**: `~/.config/siyuan/data/plugins/siyuan-copilot-opencode/`
 - **Windows**: `%APPDATA%\siyuan\data\plugins\siyuan-copilot-opencode\`
@@ -79,8 +78,8 @@ npm run build
 
 ## 前置条件
 
-1. **OpenCode 服务运行中**：确保 OpenCode 在 `http://localhost:4096` 启动
-2. **思源笔记桌面版**：仅支持桌面版，Docker 和移动端不支持插件
+1. **OpenCode CLI**：已安装 `opencode` 命令行工具（参见 [opencode.ai](https://opencode.ai)）
+2. **思源笔记桌面版**：仅桌面版支持插件功能
 
 ---
 
@@ -88,7 +87,8 @@ npm run build
 
 1. 在思源中打开 **集市 -> 插件**，启用 **SiYuan OpenCode**
 2. 打开插件设置，确认服务器地址为 `http://localhost:4096`（默认）
-3. 保存设置，开始对话
+3. 可在设置中启用/禁用自动启动、修改端口
+4. 保存设置，开始对话
 
 ---
 

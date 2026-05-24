@@ -1,72 +1,113 @@
 # SiYuan OpenCode
 
-Independent SiYuan OpenCode plugin for note-aware chat, tools, and local OpenCode workflows.
+Independent SiYuan OpenCode plugin for note-aware AI chat with real-time streaming, tool execution, and embedded WebView browser.
 
-**Note**: Using this plugin requires you to prepare your own API keys from AI platforms. The plugin itself does not provide AI services. Please comply with the terms of use and privacy policies of each platform.
+[![GitHub](https://img.shields.io/badge/GitHub-zzl793780096--creator/siyuan--copilot--opencode-green.svg)](https://github.com/zzl793780096-creator/siyuan-copilot-opencode)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-> For friends who need to use top-tier models like GPT-5, Gemini 2.5 Pro, Claude 4.5, etc.
-> - Recommended [V3 API Website](https://api.gpt.ge/register?aff=fQIZ). It's very easy to use, pay-as-you-go, supports various AI models, and can save you a lot of money compared to using the official API. Register using my [invitation link](https://api.gpt.ge/register?aff=fQIZ) to get a $0.3 balance bonus for trial.
+---
 
-## 📝 Changelog
+## Overview
 
-See [CHANGELOG.md](https://cdn.jsdelivr.net/gh/Achuan-2/SiYuan-plugin-copilot@main/CHANGELOG.md)
+A standalone SiYuan Note plugin that uses [OpenCode](https://opencode.ai) as the sole AI backend. Features Plan/Build dual modes, real-time thinking and tool execution streams, an embedded WebView browser tab, and auto-start of the OpenCode serve process in Electron environments.
 
-## ✨ Main Features
+## Features
 
-- Multi-platform AI Support:
-  - Built-in support for common platforms (OpenAI, Google Gemini, DeepSeek, Volcano Engine)
-  - Also supports adding any platform compatible with the OpenAI API, allowing flexible switching of chat models
-- Model Settings
-  - Supports independent configuration of parameters for each model (temperature, max tokens)
-  - Identifies special model capabilities (thinking mode, vision support)
-- Three Chat Mode Switching: Switch between ask, edit, and agent chat modes
-  - Ask Mode: For daily Q&A, supports selecting multiple models to reply simultaneously and choosing satisfactory answers
-  - Edit Mode: For editing and modifying notes, supports viewing differences after editing and undo functionality
-  - Agent Mode: Provides tools for the AI to autonomously query note content, edit notes, create documents, etc.
-- Conversation Management
-  - Supports saving conversation history, pinning and deleting historical records
-  - Supports copying conversations as Markdown
-  - Supports saving conversations as documents
-- Multimodal Support
-  - SiYuan Notes Content: Upload note content by dragging blocks, dragging page tabs, or dragging documents from the document tree
-  - Image Upload: Supports pasting, uploading images, and also supports dragging image blocks directly for upload
-  - File Upload (Supports Markdown, text files, etc.)
-- Prompt Management
-  - Supports creating and saving commonly used prompts for quick insertion into the input box
+- **Plan / Build Dual Modes**: Toggle switch between Plan (analysis & design) and Build (coding & execution)
+- **Real-Time Event Stream**: SSE-based live streaming of text deltas, reasoning steps, and tool calls with pending→running→completed state transitions
+- **OpenCode Tool System**: Tool call approval workflow (manual/auto), timeline group display, full think→tool→result chain visualization
+- **Embedded WebView Tab**: Electron `<webview>` or fallback `<iframe>` browser with address bar, history search, auto-favicon fetch
+- **Auto-Start OpenCode**: Electron desktop automatically detects and starts `opencode serve` on demand
+- **Multi-Model Support**: Auto-fetch all available models via OpenCode `/provider` API with per-model configuration
+- **Session Management**: Automatic OpenCode session creation and cleanup for multi-turn conversations
+- **SiYuan Native UI**: Uses SiYuan native components and theme variables, perfect for light/dark mode
 
-## 🔧 Development Related
+---
 
-### Local Development
+## Architecture
 
-```bash
-pnpm install
-pnpm run dev
+```text
+User Input (SiYuan Sidebar)
+    |
+    v
+ai-chat.ts (routes to OpenCode)
+    |
+    v
+opencode-provider.ts (REST + SSE client)
+    |
+    +-- GET  /global/health           health check
+    +-- GET  /provider                fetch model list
+    +-- POST /session                 create session
+    +-- POST /session/{id}/message    send message (SSE streaming)
+    +-- DELETE /session/{id}          cleanup session
+    |
+    v
+OpenCode Local Service (localhost:4096)
+    |
+    v
+EventStream → onTextDelta / onReasoningDelta / onToolCall / onPermissionAsked / onQuestion
+    |
+    v
+Chat UI (real-time text + collapsible thinking + tool cards + timeline)
 ```
 
-### Files
-- `src\tools\index.ts`: Implementation code for tools called in agent mode
+---
 
-## 📄 License
+## Installation
 
-GPL3 License
+### Build from Source
 
-## 🙏 Acknowledgments
+```bash
+git clone https://github.com/zzl793780096-creator/siyuan-copilot-opencode.git
+cd siyuan-copilot-opencode
+npm install
+npm run build
+```
 
-- Developed based on the [plugin-sample-vite-svelte](https://github.com/SiYuan-note/plugin-sample-vite-svelte/) template
-- Referenced the GPT conversation functionality implementation from [sy-f-misc](https://github.com/frostime/sy-f-misc)
+Copy the build output to the SiYuan plugins directory:
 
-## 📮 Feedback and Suggestions
+- **Linux**: `~/.config/siyuan/data/plugins/siyuan-copilot-opencode/`
+- **Windows**: `%APPDATA%\siyuan\data\plugins\siyuan-copilot-opencode\`
+- **macOS**: `~/Library/Application Support/siyuan/data/plugins/siyuan-copilot-opencode/`
 
-If you have any issues or suggestions, please feel free to raise them in [GitHub Issues](https://github.com/Achuan-2/SiYuan-plugin-ai-sidebar/issues).
+### Download Release
 
-## ❤️ Powered by Love
+Get the latest release from [Releases](https://github.com/zzl793780096-creator/siyuan-copilot-opencode/releases).
 
-If you like my plugin, you are welcome to give a star on the GitHub repository and offer appreciation via WeChat. This will motivate me to continue improving this plugin and developing new ones.
+---
 
-Maintaining plugins is time-consuming and labor-intensive. Personal time and energy are limited. Open source is about sharing, but it does not mean I have to waste my time implementing features for users for free.
+## Prerequisites
 
-I will gradually improve features that I need. Appreciation can expedite updates. For some features I think can be improved but are not currently necessary, they may require appreciation to be prioritized (marked with an appreciation tag and the required amount). Features that are not needed or are very complicated to implement will have their issues closed directly without consideration.
+1. **OpenCode CLI**: Install the `opencode` command-line tool (see [opencode.ai](https://opencode.ai))
+2. **SiYuan Desktop**: Plugin support is only available in the desktop app
 
-Friends who have accumulated appreciation totaling 50 RMB and wish to add me on WeChat can send an email to <span data-type="a" data-href="mailto:achuan-2@outlook.com">achuan-2@outlook.com</span> to request adding as a friend (If the appreciation does not reach 50 RMB, I will not reply to the email or add you as a friend, as I do not wish to be a free customer service representative).
+---
 
-![image](https://camo.githubusercontent.com/8052f6f2e7dafba534e781934efa9bcb084fa3a9dfa5c221a85ac63db8b043cb/68747470733a2f2f6173736574732e62336c6f6766696c652e636f6d2f73697975616e2f313631303230353735393030352f6173736574732f6e6574776f726b2d61737365742d696d6167652d32303235303631343132333535382d667568697235762e706e67)
+## Setup
+
+1. Open **Marketplace → Plugins** in SiYuan, enable **SiYuan OpenCode**
+2. Open plugin settings, confirm server URL is `http://localhost:4096` (default)
+3. Configure auto-start and port options as needed
+4. Save settings and start chatting
+
+---
+
+## Development
+
+```bash
+npm run dev          # dev build + watch, auto-copy to SiYuan plugin dir
+npm run build        # production build → dist/ + package.zip
+npm run make-install # build + copy to SiYuan plugin dir
+```
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md)
+
+---
+
+## License
+
+MIT License
