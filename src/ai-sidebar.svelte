@@ -111,6 +111,7 @@
     let streamingThinking = ''; // 流式思考内容
     let isThinkingPhase = false; // 是否在思考阶段
     type OpenCodeTimelineItem =
+        | { type: 'text'; id: string; content: string; isFinal?: boolean }
         | { type: 'thinking'; id: string; content: string }
         | { type: 'tool'; id: string; toolPart: any };
     let openCodeTimeline: OpenCodeTimelineItem[] = [];
@@ -125,6 +126,7 @@
     // 思考过程折叠状态管理
     let thinkingCollapsed: Record<string, any> = {};
     let toolCallGroupsCollapsed: Record<string, boolean> = {};
+    let openCodeProcessCollapsed: Record<string, boolean> = {};
 
     function isThinkingCollapsed(key: string | number): boolean {
         return thinkingCollapsed[String(key)] ?? true;
@@ -149,6 +151,17 @@
         toolCallGroupsCollapsed = {
             ...toolCallGroupsCollapsed,
             [key]: !isToolCallGroupCollapsed(toolCallGroupsCollapsed, key),
+        };
+    }
+
+    function isOpenCodeProcessCollapsed(key: string): boolean {
+        return openCodeProcessCollapsed[key] ?? true;
+    }
+
+    function toggleOpenCodeProcessCollapsed(key: string) {
+        openCodeProcessCollapsed = {
+            ...openCodeProcessCollapsed,
+            [key]: !isOpenCodeProcessCollapsed(key),
         };
     }
 
@@ -1153,17 +1166,66 @@
         }
     }
 
+    function appendOpenCodeTimelineText(chunk: string) {
+        if (!chunk) return;
+
+        const lastItem = openCodeTimeline[openCodeTimeline.length - 1];
+        if (lastItem?.type === 'text' && !lastItem.isFinal) {
+            openCodeTimeline = openCodeTimeline.map((item, index) =>
+                index === openCodeTimeline.length - 1 && item.type === 'text'
+                    ? { ...item, content: item.content + chunk }
+                    : item
+            );
+            return;
+        }
+
+        openCodeTimeline = [
+            ...openCodeTimeline,
+            {
+                type: 'text',
+                id: `text-${Date.now()}-${openCodeTimelineCounter++}`,
+                content: chunk,
+            },
+        ];
+    }
+
+    function getOpenCodeFinalAnswer(message: Message): string {
+        if (typeof message.finalReply === 'string' && message.finalReply.trim()) {
+            return message.finalReply;
+        }
+        return typeof message.content === 'string' ? message.content : '';
+    }
+
+    function getOpenCodeProcessTimeline(message: Message): OpenCodeTimelineItem[] {
+        const timeline = message.openCodeTimeline || [];
+        const finalAnswer = getOpenCodeFinalAnswer(message).trim();
+        if (!finalAnswer) return timeline;
+
+        let lastTextIndex = -1;
+        for (let index = timeline.length - 1; index >= 0; index--) {
+            const item = timeline[index];
+            if (item.type === 'text' && item.content.trim() === finalAnswer) {
+                lastTextIndex = index;
+                break;
+            }
+        }
+
+        if (lastTextIndex < 0) return timeline;
+        return timeline.filter((_item, index) => index !== lastTextIndex);
+    }
+
     function resetOpenCodeTimeline() {
         openCodeTimeline = [];
         openCodeTimelineCounter = 0;
     }
 
     function cloneOpenCodeTimeline() {
-        return openCodeTimeline.map(item =>
-            item.type === 'thinking'
-                ? { ...item }
-                : { ...item, toolPart: { ...item.toolPart } }
-        );
+        return openCodeTimeline.map(item => {
+            if (item.type === 'tool') {
+                return { ...item, toolPart: { ...item.toolPart } };
+            }
+            return { ...item };
+        });
     }
 
     function updateOpenCodeToolPart(update: any) {
@@ -4520,6 +4582,7 @@
                             },
                             onChunk: async (chunk: string) => {
                                 streamingMessage += chunk;
+                                appendOpenCodeTimelineText(chunk);
                                 await scrollToBottom();
                             },
                             onComplete: async (fullText: string) => {
@@ -4693,6 +4756,7 @@
                         onQuestionAsked: handleOpenCodeQuestionAsked,
                         onChunk: async (chunk: string) => {
                             streamingMessage += chunk;
+                            appendOpenCodeTimelineText(chunk);
                             await scrollToBottom();
                         },
                         onComplete: async (fullText: string) => {
@@ -9685,6 +9749,7 @@
                             },
                             onChunk: async (chunk: string) => {
                                 streamingMessage += chunk;
+                                appendOpenCodeTimelineText(chunk);
                                 await scrollToBottom();
                             },
                             onComplete: async (fullText: string) => {
@@ -9854,6 +9919,7 @@
                         },
                         onChunk: async (chunk: string) => {
                             streamingMessage += chunk;
+                            appendOpenCodeTimelineText(chunk);
                             await scrollToBottom();
                         },
                         onComplete: async (fullText: string) => {
@@ -10344,104 +10410,138 @@
                             {/each}
                         {:else}
                             {#if message.role === 'assistant' && message.openCodeTimeline && message.openCodeTimeline.length > 0 && !(message.multiModelResponses && message.multiModelResponses.length > 0)}
-                                <div class="ai-message__timeline">
-                                    {#each message.openCodeTimeline as item, timelineIndex (item.id)}
-                                        {#if item.type === 'thinking'}
-                                            {@const timelineThinkingKey = `timeline-thinking-${messageIndex}-${msgIndex}-${timelineIndex}`}
-                                            <div class="ai-message__thinking">
-                                                <div
-                                                    class="ai-message__thinking-header"
-                                                    on:click={() => toggleThinkingCollapsed(timelineThinkingKey)}
-                                                >
-                                                    <svg
-                                                        class="ai-message__thinking-icon"
-                                                        class:collapsed={isThinkingCollapsed(timelineThinkingKey)}
-                                                    >
-                                                        <use xlink:href="#iconRight"></use>
-                                                    </svg>
-                                                    <span class="ai-message__thinking-title">
-                                                        思考
-                                                    </span>
-                                                </div>
-                                                {#if !isThinkingCollapsed(timelineThinkingKey)}
-                                                    {@const timelineThinkingDisplay = getDisplayContent(item.content)}
-                                                    <div class="ai-message__thinking-content b3-typography">
-                                                        {@html timelineThinkingDisplay}
+                                {@const finalAnswer = getOpenCodeFinalAnswer(message)}
+                                {@const processTimeline = getOpenCodeProcessTimeline(message)}
+                                {@const processKey = `opencode-process-${messageIndex}-${msgIndex}`}
+                                {@const processCollapsed = isOpenCodeProcessCollapsed(processKey)}
+
+                                {#if finalAnswer.trim()}
+                                    {@const finalDisplay = getDisplayContent(finalAnswer)}
+                                    <div class="ai-message__content b3-typography" style={messageFontSize ? `font-size: ${messageFontSize}px;` : ''}>
+                                        {@html finalDisplay}
+                                    </div>
+                                {/if}
+
+                                {#if processTimeline.length > 0}
+                                    <button
+                                        type="button"
+                                        class="ai-message__process-toggle"
+                                        on:click={() => toggleOpenCodeProcessCollapsed(processKey)}
+                                        title={processCollapsed ? '展开过程' : '折叠过程'}
+                                    >
+                                        <svg class="ai-message__thinking-icon" class:collapsed={processCollapsed}>
+                                            <use xlink:href="#iconRight"></use>
+                                        </svg>
+                                        <span>过程</span>
+                                        <span class="ai-message__timeline-toggle-count">{processTimeline.length}</span>
+                                    </button>
+
+                                    {#if !processCollapsed}
+                                        <div class="ai-message__timeline ai-message__timeline--history">
+                                            {#each processTimeline as item, timelineIndex (item.id)}
+                                                {#if item.type === 'text'}
+                                                    {@const processTextDisplay = getDisplayContent(item.content)}
+                                                    <div class="ai-message__timeline-text ai-message__timeline-text--process b3-typography">
+                                                        {@html processTextDisplay}
                                                     </div>
-                                                {/if}
-                                            </div>
-                                        {:else}
-                                            {@const toolPart = item.toolPart}
-                                            {@const toolPartKey = getOpenCodeToolPartKey(toolPart)}
-                                            {@const toolPartCollapsed = !toolCallsExpanded[toolPartKey]}
-                                            {@const toolPartInput = formatOpenCodeToolValue(toolPart.input)}
-                                            {@const toolPartOutput = formatOpenCodeToolValue(toolPart.output)}
-                                            {@const toolPartError = formatOpenCodeToolValue(toolPart.error)}
-                                            <div class="ai-message__tool-calls ai-message__tool-calls--timeline">
-                                                <div class="ai-message__tool-calls-title">
-                                                    工具
-                                                </div>
-                                                <div
-                                                    class="ai-message__tool-call"
-                                                    class:ai-message__tool-call--running={toolPart.status === 'running' ||
-                                                        toolPart.status === 'pending'}
-                                                    class:ai-message__tool-call--error={toolPart.status === 'error'}
-                                                >
-                                                    <div
-                                                        class="ai-message__tool-call-header"
-                                                        on:click={() => {
-                                                            toolCallsExpanded[toolPartKey] =
-                                                                !toolCallsExpanded[toolPartKey];
-                                                            toolCallsExpanded = { ...toolCallsExpanded };
-                                                        }}
-                                                    >
-                                                        <div class="ai-message__tool-call-name">
+                                                {:else if item.type === 'thinking'}
+                                                    {@const timelineThinkingKey = `timeline-thinking-${messageIndex}-${msgIndex}-${timelineIndex}`}
+                                                    <div class="ai-message__thinking">
+                                                        <div
+                                                            class="ai-message__thinking-header"
+                                                            on:click={() => toggleThinkingCollapsed(timelineThinkingKey)}
+                                                        >
                                                             <svg
-                                                                class="ai-message__tool-call-icon"
-                                                                class:collapsed={toolPartCollapsed}
+                                                                class="ai-message__thinking-icon"
+                                                                class:collapsed={isThinkingCollapsed(timelineThinkingKey)}
                                                             >
                                                                 <use xlink:href="#iconRight"></use>
                                                             </svg>
-                                                            <span>{toolPart.title || toolPart.toolName}</span>
-                                                            <span class="ai-message__tool-call-status">
-                                                                {getOpenCodeToolStatusIcon(toolPart.status)}
-                                                                {getOpenCodeToolStatusText(toolPart.status)}
+                                                            <span class="ai-message__thinking-title">
+                                                                思考
                                                             </span>
                                                         </div>
+                                                        {#if !isThinkingCollapsed(timelineThinkingKey)}
+                                                            {@const timelineThinkingDisplay = getDisplayContent(item.content)}
+                                                            <div class="ai-message__thinking-content b3-typography">
+                                                                {@html timelineThinkingDisplay}
+                                                            </div>
+                                                        {/if}
                                                     </div>
-                                                    {#if !toolPartCollapsed && (toolPartInput || toolPartOutput || toolPartError)}
-                                                        <div class="ai-message__tool-call-details">
-                                                            {#if toolPartInput}
-                                                                <div class="ai-message__tool-call-params">
-                                                                    <div class="ai-message__tool-call-section-header">
-                                                                        <strong>输入</strong>
-                                                                    </div>
-                                                                    <pre class="ai-message__tool-call-code">{toolPartInput}</pre>
+                                                {:else}
+                                                    {@const toolPart = item.toolPart}
+                                                    {@const toolPartKey = getOpenCodeToolPartKey(toolPart)}
+                                                    {@const toolPartCollapsed = !toolCallsExpanded[toolPartKey]}
+                                                    {@const toolPartInput = formatOpenCodeToolValue(toolPart.input)}
+                                                    {@const toolPartOutput = formatOpenCodeToolValue(toolPart.output)}
+                                                    {@const toolPartError = formatOpenCodeToolValue(toolPart.error)}
+                                                    <div class="ai-message__tool-calls ai-message__tool-calls--timeline">
+                                                        <div class="ai-message__tool-calls-title">
+                                                            工具
+                                                        </div>
+                                                        <div
+                                                            class="ai-message__tool-call"
+                                                            class:ai-message__tool-call--running={toolPart.status === 'running' ||
+                                                                toolPart.status === 'pending'}
+                                                            class:ai-message__tool-call--error={toolPart.status === 'error'}
+                                                        >
+                                                            <div
+                                                                class="ai-message__tool-call-header"
+                                                                on:click={() => {
+                                                                    toolCallsExpanded[toolPartKey] =
+                                                                        !toolCallsExpanded[toolPartKey];
+                                                                    toolCallsExpanded = { ...toolCallsExpanded };
+                                                                }}
+                                                            >
+                                                                <div class="ai-message__tool-call-name">
+                                                                    <svg
+                                                                        class="ai-message__tool-call-icon"
+                                                                        class:collapsed={toolPartCollapsed}
+                                                                    >
+                                                                        <use xlink:href="#iconRight"></use>
+                                                                    </svg>
+                                                                    <span>{toolPart.title || toolPart.toolName}</span>
+                                                                    <span class="ai-message__tool-call-status">
+                                                                        {getOpenCodeToolStatusIcon(toolPart.status)}
+                                                                        {getOpenCodeToolStatusText(toolPart.status)}
+                                                                    </span>
                                                                 </div>
-                                                            {/if}
-                                                            {#if toolPartOutput}
-                                                                <div class="ai-message__tool-call-result">
-                                                                    <div class="ai-message__tool-call-section-header">
-                                                                        <strong>{t('tools.result')}</strong>
-                                                                    </div>
-                                                                    <pre class="ai-message__tool-call-code">{toolPartOutput}</pre>
-                                                                </div>
-                                                            {/if}
-                                                            {#if toolPartError}
-                                                                <div class="ai-message__tool-call-result">
-                                                                    <div class="ai-message__tool-call-section-header">
-                                                                        <strong>错误</strong>
-                                                                    </div>
-                                                                    <pre class="ai-message__tool-call-code">{toolPartError}</pre>
+                                                            </div>
+                                                            {#if !toolPartCollapsed && (toolPartInput || toolPartOutput || toolPartError)}
+                                                                <div class="ai-message__tool-call-details">
+                                                                    {#if toolPartInput}
+                                                                        <div class="ai-message__tool-call-params">
+                                                                            <div class="ai-message__tool-call-section-header">
+                                                                                <strong>输入</strong>
+                                                                            </div>
+                                                                            <pre class="ai-message__tool-call-code">{toolPartInput}</pre>
+                                                                        </div>
+                                                                    {/if}
+                                                                    {#if toolPartOutput}
+                                                                        <div class="ai-message__tool-call-result">
+                                                                            <div class="ai-message__tool-call-section-header">
+                                                                                <strong>{t('tools.result')}</strong>
+                                                                            </div>
+                                                                            <pre class="ai-message__tool-call-code">{toolPartOutput}</pre>
+                                                                        </div>
+                                                                    {/if}
+                                                                    {#if toolPartError}
+                                                                        <div class="ai-message__tool-call-result">
+                                                                            <div class="ai-message__tool-call-section-header">
+                                                                                <strong>错误</strong>
+                                                                            </div>
+                                                                            <pre class="ai-message__tool-call-code">{toolPartError}</pre>
+                                                                        </div>
+                                                                    {/if}
                                                                 </div>
                                                             {/if}
                                                         </div>
-                                                    {/if}
-                                                </div>
-                                            </div>
-                                        {/if}
-                                    {/each}
-                                </div>
+                                                    </div>
+                                                {/if}
+                                            {/each}
+                                        </div>
+                                    {/if}
+                                {/if}
                             {/if}
 
                             <!-- 兼容旧数据：显示工具调用前的思考过程 -->
@@ -11975,7 +12075,15 @@
                 {#if openCodeTimeline.length > 0}
                     <div class="ai-message__timeline ai-message__timeline--streaming">
                         {#each openCodeTimeline as item, timelineIndex (item.id)}
-                            {#if item.type === 'thinking'}
+                            {#if item.type === 'text'}
+                                {@const timelineTextDisplay = getDisplayContent(item.content)}
+                                <div
+                                    class="ai-message__timeline-text b3-typography"
+                                    style={messageFontSize ? `font-size: ${messageFontSize}px;` : ''}
+                                >
+                                    {@html timelineTextDisplay}
+                                </div>
+                            {:else if item.type === 'thinking'}
                                 {@const streamingTimelineThinkingKey = `streaming-timeline-thinking-${timelineIndex}`}
                                 <div class="ai-message__thinking">
                                     <div
@@ -12198,7 +12306,7 @@
                     </div>
                 {/if}
 
-                {#if streamingMessage}
+                {#if streamingMessage && openCodeTimeline.length === 0}
                     {@const streamMsgDisplay = getDisplayContent(streamingMessage)}
                     <div
                         class="ai-message__content b3-typography"
@@ -14586,6 +14694,52 @@
 
     .ai-message__timeline--streaming {
         animation: fadeIn 0.2s ease-out;
+    }
+
+    .ai-message__timeline-text {
+        margin: 8px 0;
+        color: var(--b3-theme-on-background);
+        line-height: 1.6;
+    }
+
+    .ai-message__timeline-text--process {
+        padding: 8px 10px;
+        border-left: 2px solid var(--b3-border-color);
+        color: var(--b3-theme-on-surface);
+        opacity: 0.9;
+    }
+
+    .ai-message__process-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 28px;
+        margin-top: 8px;
+        padding: 4px 8px;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 6px;
+        background: var(--b3-theme-surface);
+        color: var(--b3-theme-on-surface);
+        font-size: 12px;
+        cursor: pointer;
+    }
+
+    .ai-message__process-toggle:hover {
+        background: var(--b3-list-hover);
+    }
+
+    .ai-message__timeline-toggle-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 18px;
+        height: 18px;
+        padding: 0 5px;
+        border-radius: 9px;
+        background: var(--b3-theme-primary);
+        color: var(--b3-theme-on-primary);
+        font-size: 11px;
+        font-weight: 600;
     }
 
     .ai-message__thinking {
