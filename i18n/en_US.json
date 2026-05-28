@@ -79,6 +79,23 @@
                 "queue": "Queue: let OpenCode process it next"
             }
         },
+        "diagnosticLogMode": {
+            "title": "OpenCode Diagnostic Log",
+            "description": "Record the OpenCode request timeline, tool events, permission prompts, and visible reasoning chunks",
+            "options": {
+                "off": "Off",
+                "next": "Next run only",
+                "always": "Always on"
+            }
+        },
+        "diagnosticLogLevel": {
+            "title": "Diagnostic Log Detail",
+            "description": "Safe summary redacts and truncates long text; full diagnostic keeps more prompt and output snippets",
+            "options": {
+                "safe": "Safe summary",
+                "full": "Full diagnostic"
+            }
+        },
         "messageFontSize": {
             "title": "Message Font Size",
             "description": "Adjust the font size of message content (default 12px)"

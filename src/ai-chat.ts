@@ -3,6 +3,7 @@
  * 仅支持 OpenCode 提供商
  */
 import { chatOpenCode, fetchOpenCodeModels, deleteOpenCodeSession, type OpenCodeToolPartUpdate, listCommands as fetchOpenCodeCommands, executeCommand as execOpenCodeCommand, sendPromptAsync as sendOpenCodePromptAsync, initSession as initOpenCodeSession, type OpenCodeCommand, respondToPermission as respondOpenCodePermission, replyToQuestion as replyOpenCodeQuestion, rejectQuestion as rejectOpenCodeQuestion, type PermissionRequest, type QuestionRequest } from './providers/opencode-provider';
+import type { DiagnosticLogger } from './diagnostic-logger';
 
 export interface MessageAttachment {
     type: 'image' | 'file';
@@ -127,6 +128,7 @@ export interface ChatOptions {
     enableImageGeneration?: boolean;
     onImageGenerated?: (images: GeneratedImageData[]) => void;
     mode?: 'plan' | 'build';
+    diagnosticLogger?: DiagnosticLogger;
 }
 
 export interface ModelInfo {
@@ -239,7 +241,8 @@ export async function chat(
             customBody: options.customBody,
             onPermissionAsked: options.onPermissionAsked,
             onQuestionAsked: options.onQuestionAsked,
-            mode: options.mode
+            mode: options.mode,
+            diagnosticLogger: options.diagnosticLogger
         },
         { serverUrl }
     );

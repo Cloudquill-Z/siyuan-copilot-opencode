@@ -1,4 +1,5 @@
 import { OPENCODE_SESSION_TITLE } from "../pluginNamespace";
+import type { DiagnosticLogger } from "../diagnostic-logger";
 import {
     createRealtimeCompletionWatcher,
     type RealtimeCompletionWatcher,
@@ -42,6 +43,7 @@ export interface OpenCodeChatOptions {
     onPermissionAsked?: (req: PermissionRequest) => void;
     onQuestionAsked?: (req: QuestionRequest) => void;
     mode?: 'plan' | 'build';
+    diagnosticLogger?: DiagnosticLogger;
 }
 
 export interface OpenCodeModelInfo {
@@ -63,6 +65,28 @@ const modelCache = new Map<string, { models: OpenCodeModelInfo[]; timestamp: num
 function debugOpenCode(...args: any[]) {
     if (OPENCODE_DEBUG_LOGS) {
         console.debug(...args);
+    }
+}
+
+function logDiagnostic(logger: DiagnosticLogger | undefined, event: string, data?: unknown) {
+    if (!logger) return;
+    void logger.log(event, data).catch(err => {
+        console.warn('[OpenCode] Failed to write diagnostic log:', err);
+    });
+}
+
+function logToolDiagnostic(
+    logger: DiagnosticLogger | undefined,
+    source: string,
+    update: OpenCodeToolPartUpdate
+) {
+    logDiagnostic(logger, 'tool.update', { source, part: update });
+    if (update.status === 'running' || update.status === 'pending') {
+        logDiagnostic(logger, 'tool.started', { source, part: update });
+    } else if (update.status === 'completed') {
+        logDiagnostic(logger, 'tool.completed', { source, part: update });
+    } else if (update.status === 'error') {
+        logDiagnostic(logger, 'tool.error', { source, part: update });
     }
 }
 
@@ -1258,6 +1282,7 @@ export async function chatOpenCode(
     config: OpenCodeProviderConfig
 ): Promise<{ sessionId: string }> {
     const serverUrl = normalizeServerUrl(config.serverUrl);
+    const diagnosticLogger = options.diagnosticLogger;
     let sessionId = options.sessionId;
     let sessionCreated = false;
     let eventStream: EventStreamClient | null = null;
@@ -1269,6 +1294,11 @@ export async function chatOpenCode(
 
     try {
         if (!sessionId) {
+            logDiagnostic(diagnosticLogger, 'request.sent', {
+                method: 'POST',
+                path: '/session',
+                purpose: 'create-session',
+            });
             const createFetchResult = await openCodeFetch(
                 serverUrl,
                 '/session',
@@ -1279,6 +1309,12 @@ export async function chatOpenCode(
                 options.signal
             );
             const createRes = createFetchResult.response;
+            logDiagnostic(diagnosticLogger, 'request.response', {
+                method: 'POST',
+                path: '/session',
+                status: createRes.status,
+                ok: createRes.ok,
+            });
 
             try {
             if (!createRes.ok) {
@@ -1297,10 +1333,13 @@ export async function chatOpenCode(
             if (!sessionId) {
                 throw new Error('Failed to create session: no session ID returned');
             }
+            logDiagnostic(diagnosticLogger, 'session.created', { sessionId });
             } finally {
                 createFetchResult.clearTimeout();
             }
             sessionCreated = true;
+        } else {
+            logDiagnostic(diagnosticLogger, 'session.reused', { sessionId });
         }
 
         const providerID = options.model?.providerID || 'opencode';
@@ -1320,6 +1359,10 @@ export async function chatOpenCode(
 
         if (wantRealtime) {
             try {
+                logDiagnostic(diagnosticLogger, 'event_stream.connecting', {
+                    path: '/global/event',
+                    sessionId,
+                });
                 completionWatcher = createRealtimeCompletionWatcher({
                     signal: options.signal,
                     idleTimeoutMs: IDLE_TIMEOUT_MS,
@@ -1329,6 +1372,11 @@ export async function chatOpenCode(
                 eventStream = new EventStreamClient(serverUrl, sessionId);
                 await eventStream.connect({
                     onTextDelta: (delta) => {
+                        logDiagnostic(diagnosticLogger, 'text.delta', {
+                            source: 'event-stream',
+                            length: delta.length,
+                            text: delta,
+                        });
                         debugOpenCode('[OpenCode] EventStream onTextDelta:', delta.slice(0, 50));
                         realtimeHadUsefulActivity = true;
                         completionWatcher?.markPermissionWaiting(false);
@@ -1337,6 +1385,11 @@ export async function chatOpenCode(
                         options.onChunk?.(delta);
                     },
                     onReasoningDelta: (delta) => {
+                        logDiagnostic(diagnosticLogger, 'thinking.delta', {
+                            source: 'event-stream',
+                            length: delta.length,
+                            text: delta,
+                        });
                         debugOpenCode('[OpenCode] EventStream onReasoningDelta:', delta.slice(0, 50));
                         realtimeHadUsefulActivity = true;
                         completionWatcher?.markPermissionWaiting(false);
@@ -1348,36 +1401,64 @@ export async function chatOpenCode(
                         realtimeHadUsefulActivity = true;
                         completionWatcher?.markPermissionWaiting(false);
                         completionWatcher?.markActivity('tool-update');
+                        logToolDiagnostic(
+                            diagnosticLogger,
+                            'event-stream',
+                            isOpenCodeToolPartUpdate(part) ? part : toolPartToUpdate(part)
+                        );
                         if (!options.onToolPartUpdate) return;
                         options.onToolPartUpdate(isOpenCodeToolPartUpdate(part) ? part : toolPartToUpdate(part));
                     },
                     onSessionIdle: () => {
+                        logDiagnostic(diagnosticLogger, 'session.status', {
+                            source: 'event-stream',
+                            status: 'idle',
+                        });
                         completionWatcher?.markActivity('session-idle');
                         completionWatcher?.resolveIdle();
                     },
                     onSessionError: (error) => {
+                        logDiagnostic(diagnosticLogger, 'session.error', {
+                            source: 'event-stream',
+                            error,
+                        });
                         const err = new Error(formatErrorMessage(error));
                         options.onError?.(err);
                         completionWatcher?.reject(err);
                     },
                     onPermissionAsked: (req) => {
+                        logDiagnostic(diagnosticLogger, 'permission.asked', req);
                         options.onPermissionAsked?.(req);
                     },
                     onPermissionActivity: (isWaiting) => {
+                        logDiagnostic(diagnosticLogger, 'permission.activity', {
+                            waiting: isWaiting,
+                        });
                         realtimeHadUsefulActivity = true;
                         completionWatcher?.markActivity(isWaiting ? 'permission-asked' : 'permission-updated');
                         completionWatcher?.markPermissionWaiting(isWaiting);
                     },
                     onQuestionAsked: (req) => {
+                        logDiagnostic(diagnosticLogger, 'question.asked', req);
                         options.onQuestionAsked?.(req);
                     },
                     onQuestionActivity: (isWaiting) => {
+                        logDiagnostic(diagnosticLogger, 'question.activity', {
+                            waiting: isWaiting,
+                        });
                         realtimeHadUsefulActivity = true;
                         completionWatcher?.markActivity(isWaiting ? 'question-asked' : 'question-updated');
                         completionWatcher?.markPermissionWaiting(isWaiting);
                     },
                 }, options.signal);
+                logDiagnostic(diagnosticLogger, 'event_stream.connected', {
+                    path: '/global/event',
+                    sessionId,
+                });
             } catch (streamErr) {
+                logDiagnostic(diagnosticLogger, 'event_stream.fallback', {
+                    error: streamErr,
+                });
                 console.warn('[OpenCode] Failed to connect event stream, falling back to sync mode:', streamErr);
                 eventStream?.close();
                 eventStream = null;
@@ -1386,11 +1467,27 @@ export async function chatOpenCode(
         }
 
         const promptBody = buildPromptBody(options, model);
+        logDiagnostic(diagnosticLogger, 'prompt.built', {
+            sessionId,
+            model,
+            mode: options.mode,
+            enableThinking: options.enableThinking,
+            reasoningEffort: options.reasoningEffort,
+            promptChars: options.prompt.length,
+            toolNames: promptBody.tools ? Object.keys(promptBody.tools) : [],
+            body: diagnosticLogger?.level === 'full' ? promptBody : undefined,
+        });
 
         if (eventStream) {
+            const asyncPath = `/session/${encodeURIComponent(sessionId)}/prompt_async`;
+            logDiagnostic(diagnosticLogger, 'request.sent', {
+                method: 'POST',
+                path: asyncPath,
+                purpose: 'prompt-async',
+            });
             const asyncFetchResult = await openCodeFetch(
                 serverUrl,
-                `/session/${encodeURIComponent(sessionId)}/prompt_async`,
+                asyncPath,
                 {
                     method: 'POST',
                     body: JSON.stringify(promptBody)
@@ -1399,6 +1496,12 @@ export async function chatOpenCode(
                 IDLE_TIMEOUT_MS
             );
             try {
+                logDiagnostic(diagnosticLogger, 'request.response', {
+                    method: 'POST',
+                    path: asyncPath,
+                    status: asyncFetchResult.response.status,
+                    ok: asyncFetchResult.response.ok,
+                });
                 if (!asyncFetchResult.response.ok) {
                     const errText = await asyncFetchResult.response.text().catch(() => '');
                     throw new Error(`OpenCode async request failed: ${asyncFetchResult.response.status} ${asyncFetchResult.response.statusText}${errText ? ' - ' + errText : ''}`);
@@ -1410,6 +1513,11 @@ export async function chatOpenCode(
                     options.onThinkingComplete?.(realtimeThinking);
                 }
                 eventStream.close();
+                logDiagnostic(diagnosticLogger, 'run.completed', {
+                    transport: 'event-stream',
+                    textChars: realtimeText.length,
+                    thinkingChars: realtimeThinking.length,
+                });
                 return { sessionId: sessionId! };
             } finally {
                 asyncFetchResult.clearTimeout();
@@ -1417,9 +1525,15 @@ export async function chatOpenCode(
         }
 
         // Send the message
+        const messagePath = `/session/${encodeURIComponent(sessionId)}/message`;
+        logDiagnostic(diagnosticLogger, 'request.sent', {
+            method: 'POST',
+            path: messagePath,
+            purpose: 'message',
+        });
         const messageFetchResult = await openCodeFetch(
             serverUrl,
-            `/session/${encodeURIComponent(sessionId)}/message`,
+            messagePath,
             {
                 method: 'POST',
                 body: JSON.stringify(promptBody)
@@ -1428,6 +1542,13 @@ export async function chatOpenCode(
             IDLE_TIMEOUT_MS
         );
         const { response, resetTimeout } = messageFetchResult;
+        logDiagnostic(diagnosticLogger, 'request.response', {
+            method: 'POST',
+            path: messagePath,
+            status: response.status,
+            ok: response.ok,
+            contentType: response.headers.get('content-type') || '',
+        });
 
         try {
         if (!response.ok) {
@@ -1442,18 +1563,37 @@ export async function chatOpenCode(
         if (contentType.includes('text/event-stream')) {
             // SSE response from POST /message
             let accumulatedThinking = '';
+            const diagnosticResetTimeout = () => {
+                logDiagnostic(diagnosticLogger, 'timeout.reset', {
+                    source: 'message-sse',
+                });
+                resetTimeout();
+            };
             try {
                 fullText = await parseSSEStream(response, (text) => {
+                    logDiagnostic(diagnosticLogger, 'text.delta', {
+                        source: 'message-sse',
+                        length: text.length,
+                        text,
+                    });
                     fullText += text;
                     if (!realtimeText) {
                         options.onChunk?.(text);
                     }
                 }, options.signal, (thinking) => {
+                    logDiagnostic(diagnosticLogger, 'thinking.delta', {
+                        source: 'message-sse',
+                        length: thinking.length,
+                        text: thinking,
+                    });
                     accumulatedThinking += thinking;
                     if (!realtimeThinking) {
                         options.onThinkingChunk?.(thinking);
                     }
-                }, options.onToolPartUpdate, resetTimeout);
+                }, (update) => {
+                    logToolDiagnostic(diagnosticLogger, 'message-sse', update);
+                    options.onToolPartUpdate?.(update);
+                }, diagnosticResetTimeout);
             } catch (streamErr) {
                 const partialText = fullText || realtimeText;
                 const partialThinking = accumulatedThinking || realtimeThinking;
@@ -1474,10 +1614,23 @@ export async function chatOpenCode(
             if (finalThinking) {
                 options.onThinkingComplete?.(finalThinking);
             }
+            logDiagnostic(diagnosticLogger, 'run.completed', {
+                transport: 'message-sse',
+                textChars: finalText.length,
+                thinkingChars: finalThinking.length,
+            });
         } else {
             // Synchronous JSON response
+            logDiagnostic(diagnosticLogger, 'timeout.reset', {
+                source: 'message-json',
+                phase: 'before-read',
+            });
             resetTimeout();
             const responseText = await response.text();
+            logDiagnostic(diagnosticLogger, 'timeout.reset', {
+                source: 'message-json',
+                phase: 'after-read',
+            });
             resetTimeout();
             let data: any;
             try {
@@ -1507,6 +1660,11 @@ export async function chatOpenCode(
             // Extract thinking from final response (fallback if event stream didn't deliver)
             const thinkingText = extractThinkingFromParts(parts);
             if (thinkingText && options.onThinkingChunk && !realtimeThinking) {
+                logDiagnostic(diagnosticLogger, 'thinking.delta', {
+                    source: 'message-json',
+                    length: thinkingText.length,
+                    text: thinkingText,
+                });
                 options.onThinkingChunk(thinkingText);
             }
             const finalThinking = thinkingText || realtimeThinking;
@@ -1518,7 +1676,9 @@ export async function chatOpenCode(
             if (options.onToolPartUpdate) {
                 for (const part of parts) {
                     if (isToolPart(part)) {
-                        options.onToolPartUpdate(toolPartToUpdate(part));
+                        const update = toolPartToUpdate(part);
+                        logToolDiagnostic(diagnosticLogger, 'message-json', update);
+                        options.onToolPartUpdate(update);
                     }
                 }
             }
@@ -1527,7 +1687,13 @@ export async function chatOpenCode(
                 const chunkSize = Math.max(1, Math.ceil(fullText.length / 100));
                 for (let i = 0; i < fullText.length; i += chunkSize) {
                     if (options.signal?.aborted) throw new Error('Request aborted');
-                    options.onChunk(fullText.slice(i, i + chunkSize));
+                    const chunk = fullText.slice(i, i + chunkSize);
+                    logDiagnostic(diagnosticLogger, 'text.delta', {
+                        source: 'message-json',
+                        length: chunk.length,
+                        text: chunk,
+                    });
+                    options.onChunk(chunk);
                 }
             }
 
@@ -1535,6 +1701,11 @@ export async function chatOpenCode(
                 deliveredPartialResponse = true;
             }
             options.onComplete?.(fullText || realtimeText);
+            logDiagnostic(diagnosticLogger, 'run.completed', {
+                transport: 'message-json',
+                textChars: (fullText || realtimeText).length,
+                thinkingChars: finalThinking.length,
+            });
         }
 
         eventStream?.close();
@@ -1545,6 +1716,13 @@ export async function chatOpenCode(
     } catch (error) {
         eventStream?.close();
         const err = error as Error;
+        const isAborted = err.name === 'AbortError' || err.message?.includes('aborted');
+        logDiagnostic(diagnosticLogger, isAborted ? 'run.cancelled' : 'run.failed', {
+            error: err,
+            sessionId,
+            sessionCreated,
+            deliveredPartialResponse,
+        });
 
         const shouldPreserveRealtimeSession =
             wantRealtime && (realtimeHadUsefulActivity || !!realtimeText || !!realtimeThinking);
@@ -1552,7 +1730,7 @@ export async function chatOpenCode(
             deleteOpenCodeSession(config, sessionId).catch(() => {});
         }
 
-        if (err.name === 'AbortError' || err.message?.includes('aborted')) {
+        if (isAborted) {
             options.onError?.(new Error('Request aborted'));
         } else if (isConnectionError(err)) {
             options.onError?.(new Error(

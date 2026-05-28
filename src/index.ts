@@ -22,6 +22,7 @@ import "@/index.scss";
 import SettingPanel from "./SettingsPanel.svelte";
 import { getDefaultSettings } from "./defaultSettings";
 import { normalizeSettings } from "./settingsSchema";
+import { ensureManagedOpenCodeWorkspace } from "./opencode-workspace";
 import { setPluginInstance, t, getCurrentLanguage } from "./utils/i18n";
 import AISidebar from "./ai-sidebar.svelte";
 import ChatDialog from "./components/ChatDialog.svelte";
@@ -2000,6 +2001,12 @@ export default class PluginSample extends Plugin {
             const url = new URL(serverUrl);
             const port = parseInt(url.port) || 4096;
             const hostname = url.hostname || '127.0.0.1';
+
+            try {
+                await ensureManagedOpenCodeWorkspace();
+            } catch (err) {
+                console.warn('[OpenCode] Failed to prepare managed workspace:', err);
+            }
 
             const available = await ensureServerRunning({
                 port,

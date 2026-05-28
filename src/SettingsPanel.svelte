@@ -183,6 +183,33 @@
                     },
                 },
                 {
+                    key: 'diagnosticLogMode',
+                    value: settings.diagnosticLogMode,
+                    type: 'select',
+                    title: t('settings.diagnosticLogMode.title') || 'OpenCode 诊断日志',
+                    description:
+                        t('settings.diagnosticLogMode.description') ||
+                        '记录下一次 OpenCode 请求的时间线、工具事件和可见思考片段',
+                    options: {
+                        off: t('settings.diagnosticLogMode.options.off') || '关闭',
+                        next: t('settings.diagnosticLogMode.options.next') || '仅下一次',
+                        always: t('settings.diagnosticLogMode.options.always') || '一直开启',
+                    },
+                },
+                {
+                    key: 'diagnosticLogLevel',
+                    value: settings.diagnosticLogLevel,
+                    type: 'select',
+                    title: t('settings.diagnosticLogLevel.title') || '诊断日志详细程度',
+                    description:
+                        t('settings.diagnosticLogLevel.description') ||
+                        '安全摘要默认脱敏和截断；完整诊断会记录更多提示词与输出片段',
+                    options: {
+                        safe: t('settings.diagnosticLogLevel.options.safe') || '安全摘要',
+                        full: t('settings.diagnosticLogLevel.options.full') || '完整诊断',
+                    },
+                },
+                {
                     key: 'messageFontSize',
                     value: settings.messageFontSize,
                     type: 'number',

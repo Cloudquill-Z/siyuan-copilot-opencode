@@ -39,6 +39,13 @@
         getSessionPath,
         isPluginAssetPath,
     } from './pluginPaths';
+    import {
+        createDiagnosticLogger,
+        shouldStartDiagnosticLog,
+        type DiagnosticLogger,
+        type DiagnosticLogLevel,
+        type DiagnosticLogMode,
+    } from './diagnostic-logger';
     import { SUMMARY_EVENT, WEBAPP_TAB_TYPE } from './pluginNamespace';
     import {
         parseMultipleWebPages,
@@ -113,6 +120,9 @@
     type OpenCodeTimelineItem =
         | { type: 'thinking'; id: string; content: string }
         | { type: 'tool'; id: string; toolPart: any };
+    type OpenCodeTimelineDisplayItem =
+        | { type: 'thinking'; id: string; content: string }
+        | { type: 'tools'; id: string; toolParts: any[] };
     let openCodeTimeline: OpenCodeTimelineItem[] = [];
     let openCodeTimelineCounter = 0;
     let settings: any = {};
@@ -125,9 +135,15 @@
     // 思考过程折叠状态管理
     let thinkingCollapsed: Record<string, any> = {};
     let toolCallGroupsCollapsed: Record<string, boolean> = {};
+    let timelineCollapsed: Record<string, boolean> = {};
 
-    function isThinkingCollapsed(key: string | number): boolean {
-        return thinkingCollapsed[String(key)] ?? true;
+    function isThinkingCollapsed(
+        stateOrKey: Record<string, any> | string | number,
+        key?: string | number
+    ): boolean {
+        const state = key === undefined ? thinkingCollapsed : stateOrKey as Record<string, any>;
+        const stateKey = key === undefined ? stateOrKey : key;
+        return state[String(stateKey)] ?? true;
     }
 
     function toggleThinkingCollapsed(key: string | number) {
@@ -150,6 +166,75 @@
             ...toolCallGroupsCollapsed,
             [key]: !isToolCallGroupCollapsed(toolCallGroupsCollapsed, key),
         };
+    }
+
+    function isTimelineCollapsed(
+        stateOrKey: Record<string, boolean> | string,
+        keyOrDefault: string | boolean,
+        defaultCollapsed?: boolean
+    ): boolean {
+        const state =
+            typeof keyOrDefault === 'boolean'
+                ? timelineCollapsed
+                : stateOrKey as Record<string, boolean>;
+        const stateKey =
+            typeof keyOrDefault === 'boolean' ? stateOrKey as string : keyOrDefault;
+        const fallback =
+            typeof keyOrDefault === 'boolean' ? keyOrDefault : defaultCollapsed ?? true;
+        return state[stateKey] ?? fallback;
+    }
+
+    function toggleTimelineCollapsed(key: string, defaultCollapsed: boolean) {
+        timelineCollapsed = {
+            ...timelineCollapsed,
+            [key]: !isTimelineCollapsed(key, defaultCollapsed),
+        };
+    }
+
+    function groupOpenCodeTimeline(
+        items: OpenCodeTimelineItem[] = []
+    ): OpenCodeTimelineDisplayItem[] {
+        const grouped: OpenCodeTimelineDisplayItem[] = [];
+
+        for (const item of items) {
+            if (item.type === 'thinking') {
+                grouped.push({ ...item });
+                continue;
+            }
+
+            const lastItem = grouped[grouped.length - 1];
+            if (lastItem?.type === 'tools') {
+                lastItem.toolParts = [...lastItem.toolParts, item.toolPart];
+            } else {
+                grouped.push({
+                    type: 'tools',
+                    id: `tools-${item.id}`,
+                    toolParts: [item.toolPart],
+                });
+            }
+        }
+
+        return grouped;
+    }
+
+    function getActiveOpenCodeTimelineItemId(
+        items: OpenCodeTimelineItem[] = []
+    ): string {
+        const grouped = groupOpenCodeTimeline(items);
+        for (let index = grouped.length - 1; index >= 0; index--) {
+            const item = grouped[index];
+            if (
+                item.type === 'tools' &&
+                item.toolParts.some(part => part.status === 'running' || part.status === 'pending')
+            ) {
+                return item.id;
+            }
+            if (item.type === 'thinking' && isThinkingPhase) {
+                return item.id;
+            }
+        }
+
+        return '';
     }
 
     // 消息编辑状态
@@ -1156,6 +1241,11 @@
     function resetOpenCodeTimeline() {
         openCodeTimeline = [];
         openCodeTimelineCounter = 0;
+        if (timelineCollapsed['opencode-timeline-streaming'] !== undefined) {
+            const nextTimelineCollapsed = { ...timelineCollapsed };
+            delete nextTimelineCollapsed['opencode-timeline-streaming'];
+            timelineCollapsed = nextTimelineCollapsed;
+        }
     }
 
     function cloneOpenCodeTimeline() {
@@ -1168,6 +1258,7 @@
 
     function updateOpenCodeToolPart(update: any) {
         if (!update) return;
+        isThinkingPhase = false;
 
         const updateKey = getOpenCodeToolPartKey(update);
         const isTerminalStatus = update.status === 'completed' || update.status === 'error';
@@ -1234,12 +1325,73 @@
     let activePermissionRequest: { permissionID: string; sessionID: string; tool: string; input: string; description: string } | null = null;
     let activeQuestionRequest: QuestionRequest | null = null;
     let questionDrafts: Array<{ selected: string[]; custom: string }> = [];
+    let activeDiagnosticLogger: DiagnosticLogger | null = null;
+    const closedDiagnosticRunIds = new Set<string>();
+
+    async function startDiagnosticLog(userContent: string, modelConfig: any): Promise<DiagnosticLogger | null> {
+        const mode = (settings?.diagnosticLogMode || 'off') as DiagnosticLogMode;
+        if (!shouldStartDiagnosticLog(mode)) return null;
+
+        try {
+            const level = (settings?.diagnosticLogLevel === 'full' ? 'full' : 'safe') as DiagnosticLogLevel;
+            const logger = createDiagnosticLogger({
+                level,
+                sessionId: currentSessionId || undefined,
+                putFile,
+            });
+            activeDiagnosticLogger = logger;
+
+            settings.diagnosticLastLogPath = logger.filePath;
+            if (mode === 'next') {
+                settings.diagnosticLogMode = 'off';
+            }
+            await plugin.saveSettings(settings);
+            updateSettings(JSON.parse(JSON.stringify(settings)));
+
+            await logger.log('run.started', {
+                provider: currentProvider,
+                model: modelConfig?.id,
+                chatMode,
+                sessionId: currentSessionId,
+                userPromptChars: userContent.length,
+                userPromptPreview: userContent,
+                level,
+            });
+            pushMsg(`OpenCode 诊断日志已开启：${logger.filePath}`);
+            return logger;
+        } catch (err) {
+            console.warn('[Diagnostic] Failed to start diagnostic log:', err);
+            pushErrMsg(`诊断日志开启失败：${(err as Error).message}`);
+            return null;
+        }
+    }
+
+    async function closeDiagnosticLog(logger: DiagnosticLogger | null, event: string, data?: unknown) {
+        if (!logger) return;
+        if (closedDiagnosticRunIds.has(logger.runId)) return;
+        closedDiagnosticRunIds.add(logger.runId);
+        if (activeDiagnosticLogger === logger) {
+            activeDiagnosticLogger = null;
+        }
+        try {
+            await logger.close(event, data);
+            pushMsg(`OpenCode 诊断日志已保存：${logger.filePath}`);
+        } catch (err) {
+            console.warn('[Diagnostic] Failed to close diagnostic log:', err);
+        }
+    }
 
     async function handlePermissionResponse(response: 'once' | 'always' | 'reject') {
         if (!activePermissionRequest) return;
         const req = activePermissionRequest;
         activePermissionRequest = null;
         try {
+            void activeDiagnosticLogger?.log('permission.replied', {
+                permissionID: req.permissionID,
+                sessionID: req.sessionID,
+                tool: req.tool,
+                response,
+            });
             const serverUrl = settings?.aiProviders?.opencode?.serverUrl || 'http://localhost:4096';
             const { respondToPermission } = await import('./ai-chat');
             await respondToPermission(serverUrl, req.sessionID, req.permissionID, response);
@@ -1301,6 +1453,11 @@
         activeQuestionRequest = null;
         questionDrafts = [];
         try {
+            void activeDiagnosticLogger?.log('question.replied', {
+                requestID: request.requestID,
+                sessionID: request.sessionID,
+                answers,
+            });
             const serverUrl = settings?.aiProviders?.opencode?.serverUrl || 'http://localhost:4096';
             const { replyToQuestion } = await import('./ai-chat');
             const ok = await replyToQuestion(serverUrl, request.requestID, answers);
@@ -1319,6 +1476,10 @@
         activeQuestionRequest = null;
         questionDrafts = [];
         try {
+            void activeDiagnosticLogger?.log('question.rejected', {
+                requestID: request.requestID,
+                sessionID: request.sessionID,
+            });
             const serverUrl = settings?.aiProviders?.opencode?.serverUrl || 'http://localhost:4096';
             const { rejectQuestion } = await import('./ai-chat');
             await rejectQuestion(serverUrl, request.requestID);
@@ -3328,7 +3489,9 @@
     ) {
         // 过滤掉空的 assistant 消息，防止某些 Provider（例如 Kimi）报错
         // 但保留有生图的 assistant 消息
-        const includeHistoricalContext = false;
+        // 用户拖入的文档/网页/文件只保存在消息元数据里，发送给模型前需要重新注入；
+        // 否则后续轮次只会看到用户原始文字，看不到首轮附带的文章上下文。
+        const includeHistoricalContext = true;
         let messagesToSend = messages
             .filter(msg => {
                 if (msg.role === 'system') return false;
@@ -3679,41 +3842,8 @@
             }
         }
 
-        // 使用临时系统提示词（如果设置了）- 优先使用临时系统提示词作为基础
-        let baseSystemPrompt = settings.aiSystemPrompt || '';
-        if (tempModelSettings.systemPrompt.trim()) {
-            baseSystemPrompt = tempModelSettings.systemPrompt;
-        }
-
-        // Agent/Ask 模式带有工具时，添加工具使用强制规则
-        let hasToolInstruction = false;
-        let hasSoulEnabled = false;
-        const hasSoulDoc = !!settings.soulDocId?.trim();
-        if (chatMode === 'plan' && userToolCount > 0) {
-            // 如果已有基础提示词，添加换行后追加工具说明；否则直接使用工具说明
-            if (baseSystemPrompt.trim()) {
-            } else {
-            }
-            hasToolInstruction = true;
-
-            // 检查是否启用了SOUL工具
-            const currentSelectedTools = chatMode === 'plan' ? selectedToolsAsk : selectedTools;
-            hasSoulEnabled = currentSelectedTools.some(t => t.name === 'soul');
-        }
-
-        // 如果启用了SOUL工具，自动获取SOUL文档内容并追加到系统提示词
-        if (hasSoulEnabled || hasSoulDoc) {
-            try {
-                const soulResult = await soul({ operation: 'getDoc' });
-                if (soulResult.success && soulResult.content) {
-                    const soulContent = `\n\n=== SOUL记忆 ===\n\n以下是用户设置的SOUL文档内容，包含用户的偏好设置和要求，请在回复时遵循这些要求：\n\n${soulResult.content}`;
-                    baseSystemPrompt += soulContent;
-                }
-            } catch (error) {
-                console.error('[SOUL] 自动获取文档内容失败:', error);
-                // 获取失败时不阻止对话继续进行
-            }
-        }
+        const { baseSystemPrompt, hasToolInstruction } =
+            await buildSystemPromptForCurrentRequest();
 
         // 添加最终的系统提示词（只要基础提示词或工具说明不为空就添加）
         if (baseSystemPrompt.trim() || hasToolInstruction) {
@@ -3778,6 +3908,38 @@
         messagesToSend = [...systemMessages, ...limitedMessagesWithToolFix];
 
         return messagesToSend;
+    }
+
+    async function buildSystemPromptForCurrentRequest(): Promise<{
+        baseSystemPrompt: string;
+        hasToolInstruction: boolean;
+    }> {
+        let baseSystemPrompt = settings.aiSystemPrompt || '';
+        if (tempModelSettings.systemPrompt.trim()) {
+            baseSystemPrompt = tempModelSettings.systemPrompt;
+        }
+
+        let hasToolInstruction = false;
+        let hasSoulEnabled = false;
+        const hasSoulDoc = !!settings.soulDocId?.trim();
+        if (chatMode === 'plan' && userToolCount > 0) {
+            hasToolInstruction = true;
+            const currentSelectedTools = chatMode === 'plan' ? selectedToolsAsk : selectedTools;
+            hasSoulEnabled = currentSelectedTools.some(t => t.name === 'soul');
+        }
+
+        if (hasSoulEnabled || hasSoulDoc) {
+            try {
+                const soulResult = await soul({ operation: 'getDoc' });
+                if (soulResult.success && soulResult.content) {
+                    baseSystemPrompt += `\n\n=== SOUL记忆 ===\n\n以下是用户设置的SOUL文档内容，包含用户的偏好设置和要求，请在回复时遵循这些要求：\n\n${soulResult.content}`;
+                }
+            } catch (error) {
+                console.error('[SOUL] 自动获取文档内容失败:', error);
+            }
+        }
+
+        return { baseSystemPrompt, hasToolInstruction };
     }
 
     // 选择多模型答案
@@ -4225,6 +4387,7 @@
 
         // 创建新的 AbortController
         setController(currentSessionId, new AbortController());
+        const diagnosticLogger = await startDiagnosticLog(userContent, modelConfig);
 
         try {
             // 准备工具列表
@@ -4317,6 +4480,7 @@
                             mode: chatMode,
                             tools: toolsForAgent,
                             customBody,
+                            diagnosticLogger: diagnosticLogger || undefined,
                             onThinkingChunk: appendStreamingThinking,
                             onThinkingComplete: () => finishStreamingThinking(messages.length),
                             onToolPartUpdate: updateOpenCodeToolPart,
@@ -4602,6 +4766,11 @@
 
                                     await saveCurrentSession(true);
 
+                                    await closeDiagnosticLog(diagnosticLogger, 'ui.completed', {
+                                        messageCount: messages.length,
+                                        finalTextChars: processedContent.length,
+                                    });
+
                                     // 通知完成（即使没有工具调用）
                                     toolExecutionComplete?.();
                                 } else {
@@ -4627,6 +4796,9 @@
                                 streamingThinking = '';
                                 isThinkingPhase = false;
                                 setController(currentSessionId, null);
+                                void closeDiagnosticLog(diagnosticLogger, 'ui.failed', {
+                                    error,
+                                });
 
                                 // 通知完成（错误时也要结束等待）
                                 toolExecutionComplete?.();
@@ -4664,6 +4836,7 @@
                         mode: chatMode,
                         tools: webSearchTools, // 传递联网搜索工具
                         customBody,
+                        diagnosticLogger: diagnosticLogger || undefined,
                         enableImageGeneration,
                         onImageGenerated: async (images: any[]) => {
                             // 立即保存生成的图片到 SiYuan 资源文件夹并转换为 blob URL
@@ -4762,6 +4935,10 @@
 
                             // 根据AI回答自动重命名会话标题
                             autoRenameSession(convertedText);
+                            await closeDiagnosticLog(diagnosticLogger, 'ui.completed', {
+                                messageCount: messages.length,
+                                finalTextChars: processedContent.length,
+                            });
                         },
                         onError: (error: Error) => {
                             // 如果是主动中断，不显示错误
@@ -4781,6 +4958,9 @@
                             resetOpenCodeTimeline();
                             isThinkingPhase = false;
                             setController(currentSessionId, null);
+                            void closeDiagnosticLog(diagnosticLogger, 'ui.failed', {
+                                error,
+                            });
                         },
                     },
                     providerConfig.customApiUrl,
@@ -4789,6 +4969,9 @@
             }
         } catch (error) {
             console.error('Send message error:', error);
+            await closeDiagnosticLog(diagnosticLogger, 'ui.failed', {
+                error,
+            });
             // onError 回调已经处理了错误消息的添加，这里不需要重复添加
             // 只需要在 onError 没有被调用的情况下（比如网络错误导致的异常）清理状态
             if ((error as Error).name === 'AbortError') {
@@ -9291,20 +9474,8 @@
             }
         }
 
-        // 使用临时系统提示词（如果设置了）- 优先使用临时系统提示词作为基础
-        let baseSystemPrompt = settings.aiSystemPrompt || '';
-        if (tempModelSettings.systemPrompt.trim()) {
-            baseSystemPrompt = tempModelSettings.systemPrompt;
-        }
-
-        // Agent/Ask 模式带有工具时，添加工具使用强制规则
-        let hasToolInstruction = false;
-        if (chatMode === 'plan' && userToolCount > 0) {
-            if (baseSystemPrompt.trim()) {
-            } else {
-            }
-            hasToolInstruction = true;
-        }
+        const { baseSystemPrompt, hasToolInstruction } =
+            await buildSystemPromptForCurrentRequest();
 
         // 添加最终的系统提示词
         if (baseSystemPrompt.trim() || hasToolInstruction) {
@@ -10153,7 +10324,7 @@
                                         >
                                             <svg
                                                 class="ai-message__thinking-icon"
-                                                class:collapsed={isThinkingCollapsed(baseIndex)}
+                                                class:collapsed={isThinkingCollapsed(thinkingCollapsed, baseIndex)}
                                             >
                                                 <use xlink:href="#iconRight"></use>
                                             </svg>
@@ -10161,7 +10332,7 @@
                                                 💭 思考过程
                                             </span>
                                         </div>
-                                        {#if !isThinkingCollapsed(baseIndex)}
+                                        {#if !isThinkingCollapsed(thinkingCollapsed, baseIndex)}
                                             {@const thinkDisplay = getDisplayContent(
                                                 round.thinkingBefore
                                             )}
@@ -10344,8 +10515,32 @@
                             {/each}
                         {:else}
                             {#if message.role === 'assistant' && message.openCodeTimeline && message.openCodeTimeline.length > 0 && !(message.multiModelResponses && message.multiModelResponses.length > 0)}
-                                <div class="ai-message__timeline">
-                                    {#each message.openCodeTimeline as item, timelineIndex (item.id)}
+                                {@const timelineKey = `opencode-timeline-${messageIndex}-${msgIndex}`}
+                                {@const timelineItems = groupOpenCodeTimeline(message.openCodeTimeline)}
+                                {@const timelineHidden = isTimelineCollapsed(timelineCollapsed, timelineKey, true)}
+                                <div class="ai-message__timeline-shell">
+                                    <button
+                                        type="button"
+                                        class="ai-message__timeline-toggle"
+                                        on:click={() => toggleTimelineCollapsed(timelineKey, true)}
+                                        title={timelineHidden ? '展开思考和工具' : '折叠思考和工具'}
+                                    >
+                                        <svg
+                                            class="ai-message__thinking-icon"
+                                            class:collapsed={timelineHidden}
+                                        >
+                                            <use xlink:href="#iconRight"></use>
+                                        </svg>
+                                        <span>思考与工具</span>
+                                        <span class="ai-message__timeline-toggle-count">
+                                            {timelineItems.length}
+                                        </span>
+                                    </button>
+                                <div
+                                    class="ai-message__timeline"
+                                    class:ai-message__timeline--hidden={timelineHidden}
+                                >
+                                    {#each timelineItems as item, timelineIndex (item.id)}
                                         {#if item.type === 'thinking'}
                                             {@const timelineThinkingKey = `timeline-thinking-${messageIndex}-${msgIndex}-${timelineIndex}`}
                                             <div class="ai-message__thinking">
@@ -10355,7 +10550,7 @@
                                                 >
                                                     <svg
                                                         class="ai-message__thinking-icon"
-                                                        class:collapsed={isThinkingCollapsed(timelineThinkingKey)}
+                                                        class:collapsed={isThinkingCollapsed(thinkingCollapsed, timelineThinkingKey)}
                                                     >
                                                         <use xlink:href="#iconRight"></use>
                                                     </svg>
@@ -10363,7 +10558,7 @@
                                                         思考
                                                     </span>
                                                 </div>
-                                                {#if !isThinkingCollapsed(timelineThinkingKey)}
+                                                {#if !isThinkingCollapsed(thinkingCollapsed, timelineThinkingKey)}
                                                     {@const timelineThinkingDisplay = getDisplayContent(item.content)}
                                                     <div class="ai-message__thinking-content b3-typography">
                                                         {@html timelineThinkingDisplay}
@@ -10371,16 +10566,16 @@
                                                 {/if}
                                             </div>
                                         {:else}
-                                            {@const toolPart = item.toolPart}
-                                            {@const toolPartKey = getOpenCodeToolPartKey(toolPart)}
-                                            {@const toolPartCollapsed = !toolCallsExpanded[toolPartKey]}
-                                            {@const toolPartInput = formatOpenCodeToolValue(toolPart.input)}
-                                            {@const toolPartOutput = formatOpenCodeToolValue(toolPart.output)}
-                                            {@const toolPartError = formatOpenCodeToolValue(toolPart.error)}
                                             <div class="ai-message__tool-calls ai-message__tool-calls--timeline">
                                                 <div class="ai-message__tool-calls-title">
                                                     工具
                                                 </div>
+                                                {#each item.toolParts as toolPart (getOpenCodeToolPartKey(toolPart))}
+                                                {@const toolPartKey = getOpenCodeToolPartKey(toolPart)}
+                                                {@const toolPartCollapsed = !toolCallsExpanded[toolPartKey]}
+                                                {@const toolPartInput = formatOpenCodeToolValue(toolPart.input)}
+                                                {@const toolPartOutput = formatOpenCodeToolValue(toolPart.output)}
+                                                {@const toolPartError = formatOpenCodeToolValue(toolPart.error)}
                                                 <div
                                                     class="ai-message__tool-call"
                                                     class:ai-message__tool-call--running={toolPart.status === 'running' ||
@@ -10438,9 +10633,11 @@
                                                         </div>
                                                     {/if}
                                                 </div>
+                                                {/each}
                                             </div>
                                         {/if}
                                     {/each}
+                                </div>
                                 </div>
                             {/if}
 
@@ -10456,13 +10653,13 @@
                                     >
                                         <svg
                                             class="ai-message__thinking-icon"
-                                            class:collapsed={isThinkingCollapsed(thinkingIndex)}
+                                            class:collapsed={isThinkingCollapsed(thinkingCollapsed, thinkingIndex)}
                                         >
                                             <use xlink:href="#iconRight"></use>
                                         </svg>
                                         <span class="ai-message__thinking-title">💭 思考过程</span>
                                     </div>
-                                    {#if !isThinkingCollapsed(thinkingIndex)}
+                                    {#if !isThinkingCollapsed(thinkingCollapsed, thinkingIndex)}
                                         {@const thinkDisplay = getDisplayContent(thinkingContent)}
                                         <div class="ai-message__thinking-content b3-typography">
                                             {@html thinkDisplay}
@@ -10719,7 +10916,7 @@
                                     >
                                         <svg
                                             class="ai-message__thinking-icon"
-                                            class:collapsed={isThinkingCollapsed(thinkingAfterIndex)}
+                                            class:collapsed={isThinkingCollapsed(thinkingCollapsed, thinkingAfterIndex)}
                                         >
                                             <use xlink:href="#iconRight"></use>
                                         </svg>
@@ -10727,7 +10924,7 @@
                                             💭 思考过程（续）
                                         </span>
                                     </div>
-                                    {#if !isThinkingCollapsed(thinkingAfterIndex)}
+                                    {#if !isThinkingCollapsed(thinkingCollapsed, thinkingAfterIndex)}
                                         {@const thinkAfterDisplay = getDisplayContent(
                                             message.thinkingAfterToolCalls
                                         )}
@@ -10939,7 +11136,7 @@
                                                                     >
                                                                         <svg
                                                                             class="ai-message__thinking-icon"
-                                                                            class:collapsed={isThinkingCollapsed(`hist-mm-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`)}
+                                                                            class:collapsed={isThinkingCollapsed(thinkingCollapsed, `hist-mm-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`)}
                                                                         >
                                                                             <use
                                                                                 xlink:href="#iconRight"
@@ -10953,7 +11150,7 @@
                                                                             )}
                                                                         </span>
                                                                     </div>
-                                                                    {#if !isThinkingCollapsed(`hist-mm-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`)}
+                                                                    {#if !isThinkingCollapsed(thinkingCollapsed, `hist-mm-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`)}
                                                                         {@const groupThinkDisplay =
                                                                             getDisplayContent(
                                                                                 group.thinking
@@ -11410,7 +11607,7 @@
                                                                         >
                                                                             <svg
                                                                                 class="ai-message__thinking-icon"
-                                                                                class:collapsed={isThinkingCollapsed(`hist-tab-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`)}
+                                                                                class:collapsed={isThinkingCollapsed(thinkingCollapsed, `hist-tab-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`)}
                                                                             >
                                                                                 <use
                                                                                     xlink:href="#iconRight"
@@ -11424,7 +11621,7 @@
                                                                                 )}
                                                                             </span>
                                                                         </div>
-                                                                        {#if !isThinkingCollapsed(`hist-tab-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`)}
+                                                                        {#if !isThinkingCollapsed(thinkingCollapsed, `hist-tab-${messageIndex}-${msgIndex}-${index}-group-${groupIndex}`)}
                                                                             {@const groupThinkDisplay =
                                                                                 getDisplayContent(
                                                                                     group.thinking
@@ -11973,18 +12170,44 @@
                 </div>
 
                 {#if openCodeTimeline.length > 0}
-                    <div class="ai-message__timeline ai-message__timeline--streaming">
-                        {#each openCodeTimeline as item, timelineIndex (item.id)}
+                    {@const streamingTimelineKey = 'opencode-timeline-streaming'}
+                    {@const streamingTimelineItems = groupOpenCodeTimeline(openCodeTimeline)}
+                    {@const streamingTimelineHidden = isTimelineCollapsed(timelineCollapsed, streamingTimelineKey, false)}
+                    {@const activeTimelineItemId = getActiveOpenCodeTimelineItemId(openCodeTimeline)}
+                    <div class="ai-message__timeline-shell">
+                        <button
+                            type="button"
+                            class="ai-message__timeline-toggle"
+                            on:click={() => toggleTimelineCollapsed(streamingTimelineKey, false)}
+                            title={streamingTimelineHidden ? '展开思考和工具' : '折叠思考和工具'}
+                        >
+                            <svg
+                                class="ai-message__thinking-icon"
+                                class:collapsed={streamingTimelineHidden}
+                            >
+                                <use xlink:href="#iconRight"></use>
+                            </svg>
+                            <span>思考与工具</span>
+                            <span class="ai-message__timeline-toggle-count">
+                                {streamingTimelineItems.length}
+                            </span>
+                        </button>
+                    <div
+                        class="ai-message__timeline ai-message__timeline--streaming"
+                        class:ai-message__timeline--hidden={streamingTimelineHidden}
+                    >
+                        {#each streamingTimelineItems as item, timelineIndex (item.id)}
                             {#if item.type === 'thinking'}
                                 {@const streamingTimelineThinkingKey = `streaming-timeline-thinking-${timelineIndex}`}
                                 <div class="ai-message__thinking">
                                     <div
                                         class="ai-message__thinking-header"
+                                        class:ai-message__thinking-header--active={activeTimelineItemId === item.id}
                                         on:click={() => toggleThinkingCollapsed(streamingTimelineThinkingKey)}
                                     >
                                         <svg
                                             class="ai-message__thinking-icon"
-                                            class:collapsed={isThinkingCollapsed(streamingTimelineThinkingKey)}
+                                            class:collapsed={isThinkingCollapsed(thinkingCollapsed, streamingTimelineThinkingKey)}
                                         >
                                             <use xlink:href="#iconRight"></use>
                                         </svg>
@@ -11992,7 +12215,7 @@
                                             思考中
                                         </span>
                                     </div>
-                                    {#if !isThinkingCollapsed(streamingTimelineThinkingKey)}
+                                    {#if !isThinkingCollapsed(thinkingCollapsed, streamingTimelineThinkingKey)}
                                         {@const streamingTimelineThinkingDisplay = getDisplayContent(item.content)}
                                         <div class="ai-message__thinking-content ai-message__thinking-content--streaming b3-typography">
                                             {@html streamingTimelineThinkingDisplay}
@@ -12000,16 +12223,19 @@
                                     {/if}
                                 </div>
                             {:else}
-                                {@const toolPart = item.toolPart}
-                                {@const toolPartKey = getOpenCodeToolPartKey(toolPart)}
-                                {@const toolPartCollapsed = !toolCallsExpanded[toolPartKey]}
-                                {@const toolPartInput = formatOpenCodeToolValue(toolPart.input)}
-                                {@const toolPartOutput = formatOpenCodeToolValue(toolPart.output)}
-                                {@const toolPartError = formatOpenCodeToolValue(toolPart.error)}
                                 <div class="ai-message__tool-calls ai-message__tool-calls--streaming ai-message__tool-calls--timeline">
-                                    <div class="ai-message__tool-calls-title">
+                                    <div
+                                        class="ai-message__tool-calls-title"
+                                        class:ai-message__tool-calls-title--active={activeTimelineItemId === item.id}
+                                    >
                                         工具
                                     </div>
+                                    {#each item.toolParts as toolPart (getOpenCodeToolPartKey(toolPart))}
+                                    {@const toolPartKey = getOpenCodeToolPartKey(toolPart)}
+                                    {@const toolPartCollapsed = !toolCallsExpanded[toolPartKey]}
+                                    {@const toolPartInput = formatOpenCodeToolValue(toolPart.input)}
+                                    {@const toolPartOutput = formatOpenCodeToolValue(toolPart.output)}
+                                    {@const toolPartError = formatOpenCodeToolValue(toolPart.error)}
                                     <div
                                         class="ai-message__tool-call"
                                         class:ai-message__tool-call--running={toolPart.status === 'running' ||
@@ -12067,9 +12293,11 @@
                                             </div>
                                         {/if}
                                     </div>
+                                    {/each}
                                 </div>
                             {/if}
                         {/each}
+                    </div>
                     </div>
                 {/if}
 
@@ -12356,7 +12584,7 @@
                                                     >
                                                         <svg
                                                             class="ai-message__thinking-icon"
-                                                            class:collapsed={isThinkingCollapsed(`mm-${index}-group-${groupIndex}`)}
+                                                            class:collapsed={isThinkingCollapsed(thinkingCollapsed, `mm-${index}-group-${groupIndex}`)}
                                                         >
                                                             <use xlink:href="#iconRight"></use>
                                                         </svg>
@@ -12364,7 +12592,7 @@
                                                             💭 {t('aiSidebar.messages.thinking')}
                                                         </span>
                                                     </div>
-                                                    {#if !isThinkingCollapsed(`mm-${index}-group-${groupIndex}`)}
+                                                    {#if !isThinkingCollapsed(thinkingCollapsed, `mm-${index}-group-${groupIndex}`)}
                                                         {@const streamCardThink = getDisplayContent(
                                                             group.thinking
                                                         )}
@@ -12747,7 +12975,7 @@
                                                     >
                                                         <svg
                                                             class="ai-message__thinking-icon"
-                                                            class:collapsed={isThinkingCollapsed(`mm-tab-${selectedTabIndex}-group-${groupIndex}`)}
+                                                            class:collapsed={isThinkingCollapsed(thinkingCollapsed, `mm-tab-${selectedTabIndex}-group-${groupIndex}`)}
                                                         >
                                                             <use xlink:href="#iconRight"></use>
                                                         </svg>
@@ -12755,7 +12983,7 @@
                                                             💭 思考过程
                                                         </span>
                                                     </div>
-                                                    {#if !isThinkingCollapsed(`mm-tab-${selectedTabIndex}-group-${groupIndex}`)}
+                                                    {#if !isThinkingCollapsed(thinkingCollapsed, `mm-tab-${selectedTabIndex}-group-${groupIndex}`)}
                                                         {@const streamTabThink = getDisplayContent(
                                                             group.thinking
                                                         )}
@@ -13231,75 +13459,6 @@
         on:dragleave={handleDragLeave}
         on:drop={handleDrop}
     >
-        <!-- 顶部选择器栏 -->
-        <div class="ai-sidebar__composer-controls">
-            <button
-                type="button"
-                class="ai-sidebar__mode-toggle"
-                class:ai-sidebar__mode-toggle--build={chatMode === 'build'}
-                role="switch"
-                aria-checked={chatMode === 'build'}
-                aria-label={`${t('aiSidebar.mode.label')}：${chatMode === 'build' ? 'Build' : 'Plan'}`}
-                on:click={toggleChatMode}
-                title={`${chatMode === 'build' ? t('aiSidebar.mode.buildDescription') : t('aiSidebar.mode.planDescription')} / Shift + Tab`}
-            >
-                <span class="ai-sidebar__mode-toggle-thumb"></span>
-                <span class="ai-sidebar__mode-toggle-label ai-sidebar__mode-toggle-label--plan">Plan</span>
-                <span class="ai-sidebar__mode-toggle-label ai-sidebar__mode-toggle-label--build">Build</span>
-            </button>
-            <div
-                class="ai-sidebar__thinking-control"
-                class:ai-sidebar__thinking-control--disabled={!showThinkingToggle}
-                title={showThinkingToggle ? '思考强度' : '当前模型不支持思考'}
-            >
-                <button
-                    type="button"
-                    class="ai-sidebar__thinking-chip"
-                    class:ai-sidebar__thinking-chip--active={isThinkingModeEnabled}
-                    disabled={!showThinkingToggle}
-                    on:click={toggleThinkingMode}
-                >
-                    思考
-                </button>
-                <select
-                    class="ai-sidebar__thinking-select"
-                    value={currentThinkingSelectValue}
-                    on:change={handleThinkingSelectChange}
-                    disabled={!showThinkingToggle}
-                >
-                    <option value="off">关闭</option>
-                    {#each THINKING_EFFORT_OPTIONS as option}
-                        <option value={option.value}>{option.label}</option>
-                    {/each}
-                </select>
-            </div>
-            <div class="ai-sidebar__model-control">
-                {#if chatMode === 'plan'}
-                    <MultiModelSelector
-                        {providers}
-                        selectedModels={selectedMultiModels}
-                        enableMultiModel={enableMultiModel}
-                        currentProvider={currentProvider}
-                        currentModelId={currentModelId}
-                        {chatMode}
-                        on:select={handleModelSelect}
-                        on:change={handleMultiModelChange}
-                        on:toggleEnable={handleToggleMultiModel}
-                    />
-                {:else}
-                    <MultiModelSelector
-                        {providers}
-                        selectedModels={[]}
-                        enableMultiModel={false}
-                        currentProvider={currentProvider}
-                        currentModelId={currentModelId}
-                        {chatMode}
-                        on:select={handleModelSelect}
-                    />
-                {/if}
-            </div>
-        </div>
-
         <!-- 大输入框 -->
         <div class="ai-sidebar__chat-input-box">
             {#if showCommandPalette}
@@ -13344,7 +13503,7 @@
                         {#if isUploadingFile}
                             <svg class="b3-button__icon ai-sidebar__loading-icon"><use xlink:href="#iconRefresh"></use></svg>
                         {:else}
-                            <svg class="b3-button__icon"><use xlink:href="#iconUpload"></use></svg>
+                            <svg class="b3-button__icon"><use xlink:href="#iconAdd"></use></svg>
                         {/if}
                     </button>
                     <button
@@ -13401,6 +13560,78 @@
                         <svg class="b3-button__icon" style="width:18px;height:18px"><use xlink:href="#iconUp"></use></svg>
                     {/if}
                 </button>
+            </div>
+        </div>
+
+        <!-- OpenCode 风格选择器栏 -->
+        <div class="ai-sidebar__composer-controls">
+            <button
+                type="button"
+                class="ai-sidebar__mode-toggle"
+                class:ai-sidebar__mode-toggle--build={chatMode === 'build'}
+                role="switch"
+                aria-checked={chatMode === 'build'}
+                aria-label={`${t('aiSidebar.mode.label')}：${chatMode === 'build' ? 'Build' : 'Plan'}`}
+                on:click={toggleChatMode}
+                title={`${chatMode === 'build' ? t('aiSidebar.mode.buildDescription') : t('aiSidebar.mode.planDescription')} / Shift + Tab`}
+            >
+                <span class="ai-sidebar__mode-toggle-label">
+                    {chatMode === 'build' ? 'Build' : 'Plan'}
+                </span>
+                <svg class="ai-sidebar__composer-chevron">
+                    <use xlink:href="#iconDown"></use>
+                </svg>
+            </button>
+            <div class="ai-sidebar__model-control">
+                {#if chatMode === 'plan'}
+                    <MultiModelSelector
+                        {providers}
+                        selectedModels={selectedMultiModels}
+                        enableMultiModel={enableMultiModel}
+                        currentProvider={currentProvider}
+                        currentModelId={currentModelId}
+                        {chatMode}
+                        on:select={handleModelSelect}
+                        on:change={handleMultiModelChange}
+                        on:toggleEnable={handleToggleMultiModel}
+                    />
+                {:else}
+                    <MultiModelSelector
+                        {providers}
+                        selectedModels={[]}
+                        enableMultiModel={false}
+                        currentProvider={currentProvider}
+                        currentModelId={currentModelId}
+                        {chatMode}
+                        on:select={handleModelSelect}
+                    />
+                {/if}
+            </div>
+            <div
+                class="ai-sidebar__thinking-control"
+                class:ai-sidebar__thinking-control--disabled={!showThinkingToggle}
+                title={showThinkingToggle ? '思考强度' : '当前模型不支持思考'}
+            >
+                <button
+                    type="button"
+                    class="ai-sidebar__thinking-chip"
+                    class:ai-sidebar__thinking-chip--active={isThinkingModeEnabled}
+                    disabled={!showThinkingToggle}
+                    on:click={toggleThinkingMode}
+                >
+                    思考
+                </button>
+                <select
+                    class="ai-sidebar__thinking-select"
+                    value={currentThinkingSelectValue}
+                    on:change={handleThinkingSelectChange}
+                    disabled={!showThinkingToggle}
+                >
+                    <option value="off">关闭</option>
+                    {#each THINKING_EFFORT_OPTIONS as option}
+                        <option value={option.value}>{option.label}</option>
+                    {/each}
+                </select>
             </div>
         </div>
 
@@ -14570,11 +14801,52 @@
     }
 
     // 思考过程样式
+    .ai-message__timeline-shell {
+        margin: 4px 0 12px 0;
+    }
+
+    .ai-message__timeline-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 28px;
+        padding: 2px 4px;
+        border: none;
+        border-radius: $radius-sm;
+        background: transparent;
+        color: var(--b3-theme-on-surface-light);
+        font-size: 12px;
+        line-height: 1;
+        cursor: pointer;
+        transition:
+            background $transition,
+            border-color $transition,
+            color $transition;
+
+        &:hover {
+            background: rgba($primary, 0.06);
+            color: var(--b3-theme-on-surface);
+        }
+    }
+
+    .ai-message__timeline-toggle-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: auto;
+        height: auto;
+        padding: 0;
+        border-radius: 0;
+        background: transparent;
+        color: var(--b3-theme-on-surface-light);
+        font-size: 11px;
+    }
+
     .ai-message__timeline {
         display: flex;
         flex-direction: column;
         gap: 6px;
-        margin: 4px 0 12px 0;
+        margin: 8px 0 0 0;
         padding-left: 12px;
         border-left: 1px solid var(--b3-border-color);
 
@@ -14582,6 +14854,10 @@
         .ai-message__tool-calls {
             margin-bottom: 0;
         }
+    }
+
+    .ai-message__timeline--hidden {
+        display: none;
     }
 
     .ai-message__timeline--streaming {
@@ -14633,7 +14909,8 @@
         box-shadow: 0 0 0 3px rgba(120, 120, 120, 0.12);
     }
 
-    .ai-message__timeline--streaming .ai-message__thinking-header::before {
+    .ai-message__timeline--streaming .ai-message__thinking-header--active::before,
+    .ai-message__timeline--streaming .ai-message__tool-calls-title--active::before {
         animation: opencode-process-pulse 1.1s ease-in-out infinite;
     }
 
@@ -18071,7 +18348,7 @@
         display: flex;
         align-items: center;
         justify-content: flex-start;
-        padding: 10px 14px;
+        padding: 10px 12px 10px 0;
         border-bottom: 1px solid var(--b3-border-color);
         background: var(--b3-theme-background);
         flex-shrink: 0;
@@ -18082,13 +18359,14 @@
     .ai-sidebar__brand {
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 8px;
         min-width: 0;
+        margin-left: 0;
         margin-right: auto;
     }
 
     .ai-sidebar__brand-icon {
-        width: 34px;
+        width: 28px;
         height: 34px;
         display: flex;
         align-items: center;
@@ -18296,30 +18574,34 @@
     .ai-sidebar__composer-controls {
         display: flex;
         align-items: center;
-        gap: 8px;
-        margin-bottom: 8px;
-        flex-wrap: wrap;
+        gap: 18px;
+        min-height: 38px;
+        padding: 6px 22px 0;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        scrollbar-width: none;
+
+        &::-webkit-scrollbar {
+            display: none;
+        }
     }
 
     .ai-sidebar__mode-toggle {
-        position: relative;
-        display: inline-grid;
-        grid-template-columns: 1fr 1fr;
+        display: inline-flex;
         align-items: center;
-        width: 142px;
-        height: 34px;
-        flex: 0 0 142px;
-        padding: 2px;
-        border: 1px solid var(--b3-border-color);
-        border-radius: 8px;
-        background: var(--b3-theme-background);
-        color: var(--b3-theme-on-surface-light);
+        gap: 6px;
+        height: 30px;
+        flex: 0 0 auto;
+        padding: 0;
+        border: none;
+        border-radius: 0;
+        background: transparent;
+        color: var(--b3-theme-on-surface);
         cursor: pointer;
-        overflow: hidden;
-        transition: border-color 0.2s ease, background 0.2s ease;
+        transition: color 0.16s ease;
 
         &:hover {
-            border-color: var(--b3-theme-primary-light);
+            color: var(--b3-theme-primary);
         }
 
         &:focus-visible {
@@ -18328,84 +18610,67 @@
         }
     }
 
-    .ai-sidebar__mode-toggle-thumb {
-        position: absolute;
-        top: 3px;
-        left: 3px;
-        width: calc(50% - 4px);
-        height: calc(100% - 6px);
-        border-radius: 6px;
-        background: var(--b3-theme-primary-lightest);
-        transition: transform 0.18s ease;
-    }
-
-    .ai-sidebar__mode-toggle--build .ai-sidebar__mode-toggle-thumb {
-        transform: translateX(calc(100% + 2px));
-    }
-
     .ai-sidebar__mode-toggle-label {
-        position: relative;
-        z-index: 1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        height: 100%;
-        font-size: 13px;
+        font-size: 14px;
         font-weight: 600;
         line-height: 1;
-        transition: color 0.18s ease;
+        white-space: nowrap;
     }
 
-    .ai-sidebar__mode-toggle:not(.ai-sidebar__mode-toggle--build) .ai-sidebar__mode-toggle-label--plan,
-    .ai-sidebar__mode-toggle--build .ai-sidebar__mode-toggle-label--build {
-        color: var(--b3-theme-primary);
+    .ai-sidebar__composer-chevron {
+        width: 12px;
+        height: 12px;
+        color: var(--b3-theme-on-surface-light);
+        flex-shrink: 0;
     }
 
     .ai-sidebar__thinking-control {
         display: inline-flex;
         align-items: center;
-        height: 34px;
+        gap: 6px;
+        height: 30px;
         width: fit-content;
-        min-width: 142px;
-        max-width: 184px;
-        border: 1px solid var(--b3-border-color);
-        border-radius: 8px;
-        background: var(--b3-theme-background);
-        overflow: hidden;
+        min-width: 0;
+        max-width: 150px;
+        border: none;
+        border-radius: 0;
+        background: transparent;
+        overflow: visible;
         flex: 0 0 auto;
     }
 
     .ai-sidebar__thinking-chip {
-        height: 100%;
-        width: 52px;
-        min-width: 52px;
-        flex: 0 0 52px;
+        height: 30px;
+        width: auto;
+        min-width: 0;
+        flex: 0 0 auto;
         padding: 0;
         border: none;
         background: transparent;
         color: var(--b3-theme-on-surface-light);
-        font-size: 13px;
-        font-weight: 500;
+        font-size: 14px;
+        font-weight: 600;
         cursor: pointer;
-        border-right: 1px solid var(--b3-border-color);
     }
 
     .ai-sidebar__thinking-chip--active {
         color: var(--b3-theme-primary);
-        background: var(--b3-theme-primary-lightest);
+        background: transparent;
     }
 
     .ai-sidebar__thinking-select {
-        height: 100%;
-        width: 96px;
-        min-width: 82px;
-        flex: 0 1 96px;
+        height: 30px;
+        width: auto;
+        min-width: 56px;
+        max-width: 88px;
+        flex: 0 1 auto;
         border: none;
         background: transparent;
-        color: var(--b3-theme-on-surface);
-        font-size: 13px;
+        color: var(--b3-theme-on-surface-light);
+        font-size: 14px;
+        font-weight: 600;
         outline: none;
-        padding: 0 8px;
+        padding: 0 16px 0 0;
         cursor: pointer;
     }
 
@@ -18421,20 +18686,59 @@
     .ai-sidebar__model-control {
         display: flex;
         align-items: center;
-        min-width: 180px;
+        min-width: 128px;
         max-width: 100%;
-        flex: 1 1 220px;
+        flex: 0 1 auto;
 
         :global(.multi-model-selector) {
             min-width: 0;
             width: 100%;
         }
 
+        :global(.multi-model-selector__button),
         :global(.model-selector__button) {
             width: 100%;
-            min-height: 34px;
-            border-radius: 8px;
-            font-size: 13px;
+            min-height: 30px;
+            padding: 0;
+            border: none;
+            background: transparent;
+            border-radius: 0;
+            color: var(--b3-theme-on-surface);
+            font-size: 14px;
+            font-weight: 600;
+            gap: 8px;
+            box-shadow: none;
+        }
+
+        :global(.multi-model-selector__label),
+        :global(.model-selector__current) {
+            min-width: 0;
+            max-width: clamp(92px, 24vw, 180px);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        :global(.multi-model-selector__button:hover),
+        :global(.model-selector__button:hover) {
+            background: transparent;
+            color: var(--b3-theme-primary);
+        }
+
+        :global(.multi-model-selector__button::after),
+        :global(.model-selector__button::after) {
+            content: '⌄';
+            margin-left: 4px;
+            color: var(--b3-theme-on-surface-light);
+            font-size: 12px;
+            line-height: 1;
+        }
+
+        :global(.multi-model-selector__button > .b3-button__icon),
+        :global(.model-selector__button > .b3-button__icon) {
+            width: 18px;
+            height: 18px;
+            color: var(--b3-theme-on-surface-light);
         }
     }
 
@@ -18442,14 +18746,21 @@
     .ai-sidebar__chat-input-box {
         display: flex;
         flex-direction: column;
-        border: 1px solid var(--b3-border-color);
-        border-radius: 14px;
+        border: 1px solid rgba(120, 120, 120, 0.42);
+        border-radius: 18px;
         background: var(--b3-theme-background);
-        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        box-shadow:
+            0 1px 2px rgba(0, 0, 0, 0.08),
+            0 10px 24px rgba(0, 0, 0, 0.04);
+        transition:
+            border-color 0.2s ease,
+            box-shadow 0.2s ease;
         overflow: hidden;
         &:focus-within {
-            border-color: var(--b3-theme-primary-light);
-            box-shadow: 0 0 0 3px rgba($primary, 0.08);
+            border-color: rgba(120, 120, 120, 0.58);
+            box-shadow:
+                0 1px 2px rgba(0, 0, 0, 0.1),
+                0 12px 28px rgba(0, 0, 0, 0.06);
         }
     }
 
@@ -18457,14 +18768,13 @@
         flex: 1;
         resize: none;
         border: none;
-        padding: 14px 16px;
-        padding-bottom: 8px;
+        padding: 18px 22px 8px;
         font-family: var(--b3-font-family);
-        font-size: 14px;
+        font-size: 16px;
         line-height: 1.6;
         background: transparent;
         color: var(--b3-theme-on-background);
-        min-height: 60px;
+        min-height: 82px;
         max-height: 200px;
         overflow-y: auto;
         outline: none;
@@ -18477,7 +18787,7 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 8px 12px;
+        padding: 10px 14px 14px 20px;
         border-top: 1px solid transparent;
     }
 
@@ -18505,8 +18815,8 @@
         cursor: pointer;
         transition: all 0.2s ease;
         .b3-button__icon {
-            width: 15px;
-            height: 15px;
+            width: 18px;
+            height: 18px;
         }
         &:hover {
             background: var(--b3-theme-surface);
@@ -18539,14 +18849,14 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 36px;
-        min-width: 36px;
-        max-width: 36px;
-        height: 36px;
-        flex: 0 0 36px;
+        width: 42px;
+        min-width: 42px;
+        max-width: 42px;
+        height: 42px;
+        flex: 0 0 42px;
         border: none;
-        border-radius: 50%;
-        background: $primary;
+        border-radius: 8px;
+        background: #9E9E9E;
         color: #fff;
         cursor: pointer;
         transition: all 0.2s ease;
@@ -18556,8 +18866,8 @@
             height: 16px;
         }
         &:hover:not(:disabled) {
-            background: $primary-dark;
-            transform: scale(1.05);
+            background: #858585;
+            transform: none;
         }
         &:disabled {
             opacity: 0.4;
@@ -18577,17 +18887,20 @@
 
     // Override old input styles for compatibility
     .ai-sidebar__input-container {
-        gap: 8px;
-        padding: 12px 14px;
+        gap: 0;
+        padding: 14px 18px 12px;
     }
 
     @container (max-width: 430px) {
         .ai-sidebar__header {
-            padding: 8px 10px;
+            padding: 8px 10px 8px 0;
+            justify-content: flex-start;
         }
 
         .ai-sidebar__brand {
             min-width: 0;
+            margin-left: 0;
+            margin-right: auto;
         }
 
         .ai-sidebar__brand-icon {
@@ -18611,53 +18924,52 @@
         }
 
         .ai-sidebar__input-container {
-            padding: 10px;
+            padding: 12px 14px 10px;
         }
 
         .ai-sidebar__composer-controls {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 6px;
+            display: flex;
+            gap: 12px;
+            padding: 6px 18px 0;
+            overflow-x: auto;
         }
 
         .ai-sidebar__model-control {
-            width: 100%;
+            width: auto;
             min-width: 0;
         }
 
         .ai-sidebar__mode-toggle {
-            width: 142px;
-            flex-basis: 142px;
-            justify-self: start;
+            width: auto;
+            flex-basis: auto;
         }
 
         .ai-sidebar__thinking-control {
-            width: min(172px, 100%);
-            min-width: 142px;
-            max-width: 172px;
-            justify-self: start;
+            width: auto;
+            min-width: 0;
+            max-width: 140px;
         }
 
         .ai-sidebar__thinking-chip {
-            width: 52px;
-            min-width: 52px;
-            flex: 0 0 52px;
+            width: auto;
+            min-width: 0;
+            flex: 0 0 auto;
         }
 
         .ai-sidebar__thinking-select {
-            flex: 0 1 96px;
-            min-width: 78px;
+            flex: 0 1 auto;
+            min-width: 52px;
         }
 
         .ai-sidebar__chat-textarea {
-            min-height: 72px;
-            padding: 12px;
+            min-height: 82px;
+            padding: 16px 18px 8px;
         }
 
         .ai-sidebar__chat-input-toolbar {
             align-items: flex-end;
             gap: 8px;
-            padding: 8px;
+            padding: 8px 10px 12px 16px;
         }
 
         .ai-sidebar__chat-input-tools {

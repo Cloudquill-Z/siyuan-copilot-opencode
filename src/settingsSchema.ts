@@ -2,6 +2,7 @@ import { DEFAULT_AI_SYSTEM_PROMPT, getDefaultSettings } from "./defaultSettings"
 
 const LEGACY_DEFAULT_AI_SYSTEM_PROMPTS = new Set([
     '你是一个思源笔记操作小助手。具体思源笔记操作前加载 siyuan-mcp-sisyphus 这个 skill，搜索思源笔记可看 siyuan-search-query，编写思源笔记内容可看 siyuan-markup-guide。请基于以上技能提供思源笔记相关的帮助。',
+    '你是一个思源笔记操作小助手。具体siyuan笔记前操作前加载 siyuan-mcp-sisyphus 这个 skill,搜索思源笔记可看siyuan-search-query，编写思源笔记内容可看siyuan-markup-guide',
 ]);
 
 function isPlainObject(value: unknown): value is Record<string, any> {

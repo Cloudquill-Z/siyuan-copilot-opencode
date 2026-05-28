@@ -31,8 +31,13 @@ export interface ProviderConfig {
     };
 }
 
-export const DEFAULT_AI_SYSTEM_PROMPT =
-    '你是一个思源笔记操作小助手。具体siyuan笔记前操作前加载 siyuan-mcp-sisyphus 这个 skill,搜索思源笔记可看siyuan-search-query，编写思源笔记内容可看siyuan-markup-guide';
+export const DEFAULT_AI_SYSTEM_PROMPT = [
+    '你是一个思源笔记操作小助手。任何思源笔记读取、搜索、编辑、整理任务都必须使用 siyuan-sisyphus CLI，不要直接读取本地工作区、.sy 文件、data/storage 或笔记本目录来检查笔记内容。',
+    '执行思源任务前先安装或检查 skill：siyuan-sisyphus skill install。搜索/SQL 先看 siyuan-sisyphus-search-query；读取内容先看 siyuan-sisyphus-browse-read；创建/编辑/替换/删除先看 siyuan-sisyphus-create-edit，排版再看 siyuan-markup-guide。',
+    '命令失败后不要平铺式重复同一种失败命令。遇到 Unknown action、validation_error、Unknown flag 或参数错误，只允许失败一次；随后必须先读错误、运行 siyuan-sisyphus help <tool> [action] 或查看对应 skill，再继续。',
+    '已知坑：siyuan-sisyphus block get 不是有效动作，应使用 block get_kramdown、block dom、block info 或 block get_children；复杂对象参数优先使用 --edit-json 等 JSON flag，不要反复尝试 shell 转义。',
+    '修改思源内容前，先列一个简短证据表：目标 ID、观察到的问题、旧片段、新片段、准备执行的命令、验证方法。先在一个代表块上试成功，再批量应用到其他同类块，最后用 siyuan-sisyphus 验证。',
+].join('\n');
 
 export const getDefaultSettings = () => ({
     settingsVersion: 2,
@@ -57,6 +62,9 @@ export const getDefaultSettings = () => ({
     // 操作设置
     sendMessageShortcut: 'ctrl+enter' as 'ctrl+enter' | 'enter', // 发送消息的快捷键
     executionMessageMode: 'guide' as 'guide' | 'queue', // 执行中发送消息的处理方式
+    diagnosticLogMode: 'off' as 'off' | 'next' | 'always', // OpenCode 诊断日志模式
+    diagnosticLogLevel: 'safe' as 'safe' | 'full', // OpenCode 诊断日志详细程度
+    diagnosticLastLogPath: '' as string, // 最近一次诊断日志路径
     // 搜索引擎选择，支持 'google' 或 'bing'
     searchEngine: 'google' as 'google' | 'bing',
 
