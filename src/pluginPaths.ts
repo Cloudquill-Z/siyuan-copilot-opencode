@@ -7,6 +7,10 @@ export const PETAL_DIR = `/data/storage/petal/${PLUGIN_ID}`;
 export const ASSET_DIR = `${PETAL_DIR}/assets`;
 export const SESSION_DIR = `${PETAL_DIR}/sessions`;
 export const WEBAPP_ICON_DIR = `${PETAL_DIR}/webappIcon`;
+export const OPENCODE_WORKSPACE_DIR = `${PETAL_DIR}/opencode-workspace`;
+export const OPENCODE_WORKSPACE_OPENCODE_DIR = `${OPENCODE_WORKSPACE_DIR}/.opencode`;
+export const OPENCODE_WORKSPACE_AGENTS_PATH = `${OPENCODE_WORKSPACE_DIR}/AGENTS.md`;
+export const OPENCODE_WORKSPACE_CONFIG_PATH = `${OPENCODE_WORKSPACE_DIR}/opencode.json`;
 
 export function getPluginDataPath(fileName: string): string {
     return `${PETAL_DIR}/${fileName}`;

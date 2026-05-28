@@ -30,6 +30,7 @@ import { getModelCapabilities } from "./utils/modelCapabilities";
 import { matchHotKey, getCustomHotKey } from "./utils/hotkey";
 import {
     ASSET_DIR,
+    OPENCODE_WORKSPACE_DIR,
     WEBAPP_ICON_DIR,
     getPluginDataPath,
     getPluginFileBlob,
@@ -1978,19 +1979,18 @@ export default class PluginSample extends Plugin {
 
     private getOpenCodeWorkingDir(): string {
         try {
-            const nodeRequire = typeof window !== 'undefined' ? (window as any).require : null;
-            const os = nodeRequire?.('os');
-            const homeDir = typeof os?.homedir === 'function' ? os.homedir() : '';
-            const cwd = typeof process !== 'undefined' && typeof process.cwd === 'function'
-                ? process.cwd()
-                : '';
-            if (!cwd || /\\Program Files\\SiYuan$/i.test(cwd) || /\/Applications\/SiYuan\.app/i.test(cwd)) {
-                return homeDir || cwd || '.';
+            const workspaceDir = (window as any)?.siyuan?.config?.system?.workspaceDir || '';
+            if (workspaceDir) {
+                return `${workspaceDir.replace(/[\\/]+$/, '')}${OPENCODE_WORKSPACE_DIR}`;
             }
-            return cwd;
         } catch {
-            return '.';
+            // Fall through to the process-local fallback below.
         }
+
+        const cwd = typeof process !== 'undefined' && typeof process.cwd === 'function'
+            ? process.cwd()
+            : '.';
+        return `${cwd.replace(/[\\/]+$/, '')}/opencode-workspace`;
     }
 
     private async initOpenCodeServer(settingsOverride?: any) {
