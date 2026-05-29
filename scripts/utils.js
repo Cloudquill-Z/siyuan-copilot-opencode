@@ -136,10 +136,13 @@ export function getThisPluginName() {
     return name;
 }
 
-export function copyDirectory(srcDir, dstDir) {
+export function copyDirectory(srcDir, dstDir, options = {}) {
+    const quiet = !!options.quiet;
     if (!fs.existsSync(dstDir)) {
         fs.mkdirSync(dstDir);
-        log(`Created directory ${dstDir}`);
+        if (!quiet) {
+            log(`Created directory ${dstDir}`);
+        }
     }
 
     fs.readdirSync(srcDir, { withFileTypes: true }).forEach((file) => {
@@ -147,14 +150,66 @@ export function copyDirectory(srcDir, dstDir) {
         const dst = path.join(dstDir, file.name);
 
         if (file.isDirectory()) {
-            copyDirectory(src, dst);
+            copyDirectory(src, dst, options);
         } else {
             fs.copyFileSync(src, dst);
         }
     });
-    log(`All files copied!`);
+    if (!quiet) {
+        log(`All files copied!`);
+    }
 }
 
+export function syncDirectoryAtomic(srcDir, dstDir) {
+    const parentDir = path.dirname(dstDir);
+    const targetName = path.basename(dstDir);
+    const suffix = `${process.pid}-${Date.now()}`;
+    const stagingDir = path.join(parentDir, `.${targetName}.staging-${suffix}`);
+    const backupDir = path.join(parentDir, `.${targetName}.previous-${suffix}`);
+
+    if (!fs.existsSync(parentDir)) {
+        fs.mkdirSync(parentDir, { recursive: true });
+    }
+
+    if (fs.existsSync(stagingDir)) {
+        fs.rmSync(stagingDir, { recursive: true, force: true });
+    }
+    if (fs.existsSync(backupDir)) {
+        fs.rmSync(backupDir, { recursive: true, force: true });
+    }
+
+    copyDirectory(srcDir, stagingDir, { quiet: true });
+
+    try {
+        if (!fs.existsSync(dstDir)) {
+            fs.renameSync(stagingDir, dstDir);
+            return;
+        }
+
+        if (fs.lstatSync(dstDir).isSymbolicLink()) {
+            fs.rmSync(stagingDir, { recursive: true, force: true });
+            copyDirectory(srcDir, dstDir);
+            return;
+        }
+
+        fs.renameSync(dstDir, backupDir);
+        try {
+            fs.renameSync(stagingDir, dstDir);
+        } catch (error) {
+            if (!fs.existsSync(dstDir) && fs.existsSync(backupDir)) {
+                fs.renameSync(backupDir, dstDir);
+            }
+            throw error;
+        }
+    } finally {
+        if (fs.existsSync(stagingDir)) {
+            fs.rmSync(stagingDir, { recursive: true, force: true });
+        }
+        if (fs.existsSync(backupDir)) {
+            fs.rmSync(backupDir, { recursive: true, force: true });
+        }
+    }
+}
 
 export function makeSymbolicLink(srcPath, targetPath) {
     if (!fs.existsSync(targetPath)) {

@@ -98,6 +98,8 @@ export default class PluginSample extends Plugin {
     private openMenuLinkBindThis = this.openMenuLink.bind(this);
     private linkClickHandler: ((e: MouseEvent) => void) | null = null;
     private domainIconMap: Map<string, string> = new Map(); // 缓存域名与图标文件名的映射
+    private openCodeInitRunId = 0;
+    private isUnloaded = true;
 
     /**
      * 加载 WebView 历史记录
@@ -455,13 +457,16 @@ export default class PluginSample extends Plugin {
         // 插件被启用时会自动调用这个函数
         // 设置i18n插件实例
         clearPendingOpenCodeStop();
+        this.isUnloaded = false;
+        const openCodeInitRunId = ++this.openCodeInitRunId;
         setPluginInstance(this);
 
         // Load settings before auto-starting OpenCode so custom serverUrl/port is honored.
         const settings = await this.loadSettings();
+        if (!this.isOpenCodeInitCurrent(openCodeInitRunId)) return;
 
         // Auto-start OpenCode serve if not running
-        this.initOpenCodeServer(settings);
+        this.initOpenCodeServer(settings, openCodeInitRunId);
 
         // 注册文档树右键菜单
         this.eventBus.on("open-menu-doctree", this.openMenuDoctreeBindThis);
@@ -473,6 +478,7 @@ export default class PluginSample extends Plugin {
 
         // 加载历史记录
         this.webViewHistory = await this.loadWebViewHistory();
+        if (!this.isOpenCodeInitCurrent(openCodeInitRunId)) return;
 
         // 加载设置
         this.addIcons(`
@@ -1994,9 +2000,15 @@ export default class PluginSample extends Plugin {
         return `${cwd.replace(/[\\/]+$/, '')}/opencode-workspace`;
     }
 
-    private async initOpenCodeServer(settingsOverride?: any) {
+    private isOpenCodeInitCurrent(runId: number): boolean {
+        return !this.isUnloaded && this.openCodeInitRunId === runId;
+    }
+
+    private async initOpenCodeServer(settingsOverride?: any, runId = this.openCodeInitRunId) {
         try {
             const settings = settingsOverride || await getSettings();
+            if (!this.isOpenCodeInitCurrent(runId)) return;
+
             const serverUrl = settings?.aiProviders?.opencode?.serverUrl || 'http://localhost:4096';
             const url = new URL(serverUrl);
             const port = parseInt(url.port) || 4096;
@@ -2007,15 +2019,19 @@ export default class PluginSample extends Plugin {
             } catch (err) {
                 console.warn('[OpenCode] Failed to prepare managed workspace:', err);
             }
+            if (!this.isOpenCodeInitCurrent(runId)) return;
 
             const available = await ensureServerRunning({
                 port,
                 hostname,
                 workingDir: this.getOpenCodeWorkingDir(),
             });
+            if (!this.isOpenCodeInitCurrent(runId)) return;
 
             if (!available.success) {
                 const cliCheck = await detectOpenCodeCLI();
+                if (!this.isOpenCodeInitCurrent(runId)) return;
+
                 if (!cliCheck.found) {
                     pushErrMsg(t('aiSidebar.errors.opencodeNotFound') || 'OpenCode CLI not found. Please install it from https://opencode.ai');
                 } else {
@@ -2033,6 +2049,8 @@ export default class PluginSample extends Plugin {
 
     onunload() {
         //当插件被禁用的时候，会自动调用这个函数
+        this.isUnloaded = true;
+        this.openCodeInitRunId++;
         this.eventBus.off("open-menu-doctree", this.openMenuDoctreeBindThis);
         this.eventBus.off("click-editortitleicon", this.clickEditorTitleIconBindThis);
         this.eventBus.off("open-menu-link", this.openMenuLinkBindThis);

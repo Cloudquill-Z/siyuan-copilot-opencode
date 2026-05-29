@@ -7,8 +7,7 @@
  * @Description  : Copy plugin files to SiYuan plugins directory instead of creating symbolic links
  */
 import fs from 'fs';
-import path from 'path';
-import { log, error, getSiYuanDir, chooseTarget, getThisPluginName, copyDirectory } from './utils.js';
+import { log, error, getSiYuanDir, chooseTarget, getThisPluginName, syncDirectoryAtomic } from './utils.js';
 
 let targetDir = process.env?.SIYUAN_PLUGIN_DIR || '';
 
@@ -57,19 +56,19 @@ if (name === null) {
 const targetPath = `${targetDir}/${name}`;
 
 /**
- * 4. Create target directory if it doesn't exist
+ * 4. Prepare target directory path
  */
-log(`>>> Ensuring target directory exists: ${targetPath}`);
+log(`>>> Preparing target directory: ${targetPath}`);
 if (!fs.existsSync(targetPath)) {
-    fs.mkdirSync(targetPath, { recursive: true });
-    log(`Created directory: ${targetPath}`);
+    log(`Target directory does not exist yet; it will be created during sync`);
 } else {
-    log(`Target directory already exists, will update files incrementally`);
+    log(`Target directory already exists; it will be swapped after staging files`);
 }
 
 /**
- * 5. Copy/update all contents from dev directory to target directory
- * This will only update changed files instead of deleting everything
+ * 5. Stage all contents, then swap the target directory in one step.
+ * Updating the live SiYuan plugin directory file-by-file can trigger repeated
+ * unload/load cycles while index.js or index.css is only partially updated.
  */
-copyDirectory(devDir, targetPath);
+syncDirectoryAtomic(devDir, targetPath);
 log(`>>> Successfully synchronized all files to SiYuan plugins directory!`);
