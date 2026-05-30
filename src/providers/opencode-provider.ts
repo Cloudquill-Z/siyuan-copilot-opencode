@@ -1,10 +1,17 @@
 import { OPENCODE_SESSION_TITLE } from "../pluginNamespace";
 import type { DiagnosticLogger } from "../diagnostic-logger";
 import {
+    mergeOpenCodeModelLists,
+    parseOpenCodeModelListOutput,
+    type OpenCodeModelInfo,
+} from "./opencode-models";
+import {
     createRealtimeCompletionWatcher,
     type RealtimeCompletionWatcher,
     type RealtimeSessionStatus,
 } from "./realtime-completion-watcher";
+
+export type { OpenCodeModelInfo } from "./opencode-models";
 
 export interface OpenCodeProviderConfig {
     serverUrl: string;
@@ -46,15 +53,8 @@ export interface OpenCodeChatOptions {
     diagnosticLogger?: DiagnosticLogger;
 }
 
-export interface OpenCodeModelInfo {
-    id: string;
-    name: string;
-    providerID?: string;
-    enableThinking?: boolean;
-    reasoningEffort?: 'low' | 'medium' | 'high' | 'max' | 'auto';
-}
-
 const DEFAULT_SERVER_URL = 'http://localhost:4096';
+const OPENCODE_ZEN_PROVIDER_ID = 'opencode';
 const IDLE_TIMEOUT_MS = 300_000;
 const SESSION_STATUS_POLL_INTERVAL_MS = 5_000;
 
@@ -66,6 +66,69 @@ function debugOpenCode(...args: any[]) {
     if (OPENCODE_DEBUG_LOGS) {
         console.debug(...args);
     }
+}
+
+function getNodeModule(moduleName: string): any {
+    try {
+        if (typeof window !== 'undefined' && (window as any).require) {
+            return (window as any).require(moduleName);
+        }
+        if (typeof globalThis !== 'undefined' && (globalThis as any).require) {
+            return (globalThis as any).require(moduleName);
+        }
+    } catch {
+        // Node APIs are optional here; browser-only environments simply skip CLI supplementation.
+    }
+    return null;
+}
+
+function getOpenCodeCliEnv(): Record<string, string> {
+    const env: Record<string, string> =
+        typeof process !== 'undefined' && process.env
+            ? Object.fromEntries(
+                  Object.entries(process.env).filter(([, value]) => value !== undefined && value !== null) as [string, string][]
+              )
+            : {};
+
+    const isWin = typeof process !== 'undefined' && process.platform === 'win32';
+    if (isWin) return env;
+
+    const home = env.HOME || '';
+    const extraPaths = [
+        ...(home ? [`${home}/.opencode/bin`] : []),
+        '/usr/local/bin',
+        '/opt/homebrew/bin',
+        ...(home ? [`${home}/.local/bin`, `${home}/bin`] : []),
+    ].filter(Boolean);
+    const existingPath = env.PATH || '';
+    return { ...env, PATH: [...extraPaths, existingPath].filter(Boolean).join(':') };
+}
+
+async function fetchOpenCodeCliModels(providerID: string): Promise<OpenCodeModelInfo[]> {
+    const childProcess = getNodeModule('child_process');
+    if (!childProcess?.execFile) {
+        return [];
+    }
+
+    return new Promise((resolve) => {
+        childProcess.execFile(
+            'opencode',
+            ['models', providerID],
+            {
+                env: getOpenCodeCliEnv(),
+                timeout: 5_000,
+                windowsHide: true,
+            },
+            (error: Error | null, stdout: string) => {
+                if (error) {
+                    debugOpenCode('[OpenCode] CLI model supplementation skipped:', error.message);
+                    resolve([]);
+                    return;
+                }
+                resolve(parseOpenCodeModelListOutput(stdout, providerID));
+            }
+        );
+    });
 }
 
 function logDiagnostic(logger: DiagnosticLogger | undefined, event: string, data?: unknown) {
@@ -1166,8 +1229,11 @@ export async function fetchOpenCodeModels(config: OpenCodeProviderConfig): Promi
             }
         }
 
-        modelCache.set(serverUrl, { models, timestamp: Date.now() });
-        return models;
+        const cliModels = await fetchOpenCodeCliModels(OPENCODE_ZEN_PROVIDER_ID);
+        const mergedModels = mergeOpenCodeModelLists(models, cliModels);
+
+        modelCache.set(serverUrl, { models: mergedModels, timestamp: Date.now() });
+        return mergedModels;
     } catch (error) {
         const err = error as Error;
         if (err.name === 'AbortError') {
