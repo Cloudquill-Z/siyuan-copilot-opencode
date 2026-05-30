@@ -73,9 +73,6 @@
         appendTokenUsageRecord,
         createTokenUsageRecord,
         formatTokenCount,
-        normalizeTokenUsageRecords,
-        summarizeTokenUsage,
-        type TokenUsageRecord,
     } from './utils/tokenUsage';
     import type { TaskSession } from './task-types';
     // Agent 模式工具使用强制规则（统一常量）
@@ -654,9 +651,33 @@
     let currentImageSrc = '';
     let currentImageName = '';
 
+    function inferContextLimitFromModelId(modelId: string): number | undefined {
+        const id = (modelId || '').toLowerCase();
+        if (!id) return undefined;
+        if (id.includes('1m') || id.includes('1000k')) return 1_000_000;
+        if (id.includes('gemini-1.5-pro') || id.includes('gemini-2.5')) return 1_000_000;
+        if (id.includes('claude-3') || id.includes('claude-sonnet') || id.includes('claude-opus')) {
+            return 200_000;
+        }
+        if (id.includes('gpt-4.1') || id.includes('gpt-5') || id.includes('o4') || id.includes('o3')) {
+            return 128_000;
+        }
+        if (id.includes('qwen') || id.includes('deepseek') || id.includes('kimi') || id.includes('glm')) {
+            return 128_000;
+        }
+        return undefined;
+    }
+
     function getCurrentContextLimit(): number | undefined {
         const modelConfig = getCurrentModelConfig();
-        const limit = Number(modelConfig?.maxTokens || 0);
+        const limit = Number(
+            modelConfig?.contextLimit ||
+                modelConfig?.limit?.context ||
+                modelConfig?.limits?.context ||
+                modelConfig?.contextWindow ||
+                modelConfig?.context_length ||
+                0
+        );
         return limit > 0 ? limit : undefined;
     }
 
@@ -689,14 +710,6 @@
         return messageTokens + draftTokens + contextTokens + attachmentTokens;
     }
 
-    function getTokenUsageRecords(): TokenUsageRecord[] {
-        return normalizeTokenUsageRecords(settings.pluginData?.tokenUsageRecords);
-    }
-
-    function getRecentTokenSummary() {
-        return summarizeTokenUsage(getTokenUsageRecords().slice(0, 12));
-    }
-
     async function recordTokenUsage(
         requestMessages: Message[],
         outputText: string,
@@ -710,7 +723,7 @@
                 provider,
                 modelId: modelConfig?.id || currentModelId || '',
                 modelName: modelConfig?.name || modelConfig?.id || currentModelId || 'OpenCode',
-                contextLimit: getCurrentContextLimit(),
+                contextLimit: currentContextLimit,
             });
             settings.pluginData = {
                 ...(settings.pluginData || {}),
@@ -726,11 +739,11 @@
     }
 
     $: currentContextTokens = estimateCurrentContextTokens();
-    $: currentContextLimit = getCurrentContextLimit();
+    $: currentContextLimit =
+        getCurrentContextLimit() || inferContextLimitFromModelId(currentModelId);
     $: currentContextPercent = currentContextLimit
         ? Math.min(100, Math.round((currentContextTokens / currentContextLimit) * 100))
         : 0;
-    $: recentTokenSummary = getRecentTokenSummary();
 
     // 消息内容显示缓存（存储每个消息的显示内容，键为content的哈希）
     const messageDisplayCache = new Map<string, { loading: boolean; content: string }>();
@@ -14189,11 +14202,12 @@
                         type="button"
                         class="ai-sidebar__token-pill"
                         class:ai-sidebar__token-pill--warn={currentContextPercent >= 80}
+                        style={`--token-percent: ${currentContextPercent};`}
                         on:click={() => (isTokenDetailsOpen = !isTokenDetailsOpen)}
                         title="Token 使用详情"
                     >
-                        <span class="ai-sidebar__token-dot" aria-hidden="true"></span>
-                        <span>{formatTokenCount(currentContextTokens)}</span>
+                        <span class="ai-sidebar__token-ring" aria-hidden="true"></span>
+                        <span>{currentContextLimit ? `${currentContextPercent}%` : formatTokenCount(currentContextTokens)}</span>
                     </button>
                     {#if isTokenDetailsOpen}
                         <div class="ai-sidebar__token-popover">
@@ -14215,11 +14229,7 @@
                                 ></div>
                             </div>
                             <div class="ai-sidebar__token-row">
-                                <span>当前估算</span>
-                                <strong>{formatTokenCount(currentContextTokens)}</strong>
-                            </div>
-                            <div class="ai-sidebar__token-row">
-                                <span>模型上限</span>
+                                <span>上下文上限</span>
                                 <strong>
                                     {currentContextLimit
                                         ? formatTokenCount(currentContextLimit)
@@ -14227,15 +14237,12 @@
                                 </strong>
                             </div>
                             <div class="ai-sidebar__token-row">
-                                <span>近 12 次</span>
-                                <strong>{formatTokenCount(recentTokenSummary.totalTokens)}</strong>
+                                <span>当前使用百分比</span>
+                                <strong>{currentContextLimit ? `${currentContextPercent}%` : '无法计算'}</strong>
                             </div>
                             <div class="ai-sidebar__token-row">
-                                <span>输入 / 输出</span>
-                                <strong>
-                                    {formatTokenCount(recentTokenSummary.inputTokens)} /
-                                    {formatTokenCount(recentTokenSummary.outputTokens)}
-                                </strong>
+                                <span>当前使用的上下文</span>
+                                <strong>{formatTokenCount(currentContextTokens)}</strong>
                             </div>
                         </div>
                     {/if}
@@ -19694,7 +19701,7 @@
         align-items: center;
         gap: 6px;
         height: 28px;
-        padding: 0 8px;
+        padding: 0 7px;
         border: none;
         border-radius: 999px;
         background: transparent;
@@ -19716,12 +19723,25 @@
         }
     }
 
-    .ai-sidebar__token-dot {
-        width: 7px;
-        height: 7px;
+    .ai-sidebar__token-ring {
+        position: relative;
+        width: 18px;
+        height: 18px;
         border-radius: 50%;
-        background: currentColor;
-        opacity: 0.68;
+        background:
+            conic-gradient(
+                currentColor calc(var(--token-percent, 0) * 1%),
+                color-mix(in srgb, currentColor 18%, transparent) 0
+            );
+        flex: 0 0 18px;
+    }
+
+    .ai-sidebar__token-ring::after {
+        content: '';
+        position: absolute;
+        inset: 4px;
+        border-radius: 50%;
+        background: var(--b3-theme-background);
     }
 
     .ai-sidebar__token-popover {

@@ -139,6 +139,8 @@ export interface ModelInfo {
     name: string;
     provider: string;
     providerID?: string;
+    contextLimit?: number;
+    outputLimit?: number;
     enableThinking?: boolean;
     reasoningEffort?: ThinkingEffort;
 }
@@ -187,6 +189,8 @@ export async function fetchModels(
         name: model.name,
         provider: 'OpenCode',
         providerID: model.providerID,
+        contextLimit: model.contextLimit,
+        outputLimit: model.outputLimit,
         enableThinking: model.enableThinking,
         reasoningEffort: model.reasoningEffort
     }));

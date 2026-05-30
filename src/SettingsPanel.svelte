@@ -112,6 +112,9 @@
                         return {
                             ...existing,
                             name: m.name,
+                            contextLimit: m.contextLimit || existing.contextLimit,
+                            outputLimit: m.outputLimit || existing.outputLimit,
+                            maxTokens: m.outputLimit || existing.maxTokens,
                             capabilities: Object.keys(capabilities).length > 0 ? capabilities : undefined,
                         };
                     }
@@ -119,7 +122,9 @@
                         id: m.id,
                         name: m.name,
                         temperature: 0.7,
-                        maxTokens: 4096,
+                        maxTokens: m.outputLimit || 4096,
+                        contextLimit: m.contextLimit,
+                        outputLimit: m.outputLimit,
                         capabilities: Object.keys(capabilities).length > 0 ? capabilities : undefined,
                         hidden: false,
                     };

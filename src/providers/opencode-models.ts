@@ -2,6 +2,8 @@ export interface OpenCodeModelInfo {
     id: string;
     name: string;
     providerID?: string;
+    contextLimit?: number;
+    outputLimit?: number;
     enableThinking?: boolean;
     reasoningEffort?: 'low' | 'medium' | 'high' | 'max' | 'auto';
 }

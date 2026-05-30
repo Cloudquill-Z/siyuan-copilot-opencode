@@ -1204,6 +1204,25 @@ export async function fetchOpenCodeModels(config: OpenCodeProviderConfig): Promi
                 name: modelInfo?.name || modelInfo?.displayName || modelId,
                 providerID: providerID || undefined
             };
+            const contextLimit = Number(
+                modelInfo?.limit?.context ??
+                    modelInfo?.limits?.context ??
+                    modelInfo?.contextLimit ??
+                    modelInfo?.context_length ??
+                    modelInfo?.contextWindow
+            );
+            const outputLimit = Number(
+                modelInfo?.limit?.output ??
+                    modelInfo?.limits?.output ??
+                    modelInfo?.outputLimit ??
+                    modelInfo?.maxTokens
+            );
+            if (Number.isFinite(contextLimit) && contextLimit > 0) {
+                m.contextLimit = contextLimit;
+            }
+            if (Number.isFinite(outputLimit) && outputLimit > 0) {
+                m.outputLimit = outputLimit;
+            }
             if (typeof modelInfo?.enableThinking === 'boolean') {
                 m.enableThinking = modelInfo.enableThinking;
             }

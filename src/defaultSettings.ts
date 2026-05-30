@@ -5,6 +5,8 @@ export interface ModelConfig {
     name: string;
     temperature: number;
     maxTokens: number;
+    contextLimit?: number;
+    outputLimit?: number;
     customBody?: string;
     capabilities?: {
         thinking?: boolean;
