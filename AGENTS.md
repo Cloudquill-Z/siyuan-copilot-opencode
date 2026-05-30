@@ -71,6 +71,10 @@ src/utils/                        — i18n, hotkey, assets, modelCapabilities, w
 - **Svelte config** suppresses `a11y-click-events-have-key-events`, `a11y-no-static-element-interactions`, and `a11y-no-noninteractive-element-interactions` warnings
 - **Auto-install**: `npm run build` automatically installs to the SiYuan plugins directory after bundling. Set the `SIYUAN_PLUGIN_DIR` environment variable (e.g. `/Users/lance/Documents/Siyuan/data/plugins`) to target a fixed path; if unset and SiYuan is not running, the install step is skipped without failing the build.
 
+## Git commit convention
+
+- 每次完成修改并验证后，都执行一次 Git commit；提交标题和提交摘要使用中文，简洁说明本次修改内容与验证结果。
+
 ## OpenCode provider API
 
 ```
