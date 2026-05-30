@@ -61,6 +61,24 @@ export function getContextLimitForDisplay(options: {
     return undefined;
 }
 
+export function getContextLimitForActiveModels(options: {
+    modelConfig?: any;
+    selectedModelConfigs?: any[];
+    enableMultiModel?: boolean;
+    chatMode?: ChatMode;
+}): number | undefined {
+    if (options.enableMultiModel && options.chatMode === 'plan') {
+        const limits = (options.selectedModelConfigs || [])
+            .map(modelConfig => getContextLimitForDisplay({ modelConfig }))
+            .filter((limit): limit is number => Number.isFinite(limit) && limit > 0);
+        if (limits.length > 0) {
+            return Math.min(...limits);
+        }
+    }
+
+    return getContextLimitForDisplay({ modelConfig: options.modelConfig });
+}
+
 export function shouldToggleChatModeFromKeydown(e: Pick<
     KeyboardEvent,
     'key' | 'defaultPrevented' | 'altKey' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'isComposing'

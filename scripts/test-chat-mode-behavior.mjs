@@ -15,6 +15,7 @@ const {
     getChatModeLabel,
     getChatModeDescription,
     getChatModeSystemInstruction,
+    getContextLimitForActiveModels,
     getContextLimitForDisplay,
     getOpenCodeAgentForChatMode,
     shouldToggleChatModeFromKeydown,
@@ -50,6 +51,29 @@ assert.equal(
         modelConfig: { limit: { context: 12345 } },
     }),
     12345
+);
+assert.equal(
+    getContextLimitForActiveModels({
+        enableMultiModel: true,
+        chatMode: 'plan',
+        modelConfig: undefined,
+        selectedModelConfigs: [
+            { contextLimit: 1000000 },
+            { limit: { context: 200000 } },
+        ],
+    }),
+    200000,
+    'multi-model context display should use the smallest selected model context limit'
+);
+assert.equal(
+    getContextLimitForActiveModels({
+        enableMultiModel: true,
+        chatMode: 'build',
+        modelConfig: { contextLimit: 300000 },
+        selectedModelConfigs: [{ contextLimit: 1000000 }],
+    }),
+    300000,
+    'build mode should still use the current single model limit'
 );
 assert.equal(shouldToggleChatModeFromKeydown(tabEvent()), true, 'plain Tab toggles chat mode');
 assert.equal(shouldToggleChatModeFromKeydown(tabEvent({ shiftKey: true })), false, 'Shift+Tab no longer toggles');

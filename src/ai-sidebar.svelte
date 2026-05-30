@@ -79,7 +79,7 @@
         getChatModeDescription,
         getChatModeLabel,
         getChatModeSystemInstruction,
-        getContextLimitForDisplay,
+        getContextLimitForActiveModels,
         shouldToggleChatModeFromKeydown,
         type ChatMode,
     } from './utils/chatMode';
@@ -676,10 +676,18 @@
     }
 
     function getCurrentContextLimit(): number | undefined {
-        return getContextLimitForDisplay({
+        const selectedModelConfigs =
+            enableMultiModel && chatMode === 'plan'
+                ? selectedMultiModels
+                      .map(model => getProviderAndModelConfig(model.provider, model.modelId)?.modelConfig)
+                      .filter(Boolean)
+                : [];
+
+        return getContextLimitForActiveModels({
             modelConfig: getCurrentModelConfig(),
-            currentModelId,
-            currentProvider,
+            selectedModelConfigs,
+            enableMultiModel,
+            chatMode,
         });
     }
 
