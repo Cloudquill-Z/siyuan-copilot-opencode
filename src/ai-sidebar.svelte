@@ -66,6 +66,7 @@
     import { confirm, Constants, platformUtils } from 'siyuan';
     import { t } from './utils/i18n';
     import { getModelCapabilities } from './utils/modelCapabilities';
+    import { shouldSendMessageFromKeydown } from './utils/sendShortcut';
     // Agent 模式工具使用强制规则（统一常量）
     // STUBS: ./tools deleted, safe no-op replacements
     const AVAILABLE_TOOLS: any[] = [];
@@ -115,6 +116,7 @@
 
     let messages: Message[] = [];
     let currentInput = '';
+    let isInputComposing = false;
     let isLoading = false;
     let streamingMessage = '';
     let streamingThinkingCollapsed = true;
@@ -5342,42 +5344,18 @@
 
         const sendMode = settings.sendMessageShortcut || 'ctrl+enter';
 
-        if (sendMode === 'ctrl+enter') {
-            if (e.key === 'Enter' && e.ctrlKey) {
-                e.preventDefault();
-                if (showCommandPalette && getFilteredCommands().length > 0) {
-                    applyCommand(getFilteredCommands()[commandPaletteIndex].name);
-                    return;
-                }
-                if (isLoading) {
-                    if (currentInput.trim()) {
-                        sendMessageDuringExecution();
-                    } else {
-                        abortMessage();
-                    }
+        if (shouldSendMessageFromKeydown(e, sendMode, undefined, isInputComposing)) {
+            e.preventDefault();
+            if (isLoading) {
+                if (currentInput.trim()) {
+                    sendMessageDuringExecution();
                 } else {
-                    sendMessage();
+                    abortMessage();
                 }
-                return;
+            } else {
+                sendMessage();
             }
-        } else {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                if (showCommandPalette && getFilteredCommands().length > 0) {
-                    applyCommand(getFilteredCommands()[commandPaletteIndex].name);
-                    return;
-                }
-                if (isLoading) {
-                    if (currentInput.trim()) {
-                        sendMessageDuringExecution();
-                    } else {
-                        abortMessage();
-                    }
-                } else {
-                    sendMessage();
-                }
-                return;
-            }
+            return;
         }
     }
 
@@ -13575,6 +13553,8 @@
                 bind:this={textareaElement}
                 bind:value={currentInput}
                 on:keydown={handleKeydown}
+                on:compositionstart={() => (isInputComposing = true)}
+                on:compositionend={() => (isInputComposing = false)}
                 on:input={handleInput}
                 on:paste={handlePaste}
                 placeholder={t('aiSidebar.input.placeholder')}

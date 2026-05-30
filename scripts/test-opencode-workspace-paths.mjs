@@ -11,7 +11,7 @@ function extractExportedConst(name) {
 
 assert.equal(
     extractExportedConst("OPENCODE_WORKSPACE_DIR"),
-    "`${PETAL_DIR}/opencode-workspace`"
+    "`${RUNTIME_DIR}/opencode-workspace`"
 );
 assert.equal(
     extractExportedConst("OPENCODE_WORKSPACE_OPENCODE_DIR"),

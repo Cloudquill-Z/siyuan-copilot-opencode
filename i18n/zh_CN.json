@@ -67,7 +67,7 @@
             "title": "发送消息快捷键",
             "description": "选择发送消息的快捷键方式",
             "options": {
-                "ctrlEnter": "Ctrl + Enter发送，Enter换行",
+                "ctrlEnter": "Command + Enter（Mac）/ Ctrl + Enter（Windows）发送，Enter换行",
                 "enter": "Enter发送，Shift + Enter换行"
             }
         },

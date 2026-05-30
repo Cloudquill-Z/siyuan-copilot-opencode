@@ -67,7 +67,7 @@
             "title": "Send Message Shortcut",
             "description": "Choose the shortcut key method for sending messages",
             "options": {
-                "ctrlEnter": "Ctrl + Enter to send, Enter to line break",
+                "ctrlEnter": "Command + Enter on Mac / Ctrl + Enter on Windows to send, Enter to line break",
                 "enter": "Enter to send, Shift + Enter to line break"
             }
         },

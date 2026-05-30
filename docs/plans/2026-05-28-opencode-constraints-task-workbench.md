@@ -19,6 +19,14 @@
 - There are no dedicated test/typecheck scripts in this repo. Use focused Node scripts where useful and `npm run build` as the main verification command.
 - After code changes, run `graphify update .` as required by project instructions.
 
+## 2026-05-30 Review Amendments
+
+- Treat the current codebase as the execution baseline. Managed workspace files and Sisyphus-first intelligence constraints already exist; do not reapply older plan snippets that would move the workspace back under `PETAL_DIR`.
+- Use `RUNTIME_DIR` (`/data/storage/siyuan-copilot-opencode`) for plugin runtime data, including `opencode-workspace`. `PETAL_DIR` remains only for legacy plugin-data compatibility helpers.
+- Before each task, run the focused script that covers that task. If an existing script fails because the plan is stale, update the script/plan first, then continue.
+- Split Phase 1 and Phase 2 into separate execution batches. Phase 1 is constraint and workspace hardening; Phase 2 is a larger task-workbench refactor and should not be mixed with unrelated keyboard/UI fixes.
+- Keep commits in the plan as release checkpoints, not mandatory commands for every local execution pass unless the operator explicitly wants commits.
+
 ## Phase 1 - OpenCode Intelligence and Boundary Constraints
 
 ### Task 1: Add Managed Workspace Path Helpers
@@ -33,11 +41,13 @@
 The plugin needs a stable workspace root under plugin data:
 
 ```ts
-export const OPENCODE_WORKSPACE_DIR = `${PETAL_DIR}/opencode-workspace`;
+export const OPENCODE_WORKSPACE_DIR = `${RUNTIME_DIR}/opencode-workspace`;
 export const OPENCODE_WORKSPACE_OPENCODE_DIR = `${OPENCODE_WORKSPACE_DIR}/.opencode`;
 export const OPENCODE_WORKSPACE_AGENTS_PATH = `${OPENCODE_WORKSPACE_DIR}/AGENTS.md`;
 export const OPENCODE_WORKSPACE_CONFIG_PATH = `${OPENCODE_WORKSPACE_DIR}/opencode.json`;
 ```
+
+Review update: use `RUNTIME_DIR`, not `PETAL_DIR`, for `OPENCODE_WORKSPACE_DIR` in the current codebase.
 
 **Step 2: Write a small path verification script**
 
@@ -47,9 +57,9 @@ Create `scripts/test-opencode-workspace-paths.mjs` that imports or mirrors the c
 import assert from "node:assert/strict";
 
 const pluginId = "siyuan-copilot-opencode";
-const petalDir = `/data/storage/petal/${pluginId}`;
-assert.equal(`${petalDir}/opencode-workspace`, "/data/storage/petal/siyuan-copilot-opencode/opencode-workspace");
-assert.equal(`${petalDir}/opencode-workspace/.opencode`, "/data/storage/petal/siyuan-copilot-opencode/opencode-workspace/.opencode");
+const runtimeDir = `/data/storage/${pluginId}`;
+assert.equal(`${runtimeDir}/opencode-workspace`, "/data/storage/siyuan-copilot-opencode/opencode-workspace");
+assert.equal(`${runtimeDir}/opencode-workspace/.opencode`, "/data/storage/siyuan-copilot-opencode/opencode-workspace/.opencode");
 ```
 
 Run:
