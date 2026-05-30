@@ -31,12 +31,16 @@ import { getModelCapabilities } from "./utils/modelCapabilities";
 import { matchHotKey, getCustomHotKey } from "./utils/hotkey";
 import {
     ASSET_DIR,
+    CHAT_SESSIONS_PATH,
     OPENCODE_WORKSPACE_DIR,
+    WEBVIEW_HISTORY_PATH,
     WEBAPP_ICON_DIR,
     getPluginDataPath,
     getPluginFileBlob,
     getSessionPath,
-    getWebAppIconPath
+    getWebAppIconPath,
+    loadJsonFile,
+    saveJsonFile
 } from "./pluginPaths";
 import {
     AI_SIDEBAR_TYPE,
@@ -106,7 +110,11 @@ export default class PluginSample extends Plugin {
      */
     private async loadWebViewHistory(): Promise<WebViewHistory[]> {
         try {
-            const history = await this.loadData(WEBVIEW_HISTORY_FILE);
+            const history = await loadJsonFile<WebViewHistory[] | null>(WEBVIEW_HISTORY_PATH, null);
+            if (Array.isArray(history)) return history;
+
+            const legacyHistory = await this.loadData(WEBVIEW_HISTORY_FILE);
+            if (Array.isArray(legacyHistory)) return legacyHistory;
             return Array.isArray(history) ? history : [];
         } catch (e) {
             console.error('Failed to load webview history:', e);
@@ -125,7 +133,7 @@ export default class PluginSample extends Plugin {
                     .sort((a, b) => b.timestamp - a.timestamp)
                     .slice(0, MAX_HISTORY_COUNT);
             }
-            await this.saveData(WEBVIEW_HISTORY_FILE, this.webViewHistory);
+            await saveJsonFile(WEBVIEW_HISTORY_PATH, this.webViewHistory);
         } catch (e) {
             console.error('Failed to save webview history:', e);
         }
@@ -1687,6 +1695,9 @@ export default class PluginSample extends Plugin {
     }
 
     async onLayoutReady() {
+        const layoutRunId = this.openCodeInitRunId;
+        if (!this.isOpenCodeInitCurrent(layoutRunId)) return;
+
         // 注册主要图标（在 addDock 之前确保图标已就绪）
         this.addIcons(`
     <symbol id="${MAIN_ICON_ID}" viewBox="0 0 24 24">
@@ -1725,6 +1736,8 @@ export default class PluginSample extends Plugin {
         // 这里直接再次调用 loadSettings() 以获取合并后的设置（包含默认的内置 webApps）
         try {
             const settings = await this.loadSettings();
+            if (!this.isOpenCodeInitCurrent(layoutRunId)) return;
+
             if (settings?.webApps && Array.isArray(settings.webApps)) {
                 for (const app of settings.webApps) {
                     if (app.icon && app.icon.startsWith('data:image')) {
@@ -1738,6 +1751,8 @@ export default class PluginSample extends Plugin {
             try {
                 // 读取 webappIcon 目录下的所有图标
                 const files = await readDir(WEBAPP_ICON_DIR);
+                if (!this.isOpenCodeInitCurrent(layoutRunId)) return;
+
                 if (files && Array.isArray(files)) {
                     for (const file of files) {
                         if (file.isDir) continue;
@@ -1753,6 +1768,7 @@ export default class PluginSample extends Plugin {
 
                             // 异步加载并注册，不阻塞主流程
                             getFileBlob(getWebAppIconPath(file.name)).then(async (blob) => {
+                                if (!this.isOpenCodeInitCurrent(layoutRunId)) return;
                                 if (blob) {
                                     // 对于图片文件，转换为 dataURL
                                     try {
@@ -1776,6 +1792,7 @@ export default class PluginSample extends Plugin {
                     // ignore
                 }
             }
+            if (!this.isOpenCodeInitCurrent(layoutRunId)) return;
 
             // 监听链接点击事件（仅在启用时）
             this.syncLinkClickListener(!!settings?.openLinksInWebView);
@@ -2379,7 +2396,13 @@ export default class PluginSample extends Plugin {
     async migrateSessions(settings: any) {
 
         // 加载会话数据
-        const data = await this.loadData('chat-sessions.json');
+        let data = await loadJsonFile<{ sessions?: any[] } | null>(CHAT_SESSIONS_PATH, null);
+        if (!data) {
+            data = await this.loadData('chat-sessions.json');
+            if (data?.sessions) {
+                await saveJsonFile(CHAT_SESSIONS_PATH, data);
+            }
+        }
         const sessions = data?.sessions || [];
 
         // 如果没有会话数据或已迁移过，直接返回
@@ -2486,7 +2509,7 @@ export default class PluginSample extends Plugin {
                         (s.messages ? s.messages.filter((m: any) => m.role !== 'system').length : 0),
                 };
             });
-            await this.saveData('chat-sessions.json', { sessions: metadata });
+            await saveJsonFile(CHAT_SESSIONS_PATH, { sessions: metadata });
             console.log(`Successfully migrated ${migratedCount} sessions.`);
 
             // 更新配置中的迁移标志

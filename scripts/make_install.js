@@ -8,7 +8,7 @@
  */
 // make_install.js
 import fs from 'fs';
-import { log, error, getSiYuanDir, chooseTarget, copyDirectory, getThisPluginName } from './utils.js';
+import { log, error, getSiYuanDir, chooseTarget, syncDirectoryAtomic, getThisPluginName } from './utils.js';
 
 let targetDir = '';
 
@@ -52,6 +52,6 @@ if (name === null) {
 const targetPath = `${targetDir}/${name}`;
 
 /**
- * 4. Copy the compiled plugin code to the target directory
+ * 4. Stage the compiled plugin code, then swap the target directory in one step
  */
-copyDirectory(distDir, targetPath);
+syncDirectoryAtomic(distDir, targetPath);

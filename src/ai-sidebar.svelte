@@ -35,9 +35,13 @@
     } from './api';
     import { saveAsset, loadAsset, base64ToBlob, readAssetAsText, revokeLoadedAssetUrls } from './utils/assets';
     import {
+        CHAT_SESSIONS_PATH,
+        getLegacySessionPath,
         getPluginFileBlob,
         getSessionPath,
         isPluginAssetPath,
+        loadJsonFile,
+        saveJsonFile,
     } from './pluginPaths';
     import {
         createDiagnosticLogger,
@@ -7268,7 +7272,13 @@
     // 会话管理函数
     async function loadSessions() {
         try {
-            const data = await plugin.loadData('chat-sessions.json');
+            let data = await loadJsonFile<{ sessions?: ChatSession[] } | null>(CHAT_SESSIONS_PATH, null);
+            if (!data) {
+                data = await plugin.loadData('chat-sessions.json');
+                if (data?.sessions) {
+                    await saveJsonFile(CHAT_SESSIONS_PATH, data);
+                }
+            }
             sessions = data?.sessions || [];
             // 会话迁移已在 index.ts 的 loadSettings 中统一处理
         } catch (error) {
@@ -7290,7 +7300,7 @@
                         (s.messages ? s.messages.filter(m => m.role !== 'system').length : 0),
                 };
             });
-            await plugin.saveData('chat-sessions.json', { sessions: metadata });
+            await saveJsonFile(CHAT_SESSIONS_PATH, { sessions: metadata });
         } catch (error) {
             console.error('Save sessions error:', error);
             pushErrMsg(t('aiSidebar.errors.saveSessionFailed'));
@@ -7510,7 +7520,9 @@
                 // 或者继续使用 loadData 但它是相对的。
                 // 如果我们用 putFile 存了，我们也应该用对应的 read 方式。
                 const path = getSessionPath(sessionId);
-                const blob = await getPluginFileBlob(path);
+                const blob =
+                    await getPluginFileBlob(path) ||
+                    await getPluginFileBlob(getLegacySessionPath(sessionId));
                 if (!blob) throw new Error('File not found');
                 const text = await blob.text();
                 const sessionData = JSON.parse(text);
@@ -7882,7 +7894,9 @@
         try {
             // 加载会话消息
             const path = getSessionPath(sessionId);
-            const blob = await getPluginFileBlob(path);
+            const blob =
+                await getPluginFileBlob(path) ||
+                await getPluginFileBlob(getLegacySessionPath(sessionId));
             if (!blob) {
                 pushErrMsg('会话文件不存在');
                 return;
