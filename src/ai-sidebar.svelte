@@ -611,6 +611,7 @@
     let messageFontSize = 12;
     let multiModelViewMode: 'tab' | 'card' = 'tab'; // 多模型回答样式
     let isTokenDetailsOpen = false;
+    let lastPreparedContextTokens = 0;
 
     // 模型临时设置
     let tempModelSettings = {
@@ -741,9 +742,15 @@
     $: currentContextTokens = estimateCurrentContextTokens();
     $: currentContextLimit =
         getCurrentContextLimit() || inferContextLimitFromModelId(currentModelId);
-    $: currentContextPercent = currentContextLimit
-        ? Math.min(100, Math.round((currentContextTokens / currentContextLimit) * 100))
+    $: displayedContextTokens = Math.max(
+        currentContextTokens,
+        isLoading ? lastPreparedContextTokens : 0
+    );
+    $: displayedContextPercent = currentContextLimit
+        ? Math.min(100, Math.round((displayedContextTokens / currentContextLimit) * 100))
         : 0;
+    $: isContextCompactionLikely =
+        !!currentContextLimit && isLoading && displayedContextTokens >= currentContextLimit * 0.95;
 
     // 消息内容显示缓存（存储每个消息的显示内容，键为content的哈希）
     const messageDisplayCache = new Map<string, { loading: boolean; content: string }>();
@@ -1041,6 +1048,7 @@
             ),
             modelConfig.id
         );
+        lastPreparedContextTokens = calculateTotalTokens(messagesToSend);
 
         // 本次请求的 AbortController（用于单个模型的中断）
         const localAbort = new AbortController();
@@ -1378,6 +1386,7 @@
             !!(modelConfig.capabilities?.thinking && (modelConfig.thinkingEnabled || false)),
             modelConfig.id
         );
+        lastPreparedContextTokens = calculateTotalTokens(messagesToSend);
 
         const localAbort = new AbortController();
 
@@ -2103,7 +2112,8 @@
         if (settings.aiProviders?.opencode) {
             const existingModels = settings.aiProviders.opencode.models || [];
             const needsCleanup = existingModels.length > 100;
-            const needsFetch = existingModels.length === 0 || needsCleanup;
+            const needsContextLimit = existingModels.some((model: any) => !model.contextLimit);
+            const needsFetch = existingModels.length === 0 || needsCleanup || needsContextLimit;
             if (needsFetch) {
                 try {
                     const providerConfig = settings.aiProviders.opencode;
@@ -2125,6 +2135,9 @@
                                 return {
                                     ...existing,
                                     name: m.name,
+                                    contextLimit: m.contextLimit || existing.contextLimit,
+                                    outputLimit: m.outputLimit || existing.outputLimit,
+                                    maxTokens: m.outputLimit || existing.maxTokens,
                                     capabilities: Object.keys(capabilities).length > 0 ? capabilities : existing.capabilities,
                                 };
                             }
@@ -2133,7 +2146,9 @@
                                 id: m.id,
                                 name: m.name,
                                 temperature: 0.7,
-                                maxTokens: 4096,
+                                maxTokens: m.outputLimit || 4096,
+                                contextLimit: m.contextLimit,
+                                outputLimit: m.outputLimit,
                                 capabilities: Object.keys(capabilities).length > 0 ? capabilities : undefined,
                                 thinkingEnabled: m.enableThinking ?? false,
                                 thinkingEffort: m.reasoningEffort ?? 'low',
@@ -2814,7 +2829,14 @@
         if (!providerConfig || !currentModelId) {
             return null;
         }
-        return providerConfig.models.find((m: any) => m.id === currentModelId);
+        const currentShortId = currentModelId.includes('/')
+            ? currentModelId.split('/').pop()
+            : currentModelId;
+        return providerConfig.models.find((m: any) => {
+            const modelShortId =
+                typeof m.id === 'string' && m.id.includes('/') ? m.id.split('/').pop() : m.id;
+            return m.id === currentModelId || modelShortId === currentShortId;
+        });
     }
 
     // 思考模式状态（响应式）
@@ -3490,6 +3512,7 @@
             lastUserMessage.content as string,
             lastUserMessage
         );
+        lastPreparedContextTokens = calculateTotalTokens(messagesToSend);
 
         // 过滤掉无效的模型并初始化多模型响应数组
         const validModels = selectedMultiModels.filter(model => {
@@ -4854,6 +4877,7 @@
             enableThinking,
             modelConfig.id
         );
+        lastPreparedContextTokens = calculateTotalTokens(messagesToSend);
 
         // 创建新的 AbortController
         setController(currentSessionId, new AbortController());
@@ -5151,6 +5175,7 @@
                                     enableThinking,
                                     modelConfig.id
                                 );
+                                lastPreparedContextTokens = calculateTotalTokens(messagesToSend);
 
                                 // 通知工具执行完成
                                 toolExecutionComplete?.();
@@ -12779,6 +12804,13 @@
                     <span class="ai-message__role">🤖 {getCurrentAssistantDisplayName()}</span>
                 </div>
 
+                {#if isContextCompactionLikely}
+                    <div class="ai-message__context-compaction">
+                        <span class="ai-message__context-compaction-dot"></span>
+                        <span>上下文接近上限，OpenCode 可能正在压缩上下文</span>
+                    </div>
+                {/if}
+
                 {#if openCodeTimeline.length > 0}
                     {@const streamingTimelineKey = 'opencode-timeline-streaming'}
                     {@const streamingTimelineItems = groupOpenCodeTimeline(openCodeTimeline)}
@@ -14201,13 +14233,13 @@
                     <button
                         type="button"
                         class="ai-sidebar__token-pill"
-                        class:ai-sidebar__token-pill--warn={currentContextPercent >= 80}
-                        style={`--token-percent: ${currentContextPercent};`}
+                        class:ai-sidebar__token-pill--warn={displayedContextPercent >= 80}
+                        style={`--token-percent: ${displayedContextPercent};`}
                         on:click={() => (isTokenDetailsOpen = !isTokenDetailsOpen)}
                         title="Token 使用详情"
                     >
                         <span class="ai-sidebar__token-ring" aria-hidden="true"></span>
-                        <span>{currentContextLimit ? `${currentContextPercent}%` : formatTokenCount(currentContextTokens)}</span>
+                        <span>{currentContextLimit ? `${displayedContextPercent}%` : formatTokenCount(displayedContextTokens)}</span>
                     </button>
                     {#if isTokenDetailsOpen}
                         <div class="ai-sidebar__token-popover">
@@ -14225,9 +14257,14 @@
                             <div class="ai-sidebar__token-meter">
                                 <div
                                     class="ai-sidebar__token-meter-fill"
-                                    style={`width: ${currentContextLimit ? currentContextPercent : 0}%`}
+                                    style={`width: ${currentContextLimit ? displayedContextPercent : 0}%`}
                                 ></div>
                             </div>
+                            {#if isContextCompactionLikely}
+                                <div class="ai-sidebar__token-status">
+                                    正在接近上下文上限，OpenCode 可能会自动压缩上下文。
+                                </div>
+                            {/if}
                             <div class="ai-sidebar__token-row">
                                 <span>上下文上限</span>
                                 <strong>
@@ -14238,11 +14275,11 @@
                             </div>
                             <div class="ai-sidebar__token-row">
                                 <span>当前使用百分比</span>
-                                <strong>{currentContextLimit ? `${currentContextPercent}%` : '无法计算'}</strong>
+                                <strong>{currentContextLimit ? `${displayedContextPercent}%` : '无法计算'}</strong>
                             </div>
                             <div class="ai-sidebar__token-row">
                                 <span>当前使用的上下文</span>
-                                <strong>{formatTokenCount(currentContextTokens)}</strong>
+                                <strong>{formatTokenCount(displayedContextTokens)}</strong>
                             </div>
                         </div>
                     {/if}
@@ -19488,7 +19525,7 @@
         transition:
             border-color 0.2s ease,
             box-shadow 0.2s ease;
-        overflow: hidden;
+        overflow: visible;
         &:focus-within {
             border-color: rgba(120, 120, 120, 0.58);
             box-shadow:
@@ -19748,8 +19785,8 @@
         position: absolute;
         right: 0;
         bottom: calc(100% + 10px);
-        z-index: 20;
-        width: 240px;
+        z-index: 40;
+        width: min(280px, calc(100vw - 48px));
         padding: 12px;
         border: 1px solid var(--b3-border-color);
         border-radius: 8px;
@@ -19802,6 +19839,16 @@
         transition: width 0.2s ease;
     }
 
+    .ai-sidebar__token-status {
+        margin-bottom: 8px;
+        padding: 7px 8px;
+        border-radius: 6px;
+        background: var(--b3-card-warning-background);
+        color: var(--b3-card-warning-color);
+        font-size: 12px;
+        line-height: 1.45;
+    }
+
     .ai-sidebar__token-row {
         min-height: 24px;
         font-size: 12px;
@@ -19812,6 +19859,32 @@
             font-weight: 600;
             white-space: nowrap;
         }
+    }
+
+    .ai-message__context-compaction {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        width: fit-content;
+        max-width: 90%;
+        margin: 0 0 6px;
+        padding: 7px 10px;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 8px;
+        background: var(--b3-theme-surface);
+        color: var(--b3-theme-on-surface);
+        font-size: 12px;
+        line-height: 1.4;
+    }
+
+    .ai-message__context-compaction-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--b3-theme-primary);
+        box-shadow: 0 0 0 4px color-mix(in srgb, var(--b3-theme-primary) 14%, transparent);
+        animation: opencode-process-pulse 1.1s ease-in-out infinite;
+        flex: 0 0 7px;
     }
 
     .ai-sidebar__chat-input-divider {
