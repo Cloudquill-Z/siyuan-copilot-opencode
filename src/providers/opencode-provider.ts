@@ -3,6 +3,7 @@ import type { DiagnosticLogger } from "../diagnostic-logger";
 import {
     mergeOpenCodeModelLists,
     parseOpenCodeModelListOutput,
+    parseOpenCodeProviderModels,
     type OpenCodeModelInfo,
 } from "./opencode-models";
 import {
@@ -55,7 +56,6 @@ export interface OpenCodeChatOptions {
 }
 
 const DEFAULT_SERVER_URL = 'http://localhost:4096';
-const OPENCODE_ZEN_PROVIDER_ID = 'opencode';
 const IDLE_TIMEOUT_MS = 300_000;
 const SESSION_STATUS_POLL_INTERVAL_MS = 5_000;
 
@@ -105,7 +105,7 @@ function getOpenCodeCliEnv(): Record<string, string> {
     return { ...env, PATH: [...extraPaths, existingPath].filter(Boolean).join(':') };
 }
 
-async function fetchOpenCodeCliModels(providerID: string): Promise<OpenCodeModelInfo[]> {
+async function fetchOpenCodeCliModels(): Promise<OpenCodeModelInfo[]> {
     const childProcess = getNodeModule('child_process');
     if (!childProcess?.execFile) {
         return [];
@@ -114,7 +114,7 @@ async function fetchOpenCodeCliModels(providerID: string): Promise<OpenCodeModel
     return new Promise((resolve) => {
         childProcess.execFile(
             'opencode',
-            ['models', providerID],
+            ['models'],
             {
                 env: getOpenCodeCliEnv(),
                 timeout: 5_000,
@@ -126,7 +126,7 @@ async function fetchOpenCodeCliModels(providerID: string): Promise<OpenCodeModel
                     resolve([]);
                     return;
                 }
-                resolve(parseOpenCodeModelListOutput(stdout, providerID));
+                resolve(parseOpenCodeModelListOutput(stdout));
             }
         );
     });
@@ -1186,70 +1186,8 @@ export async function fetchOpenCodeModels(config: OpenCodeProviderConfig): Promi
             throw new Error(`Failed to parse models response from OpenCode${responseText ? ': ' + responseText.slice(0, 200) : ' (empty response)'}`);
         }
 
-        const connectedIds: Set<string> = new Set(data?.connected || []);
-        const allProviders: any[] = data?.all || [];
-        const providers = allProviders.filter((p: any) => {
-            const pid = p?.id || p?.providerID || p?.name || '';
-            return connectedIds.has(pid);
-        });
-        const models: OpenCodeModelInfo[] = [];
-        const seen = new Set<string>();
-
-        const addModel = (modelId: string, modelInfo: any, providerID: string) => {
-            if (!modelId) return;
-            const uniqueId = providerID ? `${providerID}/${modelId}` : modelId;
-            if (seen.has(uniqueId)) return;
-            seen.add(uniqueId);
-            const m: OpenCodeModelInfo = {
-                id: modelId,
-                name: modelInfo?.name || modelInfo?.displayName || modelId,
-                providerID: providerID || undefined
-            };
-            const contextLimit = Number(
-                modelInfo?.limit?.context ??
-                    modelInfo?.limits?.context ??
-                    modelInfo?.contextLimit ??
-                    modelInfo?.context_length ??
-                    modelInfo?.contextWindow
-            );
-            const outputLimit = Number(
-                modelInfo?.limit?.output ??
-                    modelInfo?.limits?.output ??
-                    modelInfo?.outputLimit ??
-                    modelInfo?.maxTokens
-            );
-            if (Number.isFinite(contextLimit) && contextLimit > 0) {
-                m.contextLimit = contextLimit;
-            }
-            if (Number.isFinite(outputLimit) && outputLimit > 0) {
-                m.outputLimit = outputLimit;
-            }
-            if (typeof modelInfo?.enableThinking === 'boolean') {
-                m.enableThinking = modelInfo.enableThinking;
-            }
-            if (modelInfo?.reasoningEffort && ['low', 'medium', 'high', 'max', 'auto'].includes(modelInfo.reasoningEffort)) {
-                m.reasoningEffort = modelInfo.reasoningEffort;
-            }
-            models.push(m);
-        };
-
-        for (const provider of providers) {
-            const pid = provider?.id || provider?.providerID || provider?.name || '';
-            const modelsObj = provider?.models;
-
-            if (modelsObj && typeof modelsObj === 'object' && !Array.isArray(modelsObj)) {
-                for (const [modelId, modelInfo] of Object.entries(modelsObj)) {
-                    addModel(modelId, modelInfo as any, pid);
-                }
-            } else if (Array.isArray(modelsObj)) {
-                for (const model of modelsObj) {
-                    const mid = model?.id || model?.modelID;
-                    if (mid) addModel(mid, model, pid);
-                }
-            }
-        }
-
-        const cliModels = await fetchOpenCodeCliModels(OPENCODE_ZEN_PROVIDER_ID);
+        const models = parseOpenCodeProviderModels(data);
+        const cliModels = await fetchOpenCodeCliModels();
         const mergedModels = mergeOpenCodeModelLists(models, cliModels);
 
         modelCache.set(serverUrl, { models: mergedModels, timestamp: Date.now() });

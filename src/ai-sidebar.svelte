@@ -70,6 +70,7 @@
     import { t } from './utils/i18n';
     import { getModelCapabilities } from './utils/modelCapabilities';
     import { shouldSendMessageFromKeydown } from './utils/sendShortcut';
+    import { shouldRefreshOpenCodeModelCatalog } from './providers/opencode-models';
     import {
         getChatModeDescription,
         getChatModeLabel,
@@ -2158,9 +2159,7 @@
         // Auto-fetch OpenCode models on startup (merge with existing settings)
         if (settings.aiProviders?.opencode) {
             const existingModels = settings.aiProviders.opencode.models || [];
-            const needsCleanup = existingModels.length > 100;
-            const needsContextLimit = existingModels.some((model: any) => !model.contextLimit);
-            const needsFetch = existingModels.length === 0 || needsCleanup || needsContextLimit;
+            const needsFetch = shouldRefreshOpenCodeModelCatalog(existingModels);
             if (needsFetch) {
                 try {
                     const providerConfig = settings.aiProviders.opencode;

@@ -46,7 +46,7 @@ export function formatModelNameFromId(modelId: string): string {
 
 export function parseOpenCodeModelListOutput(
     output: string,
-    providerID: string = 'opencode'
+    providerID?: string
 ): OpenCodeModelInfo[] {
     const models: OpenCodeModelInfo[] = [];
     const seen = new Set<string>();
@@ -60,7 +60,7 @@ export function parseOpenCodeModelListOutput(
 
         const provider = line.slice(0, slashIndex);
         const modelId = line.slice(slashIndex + 1).trim();
-        if (provider !== providerID || !modelId) continue;
+        if ((providerID && provider !== providerID) || !modelId) continue;
 
         const uniqueId = `${provider}/${modelId}`;
         if (seen.has(uniqueId)) continue;
@@ -71,6 +71,93 @@ export function parseOpenCodeModelListOutput(
             name: formatModelNameFromId(modelId),
             providerID: provider,
         });
+    }
+
+    return models;
+}
+
+function getProviderId(provider: any): string {
+    return String(provider?.id || provider?.providerID || provider?.name || '').trim();
+}
+
+function readLimitNumber(...values: any[]): number | undefined {
+    for (const value of values) {
+        const num = Number(value);
+        if (Number.isFinite(num) && num > 0) {
+            return num;
+        }
+    }
+    return undefined;
+}
+
+function normalizeModelInfo(modelId: string, modelInfo: any, providerID: string): OpenCodeModelInfo | null {
+    if (!modelId) return null;
+    const contextLimit = readLimitNumber(
+        modelInfo?.limit?.context,
+        modelInfo?.limits?.context,
+        modelInfo?.contextLimit,
+        modelInfo?.context_length,
+        modelInfo?.contextWindow
+    );
+    const outputLimit = readLimitNumber(
+        modelInfo?.limit?.output,
+        modelInfo?.limits?.output,
+        modelInfo?.outputLimit,
+        modelInfo?.maxTokens
+    );
+    const model: OpenCodeModelInfo = {
+        id: modelId,
+        name: modelInfo?.name || modelInfo?.displayName || formatModelNameFromId(modelId),
+        providerID: providerID || undefined,
+    };
+    if (contextLimit) model.contextLimit = contextLimit;
+    if (outputLimit) model.outputLimit = outputLimit;
+    if (typeof modelInfo?.enableThinking === 'boolean') {
+        model.enableThinking = modelInfo.enableThinking;
+    }
+    if (
+        modelInfo?.reasoningEffort &&
+        ['low', 'medium', 'high', 'max', 'auto'].includes(modelInfo.reasoningEffort)
+    ) {
+        model.reasoningEffort = modelInfo.reasoningEffort;
+    }
+    return model;
+}
+
+export function parseOpenCodeProviderModels(data: any): OpenCodeModelInfo[] {
+    const providerSource = data?.all ?? data?.providers ?? [];
+    const providers = Array.isArray(providerSource)
+        ? providerSource
+        : Object.entries(providerSource || {}).map(([id, provider]: [string, any]) => ({
+              id,
+              ...(provider || {}),
+          }));
+    const models: OpenCodeModelInfo[] = [];
+    const seen = new Set<string>();
+
+    const addModel = (modelId: string, modelInfo: any, providerID: string) => {
+        const model = normalizeModelInfo(modelId, modelInfo, providerID);
+        if (!model) return;
+        const key = `${model.providerID || ''}/${model.id}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        models.push(model);
+    };
+
+    for (const provider of providers) {
+        const providerID = getProviderId(provider);
+        if (!providerID) continue;
+        const modelsObj = provider?.models;
+        if (modelsObj && typeof modelsObj === 'object' && !Array.isArray(modelsObj)) {
+            for (const [modelId, modelInfo] of Object.entries(modelsObj)) {
+                addModel(modelId, modelInfo, providerID);
+            }
+        } else if (Array.isArray(modelsObj)) {
+            for (const modelInfo of modelsObj) {
+                const modelId = modelInfo?.id || modelInfo?.modelID || modelInfo?.name;
+                addModel(modelId, modelInfo, providerID);
+            }
+        }
     }
 
     return models;
@@ -93,4 +180,10 @@ export function mergeOpenCodeModelLists(
     }
 
     return merged;
+}
+
+export function shouldRefreshOpenCodeModelCatalog(models: Array<{ contextLimit?: number }> = []): boolean {
+    if (models.length === 0) return true;
+    if (models.length < 100) return true;
+    return models.some(model => !model.contextLimit);
 }

@@ -42,30 +42,6 @@ export function getOpenCodeAgentForChatMode(mode?: ChatMode): OpenCodeAgentMode 
     return mode === 'build' ? 'build' : 'plan';
 }
 
-export function inferContextLimitFromModelId(modelId = ''): number | undefined {
-    const id = modelId.toLowerCase();
-    if (!id) return undefined;
-    if (id.includes('gemini-1.5') || id.includes('gemini-2') || id.includes('gemini-3')) {
-        return 1_000_000;
-    }
-    if (id.includes('claude-3-5') || id.includes('claude-3.5') || id.includes('claude-sonnet-4')) {
-        return 200_000;
-    }
-    if (id.includes('claude-3') || id.includes('claude-opus-4')) {
-        return 200_000;
-    }
-    if (id.includes('gpt-4.1') || id.includes('gpt-5') || id.includes('o4') || id.includes('o3')) {
-        return 128_000;
-    }
-    if (id.includes('qwen') || id.includes('deepseek') || id.includes('kimi') || id.includes('glm')) {
-        return 128_000;
-    }
-    if (id.includes('mimo')) return 1_000_000;
-    if (id.includes('big-pickle') || id.includes('pickle')) return 200_000;
-    if (id.includes('nemotron')) return 204_800;
-    return undefined;
-}
-
 export function getContextLimitForDisplay(options: {
     modelConfig?: any;
     currentModelId?: string;
@@ -81,15 +57,6 @@ export function getContextLimitForDisplay(options: {
     );
     if (Number.isFinite(limit) && limit > 0) {
         return limit;
-    }
-
-    const inferred = inferContextLimitFromModelId(
-        options.currentModelId || options.modelConfig?.id || ''
-    );
-    if (inferred) return inferred;
-
-    if (!options.currentProvider || options.currentProvider === 'opencode') {
-        return 200_000;
     }
     return undefined;
 }
