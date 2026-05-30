@@ -19,6 +19,7 @@ const CHAT_MODE_SYSTEM_INSTRUCTIONS: Record<ChatMode, string> = {
     ].join('\n'),
     build: [
         '当前模式：修订模式。',
+        '执行思源笔记修订前先安装或检查 skill：siyuan-sisyphus skill install；搜索/SQL 先看 siyuan-sisyphus-search-query，读取内容先看 siyuan-sisyphus-browse-read，创建/编辑/替换/删除先看 siyuan-sisyphus-create-edit。',
         '当用户要求修订、整理、改写、替换或删除笔记内容时，可以直接修改笔记，使用 siyuan-sisyphus 执行变更。',
         '修改后在当前对话框中简洁说明修改位置、修改内容和验证结果。',
     ].join('\n'),
@@ -39,6 +40,55 @@ export function getChatModeSystemInstruction(mode: ChatMode): string {
 export function getOpenCodeAgentForChatMode(mode?: ChatMode): OpenCodeAgentMode | undefined {
     if (!mode) return undefined;
     return mode === 'build' ? 'build' : 'plan';
+}
+
+export function inferContextLimitFromModelId(modelId = ''): number | undefined {
+    const id = modelId.toLowerCase();
+    if (!id) return undefined;
+    if (id.includes('gemini-1.5') || id.includes('gemini-2') || id.includes('gemini-3')) {
+        return 1_000_000;
+    }
+    if (id.includes('claude-3-5') || id.includes('claude-3.5') || id.includes('claude-sonnet-4')) {
+        return 200_000;
+    }
+    if (id.includes('claude-3') || id.includes('claude-opus-4')) {
+        return 200_000;
+    }
+    if (id.includes('gpt-4.1') || id.includes('gpt-5') || id.includes('o4') || id.includes('o3')) {
+        return 128_000;
+    }
+    if (id.includes('qwen') || id.includes('deepseek') || id.includes('kimi') || id.includes('glm')) {
+        return 128_000;
+    }
+    if (id.includes('mimo')) return 1_000_000;
+    if (id.includes('big-pickle') || id.includes('pickle')) return 200_000;
+    if (id.includes('nemotron')) return 204_800;
+    return undefined;
+}
+
+export function getContextLimitForDisplay(options: {
+    modelConfig?: any;
+    currentModelId?: string;
+    currentProvider?: string;
+}): number | undefined {
+    const limit = Number(
+        options.modelConfig?.contextLimit ||
+            options.modelConfig?.limit?.context ||
+            options.modelConfig?.limits?.context ||
+            options.modelConfig?.contextWindow ||
+            options.modelConfig?.context_length ||
+            0
+    );
+    if (Number.isFinite(limit) && limit > 0) {
+        return limit;
+    }
+
+    const inferred = inferContextLimitFromModelId(
+        options.currentModelId || options.modelConfig?.id || ''
+    );
+    if (inferred) return inferred;
+
+    return options.currentProvider === 'opencode' ? 200_000 : undefined;
 }
 
 export function shouldToggleChatModeFromKeydown(e: Pick<

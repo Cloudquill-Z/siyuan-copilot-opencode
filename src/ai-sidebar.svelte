@@ -74,6 +74,7 @@
         getChatModeDescription,
         getChatModeLabel,
         getChatModeSystemInstruction,
+        getContextLimitForDisplay,
         shouldToggleChatModeFromKeydown,
         type ChatMode,
     } from './utils/chatMode';
@@ -689,37 +690,12 @@
         );
     }
 
-    function inferContextLimitFromModelId(modelId: string): number | undefined {
-        const id = (modelId || '').toLowerCase();
-        if (!id) return undefined;
-        if (id.includes('1m') || id.includes('1000k')) return 1_000_000;
-        if (id.includes('gemini-1.5-pro') || id.includes('gemini-2.5')) return 1_000_000;
-        if (id.includes('claude-3') || id.includes('claude-sonnet') || id.includes('claude-opus')) {
-            return 200_000;
-        }
-        if (id.includes('gpt-4.1') || id.includes('gpt-5') || id.includes('o4') || id.includes('o3')) {
-            return 128_000;
-        }
-        if (id.includes('qwen') || id.includes('deepseek') || id.includes('kimi') || id.includes('glm')) {
-            return 128_000;
-        }
-        if (id.includes('mimo')) return 1_000_000;
-        if (id.includes('big-pickle') || id.includes('pickle')) return 200_000;
-        if (id.includes('nemotron')) return 204_800;
-        return undefined;
-    }
-
     function getCurrentContextLimit(): number | undefined {
-        const modelConfig = getCurrentModelConfig();
-        const limit = Number(
-            modelConfig?.contextLimit ||
-                modelConfig?.limit?.context ||
-                modelConfig?.limits?.context ||
-                modelConfig?.contextWindow ||
-                modelConfig?.context_length ||
-                0
-        );
-        return limit > 0 ? limit : undefined;
+        return getContextLimitForDisplay({
+            modelConfig: getCurrentModelConfig(),
+            currentModelId,
+            currentProvider,
+        });
     }
 
     function estimateMessageExtraTokens(message: Message): number {
@@ -806,8 +782,7 @@
     }
 
     $: currentContextTokens = estimateCurrentContextTokens();
-    $: currentContextLimit =
-        getCurrentContextLimit() || inferContextLimitFromModelId(currentModelId);
+    $: currentContextLimit = getCurrentContextLimit();
     $: displayedContextTokens = Math.max(currentContextTokens, lastPreparedContextTokens);
     $: displayedContextPercent = currentContextLimit
         ? Math.min(100, Math.round((displayedContextTokens / currentContextLimit) * 100))
@@ -3372,7 +3347,7 @@
 
         if (!providerConfig) return null;
 
-        const modelConfig = providerConfig.models.find((m: any) => m.id === modelId);
+        const modelConfig = findModelById(providerConfig.models || [], modelId);
         return { providerConfig, modelConfig };
     }
 
@@ -11231,13 +11206,6 @@
                                 {@const processKey = `opencode-process-${messageIndex}-${msgIndex}`}
                                 {@const processCollapsed = isOpenCodeProcessCollapsed(processKey)}
 
-                                {#if finalAnswer.trim()}
-                                    {@const finalDisplay = getDisplayContent(finalAnswer)}
-                                    <div class="ai-message__content b3-typography" style={messageFontSize ? `font-size: ${messageFontSize}px;` : ''}>
-                                        {@html finalDisplay}
-                                    </div>
-                                {/if}
-
                                 {#if processTimeline.length > 0}
                                     <button
                                         type="button"
@@ -11352,6 +11320,13 @@
                                             {/each}
                                         </div>
                                     {/if}
+                                {/if}
+
+                                {#if finalAnswer.trim()}
+                                    {@const finalDisplay = getDisplayContent(finalAnswer)}
+                                    <div class="ai-message__content b3-typography" style={messageFontSize ? `font-size: ${messageFontSize}px;` : ''}>
+                                        {@html finalDisplay}
+                                    </div>
                                 {/if}
                             {/if}
 
