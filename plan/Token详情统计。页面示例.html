@@ -1,0 +1,209 @@
+import React, { useMemo, useState } from "react";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { CalendarDays, Download, RefreshCcw, Search, TrendingUp, Zap } from "lucide-react";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from "recharts";
+
+const modelStats = [
+  { model: "GPT-5.5 Thinking", calls: 128, input: 842300, output: 296500, total: 1138800, cost: "¥ 96.40", share: 42 },
+  { model: "GPT-5.4 Fast", calls: 214, input: 620800, output: 158200, total: 779000, cost: "¥ 41.80", share: 29 },
+  { model: "Claude Sonnet 4.5", calls: 76, input: 331400, output: 124900, total: 456300, cost: "¥ 53.20", share: 17 },
+  { model: "Qwen3-Coder", calls: 59, input: 182600, output: 70100, total: 252700, cost: "¥ 9.60", share: 9 },
+  { model: "Gemini 2.5 Pro", calls: 21, input: 51200, output: 24600, total: 75800, cost: "¥ 12.30", share: 3 },
+];
+
+const trendData = [
+  { day: "05-24", input: 132000, output: 51000 },
+  { day: "05-25", input: 188000, output: 72000 },
+  { day: "05-26", input: 154000, output: 66000 },
+  { day: "05-27", input: 246000, output: 91000 },
+  { day: "05-28", input: 301000, output: 104000 },
+  { day: "05-29", input: 267000, output: 83000 },
+  { day: "05-30", input: 386000, output: 134000 },
+];
+
+const pieData = modelStats.map((item) => ({ name: item.model, value: item.total }));
+const palette = ["#111827", "#4f46e5", "#0891b2", "#16a34a", "#f59e0b"];
+
+function formatToken(num) {
+  if (num >= 1000000) return `${(num / 1000000).toFixed(2)}M`;
+  if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
+  return `${num}`;
+}
+
+export default function TokenUsageDashboard() {
+  const [range, setRange] = useState("7d");
+  const [query, setQuery] = useState("");
+
+  const totals = useMemo(() => {
+    const input = modelStats.reduce((sum, item) => sum + item.input, 0);
+    const output = modelStats.reduce((sum, item) => sum + item.output, 0);
+    const calls = modelStats.reduce((sum, item) => sum + item.calls, 0);
+    return { input, output, total: input + output, calls };
+  }, []);
+
+  const filteredModels = modelStats.filter((item) => item.model.toLowerCase().includes(query.toLowerCase()));
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-950">
+      <div className="mx-auto max-w-7xl px-6 py-6">
+        <div className="mb-6 flex flex-col gap-4 rounded-3xl bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-600">
+              <Zap className="h-4 w-4" /> Token Usage Analytics
+            </div>
+            <h1 className="text-3xl font-semibold tracking-tight">Token 使用量统计</h1>
+            <p className="mt-1 text-sm text-slate-500">按时间、模型、输入/输出维度查看消耗情况。</p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2 rounded-2xl border bg-white px-3 py-2 text-sm text-slate-600">
+              <CalendarDays className="h-4 w-4" />
+              <span>2026-05-24 至 2026-05-30</span>
+            </div>
+            {["今日", "7天", "30天", "自定义"].map((label, index) => {
+              const value = ["today", "7d", "30d", "custom"][index];
+              return (
+                <Button
+                  key={value}
+                  variant={range === value ? "default" : "outline"}
+                  className="rounded-2xl"
+                  onClick={() => setRange(value)}
+                >
+                  {label}
+                </Button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="mb-6 grid gap-4 md:grid-cols-4">
+          <MetricCard title="总 Token" value={formatToken(totals.total)} desc="输入 + 输出" trend="较上期 +18.6%" />
+          <MetricCard title="输入 Token" value={formatToken(totals.input)} desc="Prompt / 上下文" trend="占比 73.2%" />
+          <MetricCard title="输出 Token" value={formatToken(totals.output)} desc="模型回复内容" trend="占比 26.8%" />
+          <MetricCard title="调用次数" value={totals.calls.toLocaleString()} desc="API / 对话请求" trend="平均 5.4K / 次" />
+        </div>
+
+        <div className="mb-6 grid gap-4 lg:grid-cols-3">
+          <Card className="rounded-3xl border-0 shadow-sm lg:col-span-2">
+            <CardContent className="p-5">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold">Token 使用趋势</h2>
+                  <p className="text-sm text-slate-500">按天展示输入和输出 token 的变化。</p>
+                </div>
+                <Button variant="outline" className="rounded-2xl"><RefreshCcw className="mr-2 h-4 w-4" />刷新</Button>
+              </div>
+              <div className="h-72">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={trendData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="day" />
+                    <YAxis tickFormatter={formatToken} />
+                    <Tooltip formatter={(value) => formatToken(value)} />
+                    <Area type="monotone" dataKey="input" name="输入 Token" stackId="1" stroke="#4f46e5" fill="#4f46e5" fillOpacity={0.18} />
+                    <Area type="monotone" dataKey="output" name="输出 Token" stackId="1" stroke="#0891b2" fill="#0891b2" fillOpacity={0.18} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-3xl border-0 shadow-sm">
+            <CardContent className="p-5">
+              <h2 className="text-lg font-semibold">模型占比</h2>
+              <p className="mb-4 text-sm text-slate-500">按总 token 计算。</p>
+              <div className="h-72">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={58} outerRadius={92} paddingAngle={3}>
+                      {pieData.map((entry, index) => <Cell key={entry.name} fill={palette[index % palette.length]} />)}
+                    </Pie>
+                    <Tooltip formatter={(value) => formatToken(value)} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <Card className="rounded-3xl border-0 shadow-sm">
+          <CardContent className="p-5">
+            <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold">按模型统计</h2>
+                <p className="text-sm text-slate-500">展示这段时间内各模型的调用次数、输入 token、输出 token 和总量。</p>
+              </div>
+              <div className="flex gap-2">
+                <div className="relative">
+                  <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                  <input
+                    className="h-10 rounded-2xl border bg-white pl-9 pr-4 text-sm outline-none focus:ring-2 focus:ring-slate-200"
+                    placeholder="搜索模型"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                  />
+                </div>
+                <Button className="rounded-2xl"><Download className="mr-2 h-4 w-4" />导出</Button>
+              </div>
+            </div>
+
+            <div className="overflow-hidden rounded-2xl border">
+              <table className="w-full border-collapse bg-white text-sm">
+                <thead className="bg-slate-100 text-left text-slate-600">
+                  <tr>
+                    <th className="px-4 py-3 font-medium">模型</th>
+                    <th className="px-4 py-3 font-medium">调用次数</th>
+                    <th className="px-4 py-3 font-medium">输入 Token</th>
+                    <th className="px-4 py-3 font-medium">输出 Token</th>
+                    <th className="px-4 py-3 font-medium">总 Token</th>
+                    <th className="px-4 py-3 font-medium">占比</th>
+                    <th className="px-4 py-3 font-medium">预估费用</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredModels.map((item) => (
+                    <tr key={item.model} className="border-t hover:bg-slate-50">
+                      <td className="px-4 py-4 font-medium">{item.model}</td>
+                      <td className="px-4 py-4">{item.calls}</td>
+                      <td className="px-4 py-4">{item.input.toLocaleString()}</td>
+                      <td className="px-4 py-4">{item.output.toLocaleString()}</td>
+                      <td className="px-4 py-4 font-semibold">{item.total.toLocaleString()}</td>
+                      <td className="px-4 py-4">
+                        <div className="flex items-center gap-2">
+                          <div className="h-2 w-24 overflow-hidden rounded-full bg-slate-100">
+                            <div className="h-full rounded-full bg-slate-900" style={{ width: `${item.share}%` }} />
+                          </div>
+                          <span>{item.share}%</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-4">{item.cost}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function MetricCard({ title, value, desc, trend }) {
+  return (
+    <Card className="rounded-3xl border-0 shadow-sm">
+      <CardContent className="p-5">
+        <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100">
+          <TrendingUp className="h-5 w-5" />
+        </div>
+        <p className="text-sm text-slate-500">{title}</p>
+        <div className="mt-1 text-3xl font-semibold tracking-tight">{value}</div>
+        <div className="mt-3 flex items-center justify-between text-sm">
+          <span className="text-slate-500">{desc}</span>
+          <span className="font-medium text-slate-700">{trend}</span>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
