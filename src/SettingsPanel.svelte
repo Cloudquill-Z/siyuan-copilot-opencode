@@ -159,6 +159,16 @@
             name: t('settings.settingsGroup.displayAndOperation'),
             items: [
                 {
+                    key: 'userName',
+                    value: settings.userName,
+                    type: 'textinput',
+                    title: t('settings.userName.title') || '用户名称',
+                    description:
+                        t('settings.userName.description') ||
+                        '设置聊天消息顶部显示的用户名称',
+                    placeholder: t('settings.userName.placeholder') || '留空显示用户',
+                },
+                {
                     key: 'sendMessageShortcut',
                     value: settings.sendMessageShortcut,
                     type: 'select',

@@ -8,20 +8,20 @@ Standalone SiYuan Note plugin (Svelte + TypeScript) that connects to a local [Op
 
 ```bash
 npm run dev            # dev build with watch → dev/; auto-copies to SiYuan after each bundle
-npm run build          # production build → dist/ + package.zip
+npm run build          # production build → dist/ + package.zip; auto-installs to SiYuan plugins dir if reachable
 npm run make-link      # create symlink from dev/ to SiYuan plugins dir (admin rights may need elevate.ps1)
 npm run make_dev_copy  # one-shot copy dev/ → SiYuan plugins dir (env SIYUAN_PLUGIN_DIR or detect)
-npm run make-install   # vite build + copy dist/ → SiYuan plugins dir
+npm run make-install   # same as `npm run build` (build now includes auto-install)
 npm run update-version # bump version in plugin.json AND package.json
 ```
 
 - `pnpm` is also used (gh_release.sh uses `pnpm run build`); `pnpm-lock.yaml` and `package-lock.json` are both gitignored
 - No test, lint, or typecheck scripts
-- `make-install` runs `vite build` directly (not `npm run build`)
 
 ## Dev copy flow
 
 - `npm run dev` bundles to `dev/`, then a Vite `writeBundle` hook auto-runs `scripts/make_dev_copy.js`
+- `npm run build` bundles to `dist/`, then auto-runs `scripts/make_install.js` to copy the production output to the SiYuan plugins dir
 - `make_dev_copy.js` has a hardcoded Windows path as fallback; set `SIYUAN_PLUGIN_DIR` env var to override, or edit the script
 - `make_dev_copy.js` does incremental copy (not full delete+recreate)
 - `elevate.ps1` re-runs any script with admin rights (needed for symlink creation)
@@ -69,6 +69,7 @@ src/utils/                        — i18n, hotkey, assets, modelCapabilities, w
 - **i18n**: JSON files in `i18n/`; the `yaml-plugin.js` Vite plugin converts `.yaml` sources to JSON at build time
 - **Settings**: Deep-merged with defaults in `src/settingsSchema.ts`. Provider config at `aiProviders.opencode` with `serverUrl` and `models`
 - **Svelte config** suppresses `a11y-click-events-have-key-events`, `a11y-no-static-element-interactions`, and `a11y-no-noninteractive-element-interactions` warnings
+- **Auto-install**: `npm run build` automatically installs to the SiYuan plugins directory after bundling. Set the `SIYUAN_PLUGIN_DIR` environment variable (e.g. `/Users/lance/Documents/Siyuan/data/plugins`) to target a fixed path; if unset and SiYuan is not running, the install step is skipped without failing the build.
 
 ## OpenCode provider API
 

@@ -60,6 +60,7 @@ export const getDefaultSettings = () => ({
     aiSystemPrompt: DEFAULT_AI_SYSTEM_PROMPT,
 
     // 操作设置
+    userName: '' as string, // 聊天消息中显示的用户名称
     sendMessageShortcut: 'ctrl+enter' as 'ctrl+enter' | 'enter', // 发送消息的快捷键
     executionMessageMode: 'guide' as 'guide' | 'queue', // 执行中发送消息的处理方式
     maxConcurrentTasks: 2 as number, // 最大并行任务数

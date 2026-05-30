@@ -61,6 +61,9 @@ export interface Message {
     tool_calls?: ToolCall[];
     tool_call_id?: string;
     name?: string;
+    provider?: string;
+    modelId?: string;
+    modelName?: string;
     reasoning_content?: string;
     toolCallThinkings?: Array<{
         toolCallIndex: number;

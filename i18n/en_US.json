@@ -71,6 +71,11 @@
                 "enter": "Enter to send, Shift + Enter to line break"
             }
         },
+        "userName": {
+            "title": "User Name",
+            "description": "Set the name shown at the top of your chat messages",
+            "placeholder": "Leave empty to show “User”"
+        },
         "executionMessageMode": {
             "title": "Send While Running",
             "description": "Choose how messages are handled while AI is running",

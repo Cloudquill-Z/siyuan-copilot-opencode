@@ -10,27 +10,30 @@
 import fs from 'fs';
 import { log, error, getSiYuanDir, chooseTarget, syncDirectoryAtomic, getThisPluginName } from './utils.js';
 
-let targetDir = '';
+let targetDir = process.env?.SIYUAN_PLUGIN_DIR || '';
 
 /**
  * 1. Get the parent directory to install the plugin
  */
-log('>>> Try to visit constant "targetDir" in make_install.js...');
-if (targetDir === '') {
-    log('>>> Constant "targetDir" is empty, try to get SiYuan directory automatically....');
+log('>>> Resolve SiYuan plugin directory...');
+if (targetDir) {
+    log(`\tGot target directory from environment variable "SIYUAN_PLUGIN_DIR": ${targetDir}`);
+} else {
+    log('>>> Environment variable "SIYUAN_PLUGIN_DIR" is not set, try to get SiYuan directory automatically....');
     let res = await getSiYuanDir();
 
-    if (res === null || res === undefined || res.length === 0) {
-        error('>>> Can not get SiYuan directory automatically');
-        process.exit(1);
+    if (!res || res.length === 0) {
+        log('>>> SiYuan not detected. Auto-install skipped.');
+        process.exit(0);
     } else {
         targetDir = await chooseTarget(res);
     }
+
     log(`>>> Successfully got target directory: ${targetDir}`);
 }
 if (!fs.existsSync(targetDir)) {
     error(`Failed! Plugin directory not exists: "${targetDir}"`);
-    error('Please set the plugin directory in scripts/make_install.js');
+    error('Please set "SIYUAN_PLUGIN_DIR" to your SiYuan plugins directory.');
     process.exit(1);
 }
 

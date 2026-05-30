@@ -3189,6 +3189,90 @@
         return provider !== 'opencode';
     }
 
+    function getUserDisplayName() {
+        const configuredName = `${settings.userName || ''}`.trim();
+        return configuredName || t('aiSidebar.messages.user') || 'User';
+    }
+
+    function getPlatformAndModelLabel(provider: string, modelId?: string, modelName?: string) {
+        const id = `${modelId || ''}`.trim();
+        const parts = id.split('/').filter(Boolean);
+        const platform =
+            parts.length > 1
+                ? parts.slice(0, -1).join('/')
+                : provider === 'opencode'
+                  ? 'OpenCode'
+                  : provider || 'OpenCode';
+        const model =
+            `${modelName || parts[parts.length - 1] || id || t('aiSidebar.messages.assistant') || 'AI'}`.trim();
+        return `${platform} / ${model}`;
+    }
+
+    function getCurrentAssistantDisplayName() {
+        const modelConfig = getCurrentModelConfig();
+        return getPlatformAndModelLabel(
+            currentProvider,
+            modelConfig?.id || currentModelId,
+            modelConfig?.name
+        );
+    }
+
+    function createAssistantMessage(
+        content: Message['content'],
+        extra: Partial<Message> = {},
+        provider = currentProvider,
+        modelConfig: any = getCurrentModelConfig()
+    ): Message {
+        const modelId = modelConfig?.id || currentModelId || '';
+        return {
+            role: 'assistant',
+            content,
+            provider,
+            modelId,
+            modelName: modelConfig?.name || modelId,
+            ...extra,
+        };
+    }
+
+    function getAssistantDisplayName(message?: Message) {
+        if (message?.multiModelResponses && message.multiModelResponses.length > 0) {
+            const selectedResponse =
+                message.multiModelResponses.find(response => response.isSelected) ||
+                message.multiModelResponses.find(response => response.content && !response.error) ||
+                message.multiModelResponses[0];
+
+            if (selectedResponse) {
+                return getPlatformAndModelLabel(
+                    selectedResponse.provider,
+                    selectedResponse.modelId,
+                    selectedResponse.modelName
+                );
+            }
+
+            return t('multiModel.responses') || t('aiSidebar.messages.assistant') || 'AI';
+        }
+
+        if (message?.modelId || message?.modelName || message?.provider) {
+            return getPlatformAndModelLabel(
+                message.provider || currentProvider,
+                message.modelId || currentModelId,
+                message.modelName
+            );
+        }
+
+        return getCurrentAssistantDisplayName();
+    }
+
+    function getGroupDisplayName(group: MessageGroup) {
+        if (group.type === 'user') {
+            return getUserDisplayName();
+        }
+
+        return getAssistantDisplayName(
+            group.messages.find(message => message.role === 'assistant')
+        );
+    }
+
     // 多模型发送消息
     async function sendMultiModelMessage() {
         // 保存用户输入和附件
@@ -4445,7 +4529,7 @@
                         .join('\n');
                     if (textParts) {
                         const converted = convertLatexToMarkdown(textParts);
-                        messages = [...messages, { role: 'assistant', content: converted }];
+                        messages = [...messages, createAssistantMessage(converted)];
                         hasUnsavedChanges = true;
                         await saveCurrentSession(true);
                     }
@@ -4455,10 +4539,10 @@
             }
         } catch (err: any) {
             pushErrMsg(`命令执行失败: ${err.message}`);
-            messages = [...messages, {
-                role: 'assistant',
-                content: `❌ 命令 /${command} 执行失败: ${err.message}`
-            }];
+            messages = [
+                ...messages,
+                createAssistantMessage(`❌ 命令 /${command} 执行失败: ${err.message}`),
+            ];
             hasUnsavedChanges = true;
         } finally {
             currentInput = '';
@@ -4793,9 +4877,7 @@
 
                                 // 如果是第一次工具调用，创建新的assistant消息
                                 if (firstToolCallMessageIndex === null) {
-                                    const assistantMessage: Message = {
-                                        role: 'assistant',
-                                        content: streamingMessage || '',
+                                    const assistantMessage = createAssistantMessage(streamingMessage || '', {
                                         tool_calls: toolCalls,
                                         toolCallThinkings: [
                                             {
@@ -4803,7 +4885,7 @@
                                                 thinkingBefore: streamingThinking || '',
                                             },
                                         ],
-                                    };
+                                    });
 
                                     // 只有在启用 thinking 模式时才添加 reasoning_content
                                     // Kimi 等模型在未启用 thinking 时看到 reasoning_content 会报错
@@ -5028,10 +5110,7 @@
                                         messages = [...messages];
                                     } else {
                                         // 如果没有工具调用，创建新的assistant消息
-                                        const assistantMessage: Message = {
-                                            role: 'assistant',
-                                            content: convertedText,
-                                        };
+                                        const assistantMessage = createAssistantMessage(convertedText);
 
                                         if (streamingThinking) {
                                             assistantMessage.thinking = streamingThinking;
@@ -5074,10 +5153,9 @@
                                     pendingDocDiffsByMessage.delete(firstToolCallMessageIndex);
                                 }
                                 if (error.message !== 'Request aborted') {
-                                    const errorMessage: Message = {
-                                        role: 'assistant',
-                                        content: `❌ **${t('aiSidebar.errors.requestFailed')}**\n\n${error.message}`,
-                                    };
+                                    const errorMessage = createAssistantMessage(
+                                        `❌ **${t('aiSidebar.errors.requestFailed')}**\n\n${error.message}`
+                                    );
                                     messages = [...messages, errorMessage];
                                     hasUnsavedChanges = true;
                                 }
@@ -5181,10 +5259,7 @@
                             // 处理content中的base64图片，保存为assets文件
                             const processedContent = await saveBase64ImagesInContent(convertedText);
 
-                            const assistantMessage: Message = {
-                                role: 'assistant',
-                                content: processedContent,
-                            };
+                            const assistantMessage = createAssistantMessage(processedContent);
                             const taskIsActive = isActiveTask(runTaskId);
                             const backgroundState = taskIsActive ? null : getStoredTaskState(runTaskId);
                             const taskStreamingThinking = backgroundState?.streamingThinking ?? streamingThinking;
@@ -5301,10 +5376,9 @@
                             // 如果是主动中断，不显示错误
                             if (error.message !== 'Request aborted') {
                                 // 将错误消息作为一条 assistant 消息添加
-                                const errorMessage: Message = {
-                                    role: 'assistant',
-                                    content: `❌ **${t('aiSidebar.errors.requestFailed')}**\n\n${error.message}`,
-                                };
+                                const errorMessage = createAssistantMessage(
+                                    `❌ **${t('aiSidebar.errors.requestFailed')}**\n\n${error.message}`
+                                );
                                 messages = [...messages, errorMessage];
                                 hasUnsavedChanges = true;
                             }
@@ -5339,10 +5413,9 @@
             } else {
                 // 如果 isLoading 还是 true，说明 onError 没有被调用
                 // 这种情况下才需要添加错误消息（比如网络请求失败）
-                const errorMessage: Message = {
-                    role: 'assistant',
-                    content: `❌ **${t('aiSidebar.errors.requestFailed')}**\n\n${(error as Error).message}`,
-                };
+                const errorMessage = createAssistantMessage(
+                    `❌ **${t('aiSidebar.errors.requestFailed')}**\n\n${(error as Error).message}`
+                );
                 messages = [...messages, errorMessage];
                 hasUnsavedChanges = true;
                 isLoading = false;
@@ -5460,10 +5533,9 @@
                 // 转换 LaTeX 数学公式格式为 Markdown 格式
                 const convertedMessage = convertLatexToMarkdown(tempStreamingMessage);
 
-                const message: Message = {
-                    role: 'assistant',
-                    content: convertedMessage + '\n\n' + t('aiSidebar.messages.interrupted'),
-                };
+                const message = createAssistantMessage(
+                    convertedMessage + '\n\n' + t('aiSidebar.messages.interrupted')
+                );
                 if (tempStreamingThinking) {
                     message.thinking = tempStreamingThinking;
                 }
@@ -5492,7 +5564,10 @@
         const markdown = messages
             .filter(msg => msg.role !== 'system')
             .map(msg => {
-                const role = msg.role === 'user' ? '👤 **User**' : '🤖 **Assistant**';
+                const role =
+                    msg.role === 'user'
+                        ? `👤 **${getUserDisplayName()}**`
+                        : `🤖 **${getAssistantDisplayName(msg)}**`;
                 // 获取实际内容（包括多模型响应）
                 const content = getActualMessageContent(msg);
                 return `${role}\n\n${content}\n`;
@@ -10011,9 +10086,7 @@
 
                                 // 如果是第一次工具调用，创建新的assistant消息
                                 if (firstToolCallMessageIndex === null) {
-                                    const assistantMessage: Message = {
-                                        role: 'assistant',
-                                        content: streamingMessage || '',
+                                    const assistantMessage = createAssistantMessage(streamingMessage || '', {
                                         tool_calls: toolCalls,
                                         toolCallThinkings: [
                                             {
@@ -10021,7 +10094,7 @@
                                                 thinkingBefore: streamingThinking || '',
                                             },
                                         ],
-                                    };
+                                    });
 
                                     // 只有在启用 thinking 模式时才添加 reasoning_content
                                     // Kimi 等模型在未启用 thinking 时看到 reasoning_content 会报错
@@ -10329,10 +10402,7 @@
                                         messages = [...messages];
                                     } else {
                                         // 如果没有工具调用，创建新的assistant消息
-                                        const assistantMessage: Message = {
-                                            role: 'assistant',
-                                            content: convertedText,
-                                        };
+                                        const assistantMessage = createAssistantMessage(convertedText);
 
                                         if (streamingThinking) {
                                             assistantMessage.thinking = streamingThinking;
@@ -10370,10 +10440,9 @@
                                     pendingDocDiffsByMessage.delete(firstToolCallMessageIndex);
                                 }
                                 if (error.message !== 'Request aborted') {
-                                    const errorMessage: Message = {
-                                        role: 'assistant',
-                                        content: `❌ **${t('aiSidebar.errors.requestFailed')}**\n\n${error.message}`,
-                                    };
+                                    const errorMessage = createAssistantMessage(
+                                        `❌ **${t('aiSidebar.errors.requestFailed')}**\n\n${error.message}`
+                                    );
                                     messages = [...messages, errorMessage];
                                     hasUnsavedChanges = true;
                                 }
@@ -10459,10 +10528,7 @@
                             // 处理content中的base64图片，保存为assets文件
                             const processedContent = await saveBase64ImagesInContent(convertedText);
 
-                            const assistantMessage: Message = {
-                                role: 'assistant',
-                                content: processedContent,
-                            };
+                            const assistantMessage = createAssistantMessage(processedContent);
 
                             if (streamingThinking) {
                                 assistantMessage.thinking = streamingThinking;
@@ -10513,10 +10579,9 @@
                         onError: (error: Error) => {
                             if (error.message !== 'Request aborted') {
                                 // 将错误消息作为一条 assistant 消息添加
-                                const errorMessage: Message = {
-                                    role: 'assistant',
-                                    content: `❌ **${t('aiSidebar.errors.requestFailed')}**\n\n${error.message}`,
-                                };
+                                const errorMessage = createAssistantMessage(
+                                    `❌ **${t('aiSidebar.errors.requestFailed')}**\n\n${error.message}`
+                                );
                                 messages = [...messages, errorMessage];
                                 hasUnsavedChanges = true;
                             }
@@ -10544,10 +10609,9 @@
             } else {
                 // 如果 isLoading 还是 true，说明 onError 没有被调用
                 // 这种情况下才需要添加错误消息
-                const errorMessage: Message = {
-                    role: 'assistant',
-                    content: `❌ **${t('aiSidebar.errors.requestFailed')}**\n\n${(error as Error).message}`,
-                };
+                const errorMessage = createAssistantMessage(
+                    `❌ **${t('aiSidebar.errors.requestFailed')}**\n\n${(error as Error).message}`
+                );
                 messages = [...messages, errorMessage];
                 hasUnsavedChanges = true;
                 isLoading = false;
@@ -10719,7 +10783,7 @@
             >
                 <div class="ai-message__header">
                     <span class="ai-message__role">
-                        {group.type === 'user' ? '👤 User' : '🤖 AI'}
+                        {group.type === 'user' ? '👤' : '🤖'} {getGroupDisplayName(group)}
                     </span>
                 </div>
 
@@ -12589,7 +12653,7 @@
                 }}
             >
                 <div class="ai-message__header">
-                    <span class="ai-message__role">🤖 AI</span>
+                    <span class="ai-message__role">🤖 {getCurrentAssistantDisplayName()}</span>
                 </div>
 
                 {#if openCodeTimeline.length > 0}

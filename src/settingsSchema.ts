@@ -57,6 +57,11 @@ export function normalizeSettings(rawSettings: any) {
 
     merged.aiProviders = deepMerge(defaults.aiProviders, merged.aiProviders || {});
 
+    if (typeof merged.userName !== "string") {
+        merged.userName = defaults.userName;
+    }
+    merged.userName = merged.userName.trim();
+
     merged.aiProviders.opencode = deepMerge(
         defaults.aiProviders.opencode,
         merged.aiProviders.opencode || {}

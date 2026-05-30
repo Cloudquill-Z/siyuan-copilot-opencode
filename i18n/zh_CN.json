@@ -71,6 +71,11 @@
                 "enter": "Enter发送，Shift + Enter换行"
             }
         },
+        "userName": {
+            "title": "用户名称",
+            "description": "设置聊天消息顶部显示的用户名称",
+            "placeholder": "留空显示“用户”"
+        },
         "executionMessageMode": {
             "title": "执行中发送",
             "description": "AI 正在执行时，继续发送消息的处理方式",
