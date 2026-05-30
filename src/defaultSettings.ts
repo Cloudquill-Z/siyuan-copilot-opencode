@@ -167,11 +167,35 @@ export const getDefaultSettings = () => ({
     // SOUL 文档设置
     soulDocId: '' as string,  // SOUL 数据存储的文档ID
 
+    // 轻量长期记忆设置
+    memory: {
+        enabled: false,
+        notebookId: '',
+        rootPath: 'AI记忆',
+        overviewDocId: '',
+        autoExtract: true,
+        saveFullConversation: false,
+        maxOverviewChars: 3000,
+        maxCoreChars: 4000,
+        maxEpisodicItems: 5,
+        maxTopicItems: 2,
+        maxMemoryPromptChars: 12000,
+        minImportance: 0.35,
+        coreDocId: '',
+    },
+
     pluginData: {
         legacyImportCompleted: true,
         sessionStorageMigrated: true,
         modelCapabilitiesInitialized: true,
         tokenUsageRecords: [] as any[],
+        memoryExtractionState: {} as Record<string, any>,
+        memoryOverviewScanState: {
+            lastScanAt: 0,
+            lastScanDocCount: 0,
+            lastScanNotebookIds: [] as string[],
+            status: 'idle' as 'idle' | 'running' | 'failed' | 'completed',
+        },
     },
 
 });

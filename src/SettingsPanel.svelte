@@ -4,7 +4,7 @@
     import { t } from './utils/i18n';
     import { getDefaultSettings } from './defaultSettings';
     import { normalizeSettings } from './settingsSchema';
-    import { pushMsg, pushErrMsg, lsNotebooks, getBlockByID } from './api';
+    import { pushMsg, pushErrMsg, lsNotebooks, getBlockByID, openBlock } from './api';
     import { fetchModels, invalidateModelCache } from './ai-chat';
     import {
         findOpenCodeModelConfigMatch,
@@ -22,6 +22,7 @@
         normalizeTokenUsageRecords,
         summarizeTokenUsage,
     } from './utils/tokenUsage';
+    import { ensureMemoryBase, scanMemoryOverview } from './memory';
     export let plugin;
 
     let settings = { ...getDefaultSettings() };
@@ -40,6 +41,8 @@
     }
 
     let isRefreshingModels = false;
+    let isScanningMemoryOverview = false;
+    let memoryScanMessage = '';
     let modelSearchQuery = '';
     let tokenStatsRange: 'today' | '7d' | '30d' | 'all' = '7d';
 
@@ -317,16 +320,16 @@
             ],
         },
         {
-            name: t('settings.settingsGroup.soul') || 'SOUL 文档',
+            name: t('settings.settingsGroup.soul') || '记忆',
             items: [
                 {
                     key: 'soulDocId',
                     value: settings.soulDocId,
                     type: 'textinput',
-                    title: t('settings.soulDocId.title') || 'SOUL 文档 ID',
+                    title: t('settings.soulDocId.title') || '灵魂文档 ID',
                     description:
                         t('settings.soulDocId.description') ||
-                        '设置 SOUL 数据存储的文档 ID。SOUL 工具只能在此文档内进行增删改查操作。',
+                        '设置核心档案使用的思源文档 ID。',
                     placeholder:
                         t('settings.soulDocId.placeholder') ||
                         '输入文档块 ID，如 20260312120000-xxxxxxxx',
@@ -390,6 +393,22 @@
         updateSettings(JSON.parse(JSON.stringify(settings)));
     }
 
+    function ensureMemorySettings() {
+        settings.memory = {
+            ...getDefaultSettings().memory,
+            ...(settings.memory || {}),
+        };
+        settings.pluginData = {
+            ...getDefaultSettings().pluginData,
+            ...(settings.pluginData || {}),
+        };
+    }
+
+    async function saveMemorySettings() {
+        ensureMemorySettings();
+        await saveSettings();
+    }
+
     onMount(async () => {
         await runload();
     });
@@ -407,6 +426,7 @@
         if (!settings.aiProviders.opencode) {
             settings.aiProviders.opencode = { serverUrl: 'http://localhost:4096', models: [] };
         }
+        ensureMemorySettings();
 
         await loadNotebooks();
 
@@ -485,6 +505,90 @@
                 message: t('settings.soulDocId.error') || '验证失败: ' + (error as Error).message,
             };
         }
+    }
+
+    async function openMemoryDoc(docId: string, missingMessage: string) {
+        if (!docId) {
+            pushErrMsg(missingMessage);
+            return;
+        }
+        try {
+            await openBlock(docId);
+        } catch (error) {
+            pushErrMsg(`打开文档失败: ${(error as Error).message}`);
+        }
+    }
+
+    async function initializeMemoryBase() {
+        ensureMemorySettings();
+        if (!settings.memory.notebookId) {
+            pushErrMsg(t('settings.memory.needNotebook') || '请先选择记忆笔记本');
+            return;
+        }
+        try {
+            settings.memory.enabled = true;
+            await ensureMemoryBase(settings);
+            await saveSettings();
+            pushMsg(t('settings.memory.initialized') || '记忆目录已初始化');
+        } catch (error) {
+            pushErrMsg(`初始化记忆失败: ${(error as Error).message}`);
+        }
+    }
+
+    function scanMemoryRepository() {
+        ensureMemorySettings();
+        if (!settings.memory.notebookId) {
+            pushErrMsg(t('settings.memory.needNotebook') || '请先选择记忆笔记本');
+            return;
+        }
+
+        confirm(
+            t('settings.memory.scanConfirmTitle') || '扫描笔记仓库',
+            t('settings.memory.scanConfirmMessage') ||
+                '将读取整个思源笔记仓库的标题、路径和必要正文片段，并调用 OpenCode 生成 Agent 总览。是否继续？',
+            async () => {
+                isScanningMemoryOverview = true;
+                memoryScanMessage = t('settings.memory.scanCollecting') || '正在收集笔记仓库目录...';
+                settings.pluginData = {
+                    ...(settings.pluginData || {}),
+                    memoryOverviewScanState: {
+                        ...(settings.pluginData?.memoryOverviewScanState || {}),
+                        status: 'running',
+                    },
+                };
+                await saveSettings();
+
+                try {
+                    const result = await scanMemoryOverview({
+                        settings,
+                        modelId: settings.currentModelId,
+                        serverUrl: settings.aiProviders?.opencode?.serverUrl,
+                        onProgress: progress => {
+                            memoryScanMessage = progress.message;
+                        },
+                    });
+                    settings.memory.overviewDocId = result.overviewDocId;
+                    await saveSettings();
+                    pushMsg(
+                        (t('settings.memory.scanCompleted') || 'Agent 总览已生成') +
+                            `（${result.scannedDocCount} 篇）`
+                    );
+                } catch (error) {
+                    settings.pluginData = {
+                        ...(settings.pluginData || {}),
+                        memoryOverviewScanState: {
+                            ...(settings.pluginData?.memoryOverviewScanState || {}),
+                            status: 'failed',
+                            error: (error as Error).message,
+                        },
+                    };
+                    await saveSettings();
+                    pushErrMsg(`扫描失败: ${(error as Error).message}`);
+                } finally {
+                    isScanningMemoryOverview = false;
+                }
+            }
+        );
     }
 
     function updateGroupItems() {
@@ -784,15 +888,35 @@
                     {/if}
                 </div>
             </div>
-        {:else if focusGroup === (t('settings.settingsGroup.soul') || 'SOUL 文档')}
-            <div class="soul-settings-panel">
+        {:else if focusGroup === (t('settings.settingsGroup.soul') || '记忆')}
+            <div class="memory-settings-panel">
                 <div class="config__item">
                     <div class="config__item-label">
                         <div class="config__item-title">
-                            {t('settings.soulDocId.title') || 'SOUL 文档 ID'}
+                            {t('settings.memory.enabled.title') || '启用长期记忆'}
                         </div>
                         <div class="config__item-description">
-                            {t('settings.soulDocId.description') || '设置 SOUL 数据存储的文档 ID'}
+                            {t('settings.memory.enabled.description') ||
+                                '开启后，AI 会读取记忆笔记本中的 Agent 总览、核心档案和相关往事。'}
+                        </div>
+                    </div>
+                    <div class="config__item-control">
+                        <input
+                            type="checkbox"
+                            class="b3-switch"
+                            bind:checked={settings.memory.enabled}
+                            on:change={saveMemorySettings}
+                        />
+                    </div>
+                </div>
+
+                <div class="config__item">
+                    <div class="config__item-label">
+                        <div class="config__item-title">
+                            {t('settings.soulDocId.title') || '灵魂文档 ID'}
+                        </div>
+                        <div class="config__item-description">
+                            {t('settings.soulDocId.description') || '作为核心档案优先读取的思源文档 ID'}
                         </div>
                     </div>
                     <div class="config__item-control">
@@ -827,6 +951,165 @@
                         </div>
                     {/if}
                 </div>
+
+                <div class="config__item">
+                    <div class="config__item-label">
+                        <div class="config__item-title">
+                            {t('settings.memory.notebook.title') || '记忆笔记本'}
+                        </div>
+                        <div class="config__item-description">
+                            {t('settings.memory.notebook.description') ||
+                                '所有长期记忆文档都会保存在这个笔记本中，日常检索也只在这里进行。'}
+                        </div>
+                    </div>
+                    <div class="config__item-control">
+                        <select
+                            class="b3-select"
+                            bind:value={settings.memory.notebookId}
+                            on:change={saveMemorySettings}
+                        >
+                            {#each Object.entries(notebookOptions) as [id, name]}
+                                <option value={id}>{name}</option>
+                            {/each}
+                        </select>
+                    </div>
+                </div>
+
+                <div class="config__item">
+                    <div class="config__item-label">
+                        <div class="config__item-title">
+                            {t('settings.memory.rootPath.title') || '记忆根目录'}
+                        </div>
+                        <div class="config__item-description">
+                            {t('settings.memory.rootPath.description') ||
+                                '笔记本内的相对路径。留空则直接使用记忆笔记本根目录。'}
+                        </div>
+                    </div>
+                    <div class="config__item-control">
+                        <input
+                            class="b3-text-field"
+                            type="text"
+                            bind:value={settings.memory.rootPath}
+                            on:change={saveMemorySettings}
+                            placeholder="AI记忆"
+                        />
+                    </div>
+                </div>
+
+                <div class="memory-settings-panel__grid">
+                    <label class="memory-settings-panel__check">
+                        <input
+                            type="checkbox"
+                            class="b3-checkbox"
+                            bind:checked={settings.memory.autoExtract}
+                            on:change={saveMemorySettings}
+                        />
+                        <span>{t('settings.memory.autoExtract') || '自动提取记忆'}</span>
+                    </label>
+                    <label class="memory-settings-panel__check">
+                        <input
+                            type="checkbox"
+                            class="b3-checkbox"
+                            bind:checked={settings.memory.saveFullConversation}
+                            on:change={saveMemorySettings}
+                        />
+                        <span>{t('settings.memory.saveFullConversation') || '保存完整对话'}</span>
+                    </label>
+                </div>
+
+                <div class="memory-settings-panel__grid">
+                    <div class="config__item memory-settings-panel__compact">
+                        <div class="config__item-label">
+                            <div class="config__item-title">
+                                {t('settings.memory.maxEpisodicItems') || '情景记忆条数'}
+                            </div>
+                        </div>
+                        <div class="config__item-control">
+                            <input
+                                class="b3-text-field"
+                                type="number"
+                                min="0"
+                                max="20"
+                                bind:value={settings.memory.maxEpisodicItems}
+                                on:change={saveMemorySettings}
+                            />
+                        </div>
+                    </div>
+                    <div class="config__item memory-settings-panel__compact">
+                        <div class="config__item-label">
+                            <div class="config__item-title">
+                                {t('settings.memory.maxMemoryPromptChars') || '最大注入长度'}
+                            </div>
+                        </div>
+                        <div class="config__item-control">
+                            <input
+                                class="b3-text-field"
+                                type="number"
+                                min="1000"
+                                max="32000"
+                                step="1000"
+                                bind:value={settings.memory.maxMemoryPromptChars}
+                                on:change={saveMemorySettings}
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                <div class="memory-settings-panel__actions">
+                    <button
+                        class="b3-button b3-button--outline"
+                        on:click={initializeMemoryBase}
+                        disabled={!settings.memory.notebookId}
+                    >
+                        {t('settings.memory.initialize') || '初始化记忆目录'}
+                    </button>
+                    <button
+                        class="b3-button b3-button--text"
+                        on:click={scanMemoryRepository}
+                        disabled={!settings.memory.notebookId || isScanningMemoryOverview}
+                    >
+                        {isScanningMemoryOverview
+                            ? t('settings.memory.scanning') || '扫描中...'
+                            : t('settings.memory.scan') || '扫描笔记仓库'}
+                    </button>
+                    <button
+                        class="b3-button b3-button--outline"
+                        on:click={() =>
+                            openMemoryDoc(
+                                settings.memory.overviewDocId,
+                                t('settings.memory.noOverview') || '还没有 Agent 总览，请先扫描笔记仓库'
+                            )}
+                        disabled={!settings.memory.overviewDocId}
+                    >
+                        {t('settings.memory.openOverview') || '查看 Agent 总览'}
+                    </button>
+                    <button
+                        class="b3-button b3-button--outline"
+                        on:click={() =>
+                            openMemoryDoc(
+                                settings.soulDocId || settings.memory.coreDocId,
+                                t('settings.memory.noCore') || '还没有核心档案'
+                            )}
+                        disabled={!settings.soulDocId && !settings.memory.coreDocId}
+                    >
+                        {t('settings.memory.openCore') || '查看核心档案'}
+                    </button>
+                </div>
+
+                {#if memoryScanMessage}
+                    <div class="memory-settings-panel__status">
+                        {memoryScanMessage}
+                    </div>
+                {/if}
+
+                {#if settings.pluginData?.memoryOverviewScanState?.lastScanAt}
+                    <div class="memory-settings-panel__meta">
+                        上次扫描：{new Date(
+                            settings.pluginData.memoryOverviewScanState.lastScanAt
+                        ).toLocaleString()}
+                        · {settings.pluginData.memoryOverviewScanState.lastScanDocCount || 0} 篇文档
+                    </div>
+                {/if}
             </div>
         {:else}
             <SettingPanel
@@ -1170,13 +1453,58 @@
         }
     }
 
-    .soul-settings-panel {
+    .memory-settings-panel {
         display: flex;
         flex-direction: column;
         gap: 16px;
         flex: 1;
         overflow-y: auto;
         padding: 16px;
+    }
+
+    .memory-settings-panel__grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+    }
+
+    .memory-settings-panel__check {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 40px;
+        padding: 8px 12px;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 6px;
+        color: var(--b3-theme-on-background);
+        background: var(--b3-theme-surface);
+    }
+
+    .memory-settings-panel__compact {
+        padding: 12px;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 6px;
+        background: var(--b3-theme-surface);
+    }
+
+    .memory-settings-panel__actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+
+        .b3-button {
+            min-height: 32px;
+        }
+    }
+
+    .memory-settings-panel__status,
+    .memory-settings-panel__meta {
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        line-height: 1.5;
+        color: var(--b3-theme-on-surface);
+        background: var(--b3-theme-surface);
     }
 
     .soul-validation-message {

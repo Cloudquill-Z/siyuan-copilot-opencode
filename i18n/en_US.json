@@ -15,7 +15,7 @@
             "tokenStats": "Token Stats",
             "noteExport": "Chat Export",
             "sessionManagement": "Session Management",
-            "soul": "SOUL Document",
+            "soul": "Memory",
             "webApp": "Web App",
             "group1": "Tab1",
             "group2": "Tab2",
@@ -184,8 +184,8 @@
             "description": "When clicking https links in SiYuan notes, open them in built-in WebView tabs instead of external browser"
         },
         "soulDocId": {
-            "title": "SOUL Document ID",
-            "description": "Set the document ID for SOUL data storage. SOUL tools can only perform CRUD operations within this document.",
+            "title": "Soul Document ID",
+            "description": "Set the SiYuan document ID to use as the preferred core profile",
             "placeholder": "Enter document block ID, e.g., 20260312120000-xxxxxxxx",
             "validate": "Validate",
             "validating": "Validating...",
@@ -193,6 +193,37 @@
             "notFound": "Block not found, please check the ID",
             "notDoc": "The ID is not a document type",
             "error": "Validation failed"
+        },
+        "memory": {
+            "enabled": {
+                "title": "Enable Long-Term Memory",
+                "description": "When enabled, AI reads the Agent overview, core profile, and related memories from the memory notebook"
+            },
+            "notebook": {
+                "title": "Memory Notebook",
+                "description": "All long-term memory documents are stored in this notebook, and daily retrieval only searches here"
+            },
+            "rootPath": {
+                "title": "Memory Root Path",
+                "description": "Relative path inside the notebook. Leave empty to use the notebook root"
+            },
+            "autoExtract": "Auto Extract Memory",
+            "saveFullConversation": "Save Full Conversation",
+            "maxEpisodicItems": "Episodic Memory Items",
+            "maxMemoryPromptChars": "Max Injected Length",
+            "initialize": "Initialize Memory Folder",
+            "initialized": "Memory folder initialized",
+            "scan": "Scan Note Repository",
+            "scanning": "Scanning...",
+            "scanCollecting": "Collecting note repository index...",
+            "scanCompleted": "Agent overview generated",
+            "scanConfirmTitle": "Scan Note Repository",
+            "scanConfirmMessage": "This will read titles, paths, and necessary excerpts from the whole SiYuan note repository, then call OpenCode to generate an Agent overview. Continue?",
+            "openOverview": "Open Agent Overview",
+            "openCore": "Open Core Profile",
+            "noOverview": "No Agent overview yet. Scan the note repository first",
+            "noCore": "No core profile yet",
+            "needNotebook": "Select a memory notebook first"
         }
     },
     "aiSidebar": {

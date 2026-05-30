@@ -88,6 +88,7 @@
         createTokenUsageRecord,
         formatTokenCount,
     } from './utils/tokenUsage';
+    import { buildMemoryPrompt } from './memory';
     import type { TaskSession } from './task-types';
     // Agent 模式工具使用强制规则（统一常量）
     // STUBS: ./tools deleted, safe no-op replacements
@@ -4382,8 +4383,20 @@
             }
         }
 
-        const { baseSystemPrompt, hasToolInstruction } =
+        let { baseSystemPrompt, hasToolInstruction } =
             await buildSystemPromptForCurrentRequest();
+        try {
+            const memoryPrompt = await buildMemoryPrompt({
+                settings,
+                query: userContent,
+                skipCoreDocId: settings.soulDocId?.trim(),
+            });
+            if (memoryPrompt.trim()) {
+                baseSystemPrompt = `${baseSystemPrompt.trim()}\n\n${memoryPrompt}`.trim();
+            }
+        } catch (error) {
+            console.warn('[memory] build memory prompt failed:', error);
+        }
 
         // 添加最终的系统提示词（只要基础提示词或工具说明不为空就添加）
         if (baseSystemPrompt.trim() || hasToolInstruction) {

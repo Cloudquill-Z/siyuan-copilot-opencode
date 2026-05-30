@@ -23,6 +23,7 @@ import SettingPanel from "./SettingsPanel.svelte";
 import { getDefaultSettings } from "./defaultSettings";
 import { normalizeSettings } from "./settingsSchema";
 import { ensureManagedOpenCodeWorkspace } from "./opencode-workspace";
+import { ensureMemoryBase } from "./memory";
 import { setPluginInstance, t, getCurrentLanguage } from "./utils/i18n";
 import AISidebar from "./ai-sidebar.svelte";
 import ChatDialog from "./components/ChatDialog.svelte";
@@ -471,6 +472,15 @@ export default class PluginSample extends Plugin {
 
         // Load settings before auto-starting OpenCode so custom serverUrl/port is honored.
         const settings = await this.loadSettings();
+        try {
+            const before = JSON.stringify(settings.memory || {});
+            await ensureMemoryBase(settings);
+            if (before !== JSON.stringify(settings.memory || {})) {
+                await this.saveSettings(settings);
+            }
+        } catch (error) {
+            console.warn('[memory] initialize memory base failed:', error);
+        }
         if (!this.isOpenCodeInitCurrent(openCodeInitRunId)) return;
 
         // Auto-start OpenCode serve if not running

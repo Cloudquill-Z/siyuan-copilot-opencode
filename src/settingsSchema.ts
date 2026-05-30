@@ -60,6 +60,52 @@ export function normalizeSettings(rawSettings: any) {
     );
 
     merged.aiProviders = deepMerge(defaults.aiProviders, merged.aiProviders || {});
+    merged.memory = deepMerge(defaults.memory, merged.memory || {});
+    merged.pluginData.memoryExtractionState = isPlainObject(merged.pluginData.memoryExtractionState)
+        ? merged.pluginData.memoryExtractionState
+        : {};
+    merged.pluginData.memoryOverviewScanState = deepMerge(
+        defaults.pluginData.memoryOverviewScanState,
+        merged.pluginData.memoryOverviewScanState || {}
+    );
+
+    merged.memory.enabled = !!merged.memory.enabled;
+    merged.memory.notebookId =
+        typeof merged.memory.notebookId === "string" ? merged.memory.notebookId.trim() : "";
+    merged.memory.rootPath =
+        typeof merged.memory.rootPath === "string"
+            ? merged.memory.rootPath.trim().replace(/^\/+|\/+$/g, "")
+            : defaults.memory.rootPath;
+    merged.memory.overviewDocId =
+        typeof merged.memory.overviewDocId === "string" ? merged.memory.overviewDocId.trim() : "";
+    merged.memory.coreDocId =
+        typeof merged.memory.coreDocId === "string" ? merged.memory.coreDocId.trim() : "";
+    merged.memory.autoExtract = merged.memory.autoExtract !== false;
+    merged.memory.saveFullConversation = !!merged.memory.saveFullConversation;
+    merged.memory.maxOverviewChars = Math.min(
+        12000,
+        Math.max(500, Math.floor(Number(merged.memory.maxOverviewChars) || defaults.memory.maxOverviewChars))
+    );
+    merged.memory.maxCoreChars = Math.min(
+        16000,
+        Math.max(500, Math.floor(Number(merged.memory.maxCoreChars) || defaults.memory.maxCoreChars))
+    );
+    merged.memory.maxEpisodicItems = Math.min(
+        20,
+        Math.max(0, Math.floor(Number(merged.memory.maxEpisodicItems) || defaults.memory.maxEpisodicItems))
+    );
+    merged.memory.maxTopicItems = Math.min(
+        10,
+        Math.max(0, Math.floor(Number(merged.memory.maxTopicItems) || defaults.memory.maxTopicItems))
+    );
+    merged.memory.maxMemoryPromptChars = Math.min(
+        32000,
+        Math.max(1000, Math.floor(Number(merged.memory.maxMemoryPromptChars) || defaults.memory.maxMemoryPromptChars))
+    );
+    merged.memory.minImportance = Math.min(
+        1,
+        Math.max(0, Number(merged.memory.minImportance) || defaults.memory.minImportance)
+    );
 
     if (typeof merged.userName !== "string") {
         merged.userName = defaults.userName;
