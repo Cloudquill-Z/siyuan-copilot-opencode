@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 
 const {
+    findOpenCodeModelConfigMatch,
     mergeOpenCodeModelLists,
     parseOpenCodeModelListOutput,
     parseOpenCodeProviderModels,
@@ -108,6 +109,22 @@ assert.deepEqual(
     providerModels.map(model => model.outputLimit),
     [32000, 384000, 384000]
 );
+
+const existingModelConfigs = [
+    { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+    { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+];
+
+assert.equal(
+    findOpenCodeModelConfigMatch(existingModelConfigs, 'opencode-go/deepseek-v4-pro', 'opencode-go'),
+    undefined,
+    'opencode-go model must not reuse a DeepSeek provider model with the same bare model id'
+);
+assert.equal(
+    findOpenCodeModelConfigMatch(existingModelConfigs, 'deepseek/deepseek-v4-pro', 'deepseek')?.id,
+    'deepseek/deepseek-v4-pro'
+);
+
 assert.equal(shouldRefreshOpenCodeModelCatalog([]), true);
 assert.equal(shouldRefreshOpenCodeModelCatalog(Array.from({ length: 20 }, () => ({ contextLimit: 200000 }))), true);
 assert.equal(shouldRefreshOpenCodeModelCatalog(Array.from({ length: 120 }, () => ({ contextLimit: 200000 }))), false);

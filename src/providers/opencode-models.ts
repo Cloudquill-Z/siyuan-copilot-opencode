@@ -8,6 +8,11 @@ export interface OpenCodeModelInfo {
     reasoningEffort?: 'low' | 'medium' | 'high' | 'max' | 'auto';
 }
 
+export interface OpenCodeModelRef {
+    id?: string;
+    providerID?: string;
+}
+
 const MODEL_NAME_WORDS: Record<string, string> = {
     ai: 'AI',
     api: 'API',
@@ -191,6 +196,52 @@ export function mergeOpenCodeModelLists(
     }
 
     return merged;
+}
+
+function getOpenCodeModelIdentity(modelId?: string, providerID?: string): { providerID?: string; modelID: string } | null {
+    const raw = String(modelId || '').trim().toLowerCase();
+    if (!raw) return null;
+
+    const explicitProvider = String(providerID || '').trim().toLowerCase();
+    if (explicitProvider) {
+        const prefix = `${explicitProvider}/`;
+        return {
+            providerID: explicitProvider,
+            modelID: raw.startsWith(prefix) ? raw.slice(prefix.length) : raw,
+        };
+    }
+
+    const slashIndex = raw.indexOf('/');
+    if (slashIndex > 0 && slashIndex < raw.length - 1) {
+        return {
+            providerID: raw.slice(0, slashIndex),
+            modelID: raw.slice(slashIndex + 1),
+        };
+    }
+
+    return { modelID: raw };
+}
+
+export function isSameOpenCodeModelRef(
+    left: OpenCodeModelRef,
+    rightModelId?: string,
+    rightProviderID?: string
+): boolean {
+    const leftIdentity = getOpenCodeModelIdentity(left.id, left.providerID);
+    const rightIdentity = getOpenCodeModelIdentity(rightModelId, rightProviderID);
+    if (!leftIdentity || !rightIdentity) return false;
+    if (leftIdentity.providerID && rightIdentity.providerID) {
+        return leftIdentity.providerID === rightIdentity.providerID && leftIdentity.modelID === rightIdentity.modelID;
+    }
+    return leftIdentity.modelID === rightIdentity.modelID;
+}
+
+export function findOpenCodeModelConfigMatch<T extends OpenCodeModelRef>(
+    models: T[] = [],
+    modelId?: string,
+    providerID?: string
+): T | undefined {
+    return models.find(model => isSameOpenCodeModelRef(model, modelId, providerID));
 }
 
 export function shouldRefreshOpenCodeModelCatalog(models: Array<{ contextLimit?: number }> = []): boolean {

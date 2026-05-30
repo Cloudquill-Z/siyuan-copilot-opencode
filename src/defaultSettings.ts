@@ -3,6 +3,7 @@ import type { ThinkingEffort } from "./ai-chat";
 export interface ModelConfig {
     id: string;
     name: string;
+    providerID?: string;
     temperature: number;
     maxTokens: number;
     contextLimit?: number;
