@@ -88,7 +88,7 @@
         createTokenUsageRecord,
         formatTokenCount,
     } from './utils/tokenUsage';
-    import { buildMemoryPrompt } from './memory';
+    import { buildMemoryPrompt, extractEpisodicMemory } from './memory';
     import type { TaskSession } from './task-types';
     // Agent 模式工具使用强制规则（统一常量）
     // STUBS: ./tools deleted, safe no-op replacements
@@ -7881,6 +7881,35 @@
     // 保存会话的锁，防止并发保存导致竞态条件
     let isSavingSession = false;
     let pendingSaveSilent: boolean | null = null;
+    let isExtractingEpisodicMemory = false;
+
+    async function triggerEpisodicMemoryExtraction() {
+        if (isExtractingEpisodicMemory || !settings.memory?.enabled || !settings.memory?.autoExtract) {
+            return;
+        }
+        if (!currentSessionId || !settings.memory?.notebookId) {
+            return;
+        }
+
+        isExtractingEpisodicMemory = true;
+        try {
+            const docId = await extractEpisodicMemory({
+                settings,
+                sessionId: currentSessionId,
+                messages,
+                modelId: currentModelId,
+                serverUrl: settings.aiProviders?.opencode?.serverUrl,
+            });
+            if (docId) {
+                await plugin.saveSettings(settings);
+                updateSettings(JSON.parse(JSON.stringify(settings)));
+            }
+        } catch (error) {
+            console.warn('[memory] extract episodic memory failed:', error);
+        } finally {
+            isExtractingEpisodicMemory = false;
+        }
+    }
 
     async function saveCurrentSession(silent: boolean = false) {
         if (messages.filter(m => m.role !== 'system').length === 0) {
@@ -8004,6 +8033,7 @@
                 await putFile(sessionPath, false, sessionBlob);
             }
             hasUnsavedChanges = false;
+            void triggerEpisodicMemoryExtraction();
 
             if (!silent) {
                 pushMsg(t('aiSidebar.success.saveSessionSuccess'));
