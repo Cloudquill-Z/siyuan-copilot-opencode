@@ -1,4 +1,5 @@
 import { DEFAULT_AI_SYSTEM_PROMPT, getDefaultSettings } from "./defaultSettings";
+import { normalizeTokenUsageRecords } from "./utils/tokenUsage";
 
 const LEGACY_DEFAULT_AI_SYSTEM_PROMPTS = new Set([
     '你是一个思源笔记操作小助手。具体思源笔记操作前加载 siyuan-mcp-sisyphus 这个 skill，搜索思源笔记可看 siyuan-search-query，编写思源笔记内容可看 siyuan-markup-guide。请基于以上技能提供思源笔记相关的帮助。',
@@ -54,6 +55,9 @@ export function normalizeSettings(rawSettings: any) {
     );
 
     merged.pluginData = deepMerge(defaults.pluginData, merged.pluginData || {});
+    merged.pluginData.tokenUsageRecords = normalizeTokenUsageRecords(
+        merged.pluginData.tokenUsageRecords
+    );
 
     merged.aiProviders = deepMerge(defaults.aiProviders, merged.aiProviders || {});
 

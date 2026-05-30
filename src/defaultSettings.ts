@@ -168,6 +168,7 @@ export const getDefaultSettings = () => ({
         legacyImportCompleted: true,
         sessionStorageMigrated: true,
         modelCapabilitiesInitialized: true,
+        tokenUsageRecords: [] as any[],
     },
 
 });

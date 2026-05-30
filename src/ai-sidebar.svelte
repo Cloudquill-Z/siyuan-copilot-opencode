@@ -13,6 +13,8 @@
         executeCommand,
         sendStillPrompt,
         sessionInit,
+        estimateTokens,
+        calculateTotalTokens,
     } from './ai-chat';
     import type { MessageContent } from './ai-chat';
     import { getActiveEditor, openTab } from 'siyuan';
@@ -67,6 +69,14 @@
     import { t } from './utils/i18n';
     import { getModelCapabilities } from './utils/modelCapabilities';
     import { shouldSendMessageFromKeydown } from './utils/sendShortcut';
+    import {
+        appendTokenUsageRecord,
+        createTokenUsageRecord,
+        formatTokenCount,
+        normalizeTokenUsageRecords,
+        summarizeTokenUsage,
+        type TokenUsageRecord,
+    } from './utils/tokenUsage';
     import type { TaskSession } from './task-types';
     // Agent 模式工具使用强制规则（统一常量）
     // STUBS: ./tools deleted, safe no-op replacements
@@ -603,6 +613,7 @@
     // 显示设置
     let messageFontSize = 12;
     let multiModelViewMode: 'tab' | 'card' = 'tab'; // 多模型回答样式
+    let isTokenDetailsOpen = false;
 
     // 模型临时设置
     let tempModelSettings = {
@@ -642,6 +653,84 @@
     let isImageViewerFullscreen = false;
     let currentImageSrc = '';
     let currentImageName = '';
+
+    function getCurrentContextLimit(): number | undefined {
+        const modelConfig = getCurrentModelConfig();
+        const limit = Number(modelConfig?.maxTokens || 0);
+        return limit > 0 ? limit : undefined;
+    }
+
+    function estimateMessageExtraTokens(message: Message): number {
+        const contextTokens = (message.contextDocuments || []).reduce(
+            (sum, doc) => sum + estimateTokens(doc.content || ''),
+            0
+        );
+        const attachmentTokens = (message.attachments || []).reduce((sum, attachment) => {
+            if (attachment.type === 'image') return sum + 85;
+            return sum + estimateTokens(attachment.data || attachment.name || '');
+        }, 0);
+        return contextTokens + attachmentTokens;
+    }
+
+    function estimateCurrentContextTokens(): number {
+        const visibleMessages = messages.filter(message => message.role !== 'system');
+        const messageTokens =
+            calculateTotalTokens(messages) +
+            visibleMessages.reduce((sum, message) => sum + estimateMessageExtraTokens(message), 0);
+        const draftTokens = estimateTokens(currentInput || '');
+        const contextTokens = contextDocuments.reduce(
+            (sum, doc) => sum + estimateTokens(doc.content || ''),
+            0
+        );
+        const attachmentTokens = currentAttachments.reduce((sum, attachment) => {
+            if (attachment.type === 'image') return sum + 85;
+            return sum + estimateTokens(attachment.data || attachment.name || '');
+        }, 0);
+        return messageTokens + draftTokens + contextTokens + attachmentTokens;
+    }
+
+    function getTokenUsageRecords(): TokenUsageRecord[] {
+        return normalizeTokenUsageRecords(settings.pluginData?.tokenUsageRecords);
+    }
+
+    function getRecentTokenSummary() {
+        return summarizeTokenUsage(getTokenUsageRecords().slice(0, 12));
+    }
+
+    async function recordTokenUsage(
+        requestMessages: Message[],
+        outputText: string,
+        modelConfig: any,
+        provider = currentProvider
+    ) {
+        try {
+            const record = createTokenUsageRecord({
+                messages: requestMessages,
+                outputText,
+                provider,
+                modelId: modelConfig?.id || currentModelId || '',
+                modelName: modelConfig?.name || modelConfig?.id || currentModelId || 'OpenCode',
+                contextLimit: getCurrentContextLimit(),
+            });
+            settings.pluginData = {
+                ...(settings.pluginData || {}),
+                tokenUsageRecords: appendTokenUsageRecord(
+                    settings.pluginData?.tokenUsageRecords,
+                    record
+                ),
+            };
+            await plugin.saveSettings(settings);
+        } catch (error) {
+            console.warn('Failed to record token usage:', error);
+        }
+    }
+
+    $: currentContextTokens = estimateCurrentContextTokens();
+    $: currentContextLimit = getCurrentContextLimit();
+    $: currentContextPercent = currentContextLimit
+        ? Math.min(100, Math.round((currentContextTokens / currentContextLimit) * 100))
+        : 0;
+    $: recentTokenSummary = getRecentTokenSummary();
 
     // 消息内容显示缓存（存储每个消息的显示内容，键为content的哈希）
     const messageDisplayCache = new Map<string, { loading: boolean; content: string }>();
@@ -5133,6 +5222,12 @@
                                     setController(currentSessionId, null);
                                     hasUnsavedChanges = true;
 
+                                    await recordTokenUsage(
+                                        messagesToSend,
+                                        processedContent,
+                                        modelConfig
+                                    );
+
                                     await saveCurrentSession(true);
 
                                     await closeDiagnosticLog(diagnosticLogger, 'ui.completed', {
@@ -5315,6 +5410,11 @@
                                     hasUnsavedChanges: true,
                                 }));
                                 setController(runTaskId, null);
+                                await recordTokenUsage(
+                                    messagesToSend,
+                                    processedContent,
+                                    modelConfig
+                                );
                                 await closeDiagnosticLog(diagnosticLogger, 'ui.completed', {
                                     messageCount: getStoredTaskState(runTaskId).messages.length,
                                     finalTextChars: processedContent.length,
@@ -5331,6 +5431,8 @@
                             isLoading = false;
                             setController(runTaskId, null);
                             hasUnsavedChanges = true;
+
+                            await recordTokenUsage(messagesToSend, processedContent, modelConfig);
 
                             // AI 回复完成后，自动保存当前会话
                             await saveCurrentSession(true);
@@ -10425,6 +10527,12 @@
                                     setController(currentSessionId, null);
                                     hasUnsavedChanges = true;
 
+                                    await recordTokenUsage(
+                                        messagesToSend,
+                                        processedContent,
+                                        modelConfig
+                                    );
+
                                     await saveCurrentSession(true);
 
                                     // 通知完成（即使没有工具调用）
@@ -10572,6 +10680,8 @@
                             isLoading = false;
                             setController(currentSessionId, null);
                             hasUnsavedChanges = true;
+
+                            await recordTokenUsage(messagesToSend, processedContent, modelConfig);
 
                             // AI 回复完成后，自动保存当前会话
                             await saveCurrentSession(true);
@@ -12570,7 +12680,7 @@
                         {/if}
 
                         <!-- 最终回复始终放在工具执行、差异汇总和附件之后 -->
-                        {#if message.role === 'assistant' && message.finalReply}
+                        {#if message.role === 'assistant' && message.finalReply && !(message.openCodeTimeline && message.openCodeTimeline.length > 0)}
                             {@const finalReplyDisplay = getDisplayContent(message.finalReply)}
                             <div
                                 class="ai-message__content ai-message__final-reply b3-typography"
@@ -12580,7 +12690,7 @@
                             </div>
                         {:else if message.role === 'assistant' && message.content && message.content
                                 .toString()
-                                .trim() && !(message.multiModelResponses && message.multiModelResponses.length > 0)}
+                                .trim() && !(message.multiModelResponses && message.multiModelResponses.length > 0) && !(message.openCodeTimeline && message.openCodeTimeline.length > 0)}
                             {@const assistantDisplayContent = getDisplayContent(message.content)}
                             <div
                                 class="ai-message__content b3-typography"
@@ -13730,8 +13840,6 @@
                 <div class="ai-sidebar__empty-illustration">
                     <img src={openCodeIconUrl} alt="" aria-hidden="true" />
                 </div>
-                <h2 class="ai-sidebar__empty-title">准备好处理笔记与代码</h2>
-                <p class="ai-sidebar__empty-subtitle">选择模式、模型和思考强度，然后输入你的请求。</p>
             </div>
         {/if}
     </div>
@@ -14075,6 +14183,62 @@
                     >
                         <svg class="b3-button__icon"><use xlink:href="#iconEdit"></use></svg>
                     </button>
+                </div>
+                <div class="ai-sidebar__token-widget">
+                    <button
+                        type="button"
+                        class="ai-sidebar__token-pill"
+                        class:ai-sidebar__token-pill--warn={currentContextPercent >= 80}
+                        on:click={() => (isTokenDetailsOpen = !isTokenDetailsOpen)}
+                        title="Token 使用详情"
+                    >
+                        <span class="ai-sidebar__token-dot" aria-hidden="true"></span>
+                        <span>{formatTokenCount(currentContextTokens)}</span>
+                    </button>
+                    {#if isTokenDetailsOpen}
+                        <div class="ai-sidebar__token-popover">
+                            <div class="ai-sidebar__token-popover-header">
+                                <span>上下文长度</span>
+                                <button
+                                    type="button"
+                                    class="ai-sidebar__token-close"
+                                    on:click={() => (isTokenDetailsOpen = false)}
+                                    title="关闭"
+                                >
+                                    ×
+                                </button>
+                            </div>
+                            <div class="ai-sidebar__token-meter">
+                                <div
+                                    class="ai-sidebar__token-meter-fill"
+                                    style={`width: ${currentContextLimit ? currentContextPercent : 0}%`}
+                                ></div>
+                            </div>
+                            <div class="ai-sidebar__token-row">
+                                <span>当前估算</span>
+                                <strong>{formatTokenCount(currentContextTokens)}</strong>
+                            </div>
+                            <div class="ai-sidebar__token-row">
+                                <span>模型上限</span>
+                                <strong>
+                                    {currentContextLimit
+                                        ? formatTokenCount(currentContextLimit)
+                                        : '未设置'}
+                                </strong>
+                            </div>
+                            <div class="ai-sidebar__token-row">
+                                <span>近 12 次</span>
+                                <strong>{formatTokenCount(recentTokenSummary.totalTokens)}</strong>
+                            </div>
+                            <div class="ai-sidebar__token-row">
+                                <span>输入 / 输出</span>
+                                <strong>
+                                    {formatTokenCount(recentTokenSummary.inputTokens)} /
+                                    {formatTokenCount(recentTokenSummary.outputTokens)}
+                                </strong>
+                            </div>
+                        </div>
+                    {/if}
                 </div>
                 <button
                     class="ai-sidebar__chat-send-btn"
@@ -19391,7 +19555,13 @@
             flex: 0 0 28px;
             width: 28px;
             justify-content: center;
-            border-style: dashed;
+            border-color: transparent;
+            background: transparent;
+
+            .b3-button__icon {
+                width: 12px;
+                height: 12px;
+            }
         }
     }
 
@@ -19483,8 +19653,13 @@
         cursor: pointer;
         transition: all 0.2s ease;
         .b3-button__icon {
-            width: 18px;
-            height: 18px;
+            width: 16px;
+            height: 16px;
+        }
+
+        &:first-child .b3-button__icon {
+            width: 14px;
+            height: 14px;
         }
         &:hover {
             background: var(--b3-theme-surface);
@@ -19504,6 +19679,119 @@
         padding: 0;
         color: var(--b3-theme-primary);
         background: var(--b3-theme-primary-lightest);
+    }
+
+    .ai-sidebar__token-widget {
+        position: relative;
+        display: flex;
+        align-items: center;
+        margin-left: auto;
+        margin-right: 8px;
+    }
+
+    .ai-sidebar__token-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 28px;
+        padding: 0 8px;
+        border: none;
+        border-radius: 999px;
+        background: transparent;
+        color: var(--b3-theme-on-surface-light);
+        font-size: 12px;
+        line-height: 1;
+        cursor: pointer;
+        transition:
+            background 0.16s ease,
+            color 0.16s ease;
+
+        &:hover {
+            background: var(--b3-theme-surface);
+            color: var(--b3-theme-on-surface);
+        }
+
+        &--warn {
+            color: var(--b3-card-warning-color);
+        }
+    }
+
+    .ai-sidebar__token-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: currentColor;
+        opacity: 0.68;
+    }
+
+    .ai-sidebar__token-popover {
+        position: absolute;
+        right: 0;
+        bottom: calc(100% + 10px);
+        z-index: 20;
+        width: 240px;
+        padding: 12px;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 8px;
+        background: var(--b3-theme-background);
+        box-shadow: 0 12px 28px rgba(0, 0, 0, 0.14);
+        color: var(--b3-theme-on-background);
+    }
+
+    .ai-sidebar__token-popover-header,
+    .ai-sidebar__token-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+    }
+
+    .ai-sidebar__token-popover-header {
+        margin-bottom: 10px;
+        font-size: 13px;
+        font-weight: 600;
+    }
+
+    .ai-sidebar__token-close {
+        width: 22px;
+        height: 22px;
+        border: none;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--b3-theme-on-surface-light);
+        cursor: pointer;
+
+        &:hover {
+            background: var(--b3-theme-surface);
+            color: var(--b3-theme-on-surface);
+        }
+    }
+
+    .ai-sidebar__token-meter {
+        height: 4px;
+        margin-bottom: 10px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: var(--b3-theme-surface);
+    }
+
+    .ai-sidebar__token-meter-fill {
+        height: 100%;
+        border-radius: inherit;
+        background: var(--b3-theme-primary);
+        transition: width 0.2s ease;
+    }
+
+    .ai-sidebar__token-row {
+        min-height: 24px;
+        font-size: 12px;
+        color: var(--b3-theme-on-surface-light);
+
+        strong {
+            color: var(--b3-theme-on-background);
+            font-weight: 600;
+            white-space: nowrap;
+        }
     }
 
     .ai-sidebar__chat-input-divider {

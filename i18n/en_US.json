@@ -12,6 +12,7 @@
             "systemPrompt": "System Prompt",
             "platformManagement": "Model Management",
             "displayAndOperation": "Display & Operation",
+            "tokenStats": "Token Stats",
             "noteExport": "Chat Export",
             "sessionManagement": "Session Management",
             "soul": "SOUL Document",

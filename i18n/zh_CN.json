@@ -12,6 +12,7 @@
             "systemPrompt": "系统提示词",
             "platformManagement": "模型管理",
             "displayAndOperation": "显示与操作",
+            "tokenStats": "Token 统计",
             "noteExport": "对话导出",
             "sessionManagement": "会话管理",
             "soul": "SOUL 文档",

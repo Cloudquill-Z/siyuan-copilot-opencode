@@ -11,6 +11,13 @@
     import { confirm } from 'siyuan';
     import { PLUGIN_ID } from './pluginPaths';
     import { updateSettings } from './stores/settings';
+    import {
+        filterTokenUsageByRange,
+        formatTokenCount,
+        groupTokenUsageByModel,
+        normalizeTokenUsageRecords,
+        summarizeTokenUsage,
+    } from './utils/tokenUsage';
     export let plugin;
 
     let settings = { ...getDefaultSettings() };
@@ -30,6 +37,7 @@
 
     let isRefreshingModels = false;
     let modelSearchQuery = '';
+    let tokenStatsRange: 'today' | '7d' | '30d' | 'all' = '7d';
 
     let saveTimer: ReturnType<typeof setTimeout> | null = null;
     function debouncedSave() {
@@ -55,6 +63,14 @@
     })();
 
     $: modelOverflow = opencodeModels.length > 200;
+    $: tokenUsageRecords = normalizeTokenUsageRecords(settings.pluginData?.tokenUsageRecords);
+    $: filteredTokenUsageRecords = filterTokenUsageByRange(
+        tokenUsageRecords,
+        tokenStatsRange
+    );
+    $: tokenUsageSummary = summarizeTokenUsage(filteredTokenUsageRecords);
+    $: tokenUsageByModel = groupTokenUsageByModel(filteredTokenUsageRecords);
+    $: tokenUsagePeak = Math.max(1, ...tokenUsageByModel.map(item => item.totalTokens));
 
     function toggleModelHidden(modelId: string) {
         opencodeConfig.models = opencodeConfig.models.map((m: ModelConfig) =>
@@ -133,6 +149,12 @@
 
     function handleProviderChange() {
         saveSettings();
+    }
+
+    function setTokenStatsRange(range: string) {
+        if (range === 'today' || range === '7d' || range === '30d' || range === 'all') {
+            tokenStatsRange = range;
+        }
     }
 
     let groups: ISettingGroup[] = [
@@ -247,6 +269,10 @@
                     },
                 },
             ],
+        },
+        {
+            name: t('settings.settingsGroup.tokenStats') || 'Token 统计',
+            items: [],
         },
         {
             name: t('settings.settingsGroup.noteExport'),
@@ -670,6 +696,87 @@
                     </div>
                 {/if}
             </div>
+        {:else if focusGroup === (t('settings.settingsGroup.tokenStats') || 'Token 统计')}
+            <div class="token-stats-panel">
+                <div class="token-stats-panel__header">
+                    <div>
+                        <div class="token-stats-panel__title">Token 使用量统计</div>
+                        <div class="token-stats-panel__desc">
+                            按时间和模型查看输入、输出与总 token 消耗。
+                        </div>
+                    </div>
+                    <div class="token-stats-panel__range">
+                        {#each [
+                            { value: 'today', label: '今日' },
+                            { value: '7d', label: '7 天' },
+                            { value: '30d', label: '30 天' },
+                            { value: 'all', label: '全部' },
+                        ] as range}
+                            <button
+                                type="button"
+                                class:token-stats-panel__range-button--active={tokenStatsRange === range.value}
+                                class="token-stats-panel__range-button"
+                                on:click={() => setTokenStatsRange(range.value)}
+                            >
+                                {range.label}
+                            </button>
+                        {/each}
+                    </div>
+                </div>
+
+                <div class="token-stats-panel__metrics">
+                    <div class="token-stats-card">
+                        <span>总 Token</span>
+                        <strong>{formatTokenCount(tokenUsageSummary.totalTokens)}</strong>
+                    </div>
+                    <div class="token-stats-card">
+                        <span>输入 Token</span>
+                        <strong>{formatTokenCount(tokenUsageSummary.inputTokens)}</strong>
+                    </div>
+                    <div class="token-stats-card">
+                        <span>输出 Token</span>
+                        <strong>{formatTokenCount(tokenUsageSummary.outputTokens)}</strong>
+                    </div>
+                    <div class="token-stats-card">
+                        <span>调用次数</span>
+                        <strong>{tokenUsageSummary.calls.toLocaleString()}</strong>
+                    </div>
+                </div>
+
+                <div class="token-stats-panel__section">
+                    <div class="token-stats-panel__section-title">按模型统计</div>
+                    {#if tokenUsageByModel.length === 0}
+                        <div class="token-stats-panel__empty">暂无统计记录</div>
+                    {:else}
+                        <div class="token-stats-table">
+                            <div class="token-stats-table__head">
+                                <span>模型</span>
+                                <span>次数</span>
+                                <span>输入</span>
+                                <span>输出</span>
+                                <span>总量</span>
+                            </div>
+                            {#each tokenUsageByModel as item}
+                                <div class="token-stats-table__row">
+                                    <div class="token-stats-table__model">
+                                        <strong>{item.modelName}</strong>
+                                        <span>{item.modelId}</span>
+                                        <div class="token-stats-table__bar">
+                                            <div
+                                                style={`width: ${Math.max(4, Math.round((item.totalTokens / tokenUsagePeak) * 100))}%`}
+                                            ></div>
+                                        </div>
+                                    </div>
+                                    <span>{item.calls}</span>
+                                    <span>{formatTokenCount(item.inputTokens)}</span>
+                                    <span>{formatTokenCount(item.outputTokens)}</span>
+                                    <span>{formatTokenCount(item.totalTokens)}</span>
+                                </div>
+                            {/each}
+                        </div>
+                    {/if}
+                </div>
+            </div>
         {:else if focusGroup === (t('settings.settingsGroup.soul') || 'SOUL 文档')}
             <div class="soul-settings-panel">
                 <div class="config__item">
@@ -742,10 +849,12 @@
     .config__tab-wrap {
         flex: 1;
         height: 100%;
-        overflow: hidden;
+        overflow-y: auto;
+        overflow-x: hidden;
         padding: 2px;
         display: flex;
         flex-direction: column;
+        min-height: 0;
     }
 
     .model-management-panel {
@@ -874,6 +983,184 @@
         gap: 16px;
         flex: 1;
         overflow-y: auto;
+    }
+
+    .token-stats-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        flex: 1;
+        min-height: 0;
+        padding: 16px;
+        overflow-y: auto;
+    }
+
+    .token-stats-panel__header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+    }
+
+    .token-stats-panel__title {
+        color: var(--b3-theme-on-background);
+        font-size: 18px;
+        font-weight: 650;
+        line-height: 1.3;
+    }
+
+    .token-stats-panel__desc {
+        margin-top: 4px;
+        color: var(--b3-theme-on-surface-light);
+        font-size: 12px;
+        line-height: 1.5;
+    }
+
+    .token-stats-panel__range {
+        display: inline-flex;
+        gap: 4px;
+        padding: 3px;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 7px;
+        background: var(--b3-theme-surface);
+    }
+
+    .token-stats-panel__range-button {
+        height: 28px;
+        padding: 0 10px;
+        border: none;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--b3-theme-on-surface-light);
+        font-size: 12px;
+        cursor: pointer;
+
+        &:hover {
+            color: var(--b3-theme-on-surface);
+        }
+
+        &--active {
+            background: var(--b3-theme-background);
+            color: var(--b3-theme-on-background);
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+        }
+    }
+
+    .token-stats-panel__metrics {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+    }
+
+    .token-stats-card {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-width: 0;
+        padding: 14px;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 8px;
+        background: var(--b3-theme-background);
+
+        span {
+            color: var(--b3-theme-on-surface-light);
+            font-size: 12px;
+        }
+
+        strong {
+            color: var(--b3-theme-on-background);
+            font-size: 22px;
+            font-weight: 650;
+            line-height: 1.2;
+        }
+    }
+
+    .token-stats-panel__section {
+        border: 1px solid var(--b3-border-color);
+        border-radius: 8px;
+        background: var(--b3-theme-background);
+        overflow: hidden;
+    }
+
+    .token-stats-panel__section-title {
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--b3-border-color);
+        color: var(--b3-theme-on-background);
+        font-size: 14px;
+        font-weight: 600;
+    }
+
+    .token-stats-panel__empty {
+        padding: 28px;
+        text-align: center;
+        color: var(--b3-theme-on-surface-light);
+        font-size: 13px;
+    }
+
+    .token-stats-table {
+        min-width: 640px;
+    }
+
+    .token-stats-table__head,
+    .token-stats-table__row {
+        display: grid;
+        grid-template-columns: minmax(220px, 1fr) 70px 90px 90px 90px;
+        gap: 12px;
+        align-items: center;
+        padding: 10px 14px;
+    }
+
+    .token-stats-table__head {
+        color: var(--b3-theme-on-surface-light);
+        background: var(--b3-theme-surface);
+        font-size: 12px;
+        font-weight: 600;
+    }
+
+    .token-stats-table__row {
+        border-top: 1px solid var(--b3-border-color);
+        color: var(--b3-theme-on-surface);
+        font-size: 12px;
+    }
+
+    .token-stats-table__model {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 0;
+
+        strong,
+        span {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        strong {
+            color: var(--b3-theme-on-background);
+            font-size: 13px;
+        }
+
+        span {
+            color: var(--b3-theme-on-surface-light);
+            font-size: 11px;
+        }
+    }
+
+    .token-stats-table__bar {
+        width: 120px;
+        max-width: 100%;
+        height: 4px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: var(--b3-theme-surface);
+
+        div {
+            height: 100%;
+            border-radius: inherit;
+            background: var(--b3-theme-primary);
+        }
     }
 
     .soul-settings-panel {
