@@ -67,6 +67,7 @@
     import { t } from './utils/i18n';
     import { getModelCapabilities } from './utils/modelCapabilities';
     import { shouldSendMessageFromKeydown } from './utils/sendShortcut';
+    import type { TaskSession } from './task-types';
     // Agent 模式工具使用强制规则（统一常量）
     // STUBS: ./tools deleted, safe no-op replacements
     const AVAILABLE_TOOLS: any[] = [];
@@ -104,14 +105,20 @@
         }
     }
 
-    interface ChatSession {
-        id: string;
-        title: string;
-        messages?: Message[]; // 可选，元数据模式下不包含消息
-        createdAt: number;
-        updatedAt: number;
-        messageCount?: number; // 消息数量
-        pinned?: boolean; // 是否钉住
+    type ChatSession = TaskSession;
+
+    interface SidebarSessionState {
+        messages: Message[];
+        currentInput: string;
+        currentAttachments: MessageAttachment[];
+        contextDocuments: ContextDocument[];
+        streamingMessage: string;
+        streamingThinking: string;
+        openCodeToolParts: any[];
+        openCodeTimeline: OpenCodeTimelineItem[];
+        isThinkingPhase: boolean;
+        isLoading: boolean;
+        hasUnsavedChanges: boolean;
     }
 
     let messages: Message[] = [];
@@ -323,6 +330,7 @@
             activeSessions.delete(sid);
             sessionIsAborted.delete(sid);
         }
+        activeSessions = new Set(activeSessions);
         if (sid === currentSessionId) {
             abortController = ctrl;
         }
@@ -379,6 +387,205 @@
     let currentSessionId: string = '';
     let isSessionManagerOpen = false;
     let hasUnsavedChanges = false;
+    const DRAFT_TASK_PREFIX = 'draft:';
+    const createDraftTaskId = () => `${DRAFT_TASK_PREFIX}${createSessionId()}`;
+    const isDraftTaskId = (id: string) => id.startsWith(DRAFT_TASK_PREFIX);
+    const initialDraftTaskId = createDraftTaskId();
+    let activeDraftTaskId = initialDraftTaskId;
+    let activeTaskIds: string[] = [initialDraftTaskId];
+    let unreadTaskIds = new Set<string>();
+    let sessionStates: Record<string, SidebarSessionState> = {};
+    const MAX_ACTIVE_TASK_TABS = 4;
+    $: currentActiveTaskId = currentSessionId || activeDraftTaskId;
+
+    function activeTaskKey(): string {
+        return currentSessionId || activeDraftTaskId;
+    }
+
+    function markTaskUnread(taskId: string) {
+        if (!taskId || isActiveTask(taskId) || unreadTaskIds.has(taskId)) return;
+        unreadTaskIds = new Set([...unreadTaskIds, taskId]);
+    }
+
+    function clearTaskUnread(taskId: string) {
+        if (!taskId || !unreadTaskIds.has(taskId)) return;
+        const next = new Set(unreadTaskIds);
+        next.delete(taskId);
+        unreadTaskIds = next;
+    }
+
+    function captureActiveTaskState(): SidebarSessionState {
+        return {
+            messages,
+            currentInput,
+            currentAttachments,
+            contextDocuments,
+            streamingMessage,
+            streamingThinking,
+            openCodeToolParts,
+            openCodeTimeline,
+            isThinkingPhase,
+            isLoading,
+            hasUnsavedChanges,
+        };
+    }
+
+    function saveActiveTaskState() {
+        const key = activeTaskKey();
+        if (!key) return;
+        sessionStates = {
+            ...sessionStates,
+            [key]: captureActiveTaskState(),
+        };
+    }
+
+    function applyTaskState(state: SidebarSessionState) {
+        messages = state.messages;
+        currentInput = state.currentInput;
+        currentAttachments = state.currentAttachments;
+        contextDocuments = state.contextDocuments;
+        streamingMessage = state.streamingMessage;
+        streamingThinking = state.streamingThinking;
+        openCodeToolParts = state.openCodeToolParts;
+        openCodeTimeline = state.openCodeTimeline;
+        isThinkingPhase = state.isThinkingPhase;
+        isLoading = state.isLoading;
+        hasUnsavedChanges = state.hasUnsavedChanges;
+    }
+
+    function blankTaskState(): SidebarSessionState {
+        return {
+            messages: settings.aiSystemPrompt
+                ? [{ role: 'system', content: settings.aiSystemPrompt }]
+                : [],
+            currentInput: '',
+            currentAttachments: [],
+            contextDocuments: [],
+            streamingMessage: '',
+            streamingThinking: '',
+            openCodeToolParts: [],
+            openCodeTimeline: [],
+            isThinkingPhase: false,
+            isLoading: false,
+            hasUnsavedChanges: false,
+        };
+    }
+
+    function ensureActiveTaskTab(taskId: string) {
+        if (!taskId || activeTaskIds.includes(taskId)) return;
+        let next = [...activeTaskIds, taskId];
+        if (next.length > MAX_ACTIVE_TASK_TABS) {
+            const removableIndex = next.findIndex(id => id !== activeTaskKey() && !activeSessions.has(id));
+            next = next.filter((_, index) => index !== (removableIndex >= 0 ? removableIndex : 0));
+        }
+        activeTaskIds = next;
+    }
+
+    function replaceActiveDraftWithTask(taskId: string) {
+        const draftId = activeDraftTaskId;
+        if (!draftId || !isDraftTaskId(draftId)) {
+            ensureActiveTaskTab(taskId);
+            return;
+        }
+        if (sessionStates[draftId]) {
+            const nextStates = { ...sessionStates, [taskId]: sessionStates[draftId] };
+            delete nextStates[draftId];
+            sessionStates = nextStates;
+        }
+        activeTaskIds = Array.from(new Set(activeTaskIds.map(id => id === draftId ? taskId : id)));
+        activeDraftTaskId = '';
+        clearTaskUnread(draftId);
+    }
+
+    function getTaskTabTitle(taskId: string): string {
+        if (isDraftTaskId(taskId)) return t('aiSidebar.session.new') || '新任务';
+        const task = sessions.find(s => s.id === taskId);
+        return task?.title || taskId.slice(0, 8);
+    }
+
+    function isActiveTask(taskId: string): boolean {
+        return taskId === activeTaskKey();
+    }
+
+    function getStoredTaskState(taskId: string): SidebarSessionState {
+        return sessionStates[taskId] || blankTaskState();
+    }
+
+    function updateStoredTaskState(taskId: string, updater: (state: SidebarSessionState) => SidebarSessionState) {
+        const nextState = updater(getStoredTaskState(taskId));
+        sessionStates = {
+            ...sessionStates,
+            [taskId]: nextState,
+        };
+    }
+
+    function appendStreamingTextForTask(taskId: string, chunk: string) {
+        if (!chunk) return;
+        if (isActiveTask(taskId)) {
+            streamingMessage += chunk;
+            appendOpenCodeTimelineText(chunk);
+            return;
+        }
+        markTaskUnread(taskId);
+        updateStoredTaskState(taskId, state => ({
+            ...state,
+            streamingMessage: state.streamingMessage + chunk,
+            openCodeTimeline: [
+                ...state.openCodeTimeline,
+                {
+                    type: 'text',
+                    id: `text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                    content: chunk,
+                },
+            ],
+            isLoading: true,
+        }));
+    }
+
+    function appendThinkingForTask(taskId: string, chunk: string) {
+        if (!chunk) return;
+        if (isActiveTask(taskId)) {
+            appendStreamingThinking(chunk);
+            return;
+        }
+        markTaskUnread(taskId);
+        updateStoredTaskState(taskId, state => ({
+            ...state,
+            streamingThinking: state.streamingThinking + chunk,
+            openCodeTimeline: [
+                ...state.openCodeTimeline,
+                {
+                    type: 'thinking',
+                    id: `thinking-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                    content: chunk,
+                },
+            ],
+            isThinkingPhase: true,
+            isLoading: true,
+        }));
+    }
+
+    function updateToolPartForTask(taskId: string, update: any) {
+        if (isActiveTask(taskId)) {
+            updateOpenCodeToolPart(update);
+            return;
+        }
+        markTaskUnread(taskId);
+        updateStoredTaskState(taskId, state => ({
+            ...state,
+            openCodeToolParts: [...state.openCodeToolParts, update],
+            openCodeTimeline: [
+                ...state.openCodeTimeline,
+                {
+                    type: 'tool',
+                    id: `tool-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                    toolPart: update,
+                },
+            ],
+            isThinkingPhase: false,
+            isLoading: true,
+        }));
+    }
 
     // 在新窗口打开菜单
     let showOpenWindowMenu = false;
@@ -1316,13 +1523,17 @@
         }
     }
 
-    function cloneOpenCodeTimeline() {
-        return openCodeTimeline.map(item => {
+    function cloneOpenCodeTimelineItems(items: OpenCodeTimelineItem[]) {
+        return items.map(item => {
             if (item.type === 'tool') {
                 return { ...item, toolPart: { ...item.toolPart } };
             }
             return { ...item };
         });
+    }
+
+    function cloneOpenCodeTimeline() {
+        return cloneOpenCodeTimelineItems(openCodeTimeline);
     }
 
     function updateOpenCodeToolPart(update: any) {
@@ -3058,9 +3269,11 @@
                     messages: [...messages],
                     createdAt: now,
                     updatedAt: now,
+                    status: 'running',
                 };
                 sessions = [newSession, ...sessions];
                 currentSessionId = newSession.id;
+                replaceActiveDraftWithTask(newSession.id);
                 await saveSessions();
 
                 // 立即执行自动重命名
@@ -4415,9 +4628,11 @@
                 messages: [...messages],
                 createdAt: now,
                 updatedAt: now,
+                status: 'running',
             };
             sessions = [newSession, ...sessions];
             currentSessionId = newSession.id;
+            replaceActiveDraftWithTask(newSession.id);
             await saveSessions();
 
             // 立即执行自动重命名
@@ -4456,6 +4671,11 @@
 
         // 创建新的 AbortController
         setController(currentSessionId, new AbortController());
+        const runTaskId = currentSessionId;
+        sessionStates = {
+            ...sessionStates,
+            [runTaskId]: captureActiveTaskState(),
+        };
         const diagnosticLogger = await startDiagnosticLog(userContent, modelConfig);
 
         try {
@@ -4929,19 +5149,29 @@
                                 })
                             );
                         },
-                        onThinkingChunk: appendStreamingThinking,
-                        onThinkingComplete: () => finishStreamingThinking(messages.length),
-                        onToolPartUpdate: updateOpenCodeToolPart,
+                        onThinkingChunk: (chunk: string) => appendThinkingForTask(runTaskId, chunk),
+                        onThinkingComplete: () => {
+                            if (isActiveTask(runTaskId)) {
+                                finishStreamingThinking(messages.length);
+                            } else {
+                                updateStoredTaskState(runTaskId, state => ({
+                                    ...state,
+                                    isThinkingPhase: false,
+                                }));
+                            }
+                        },
+                        onToolPartUpdate: (update: any) => updateToolPartForTask(runTaskId, update),
                         onPermissionAsked: handleOpenCodePermissionAsked,
                         onQuestionAsked: handleOpenCodeQuestionAsked,
                         onChunk: async (chunk: string) => {
-                            streamingMessage += chunk;
-                            appendOpenCodeTimelineText(chunk);
-                            await scrollToBottom();
+                            appendStreamingTextForTask(runTaskId, chunk);
+                            if (isActiveTask(runTaskId)) {
+                                await scrollToBottom();
+                            }
                         },
                         onComplete: async (fullText: string) => {
                             // 如果已经中断，不再添加消息（避免重复）
-                            if (isAborted) {
+                            if (sessionIsAborted.get(runTaskId)) {
                                 return;
                             }
 
@@ -4955,19 +5185,24 @@
                                 role: 'assistant',
                                 content: processedContent,
                             };
+                            const taskIsActive = isActiveTask(runTaskId);
+                            const backgroundState = taskIsActive ? null : getStoredTaskState(runTaskId);
+                            const taskStreamingThinking = backgroundState?.streamingThinking ?? streamingThinking;
+                            const taskToolParts = backgroundState?.openCodeToolParts ?? openCodeToolParts;
+                            const taskTimeline = backgroundState?.openCodeTimeline ?? openCodeTimeline;
 
                             // 如果有思考内容，添加到消息中
-                            if (streamingThinking) {
-                                assistantMessage.thinking = streamingThinking;
+                            if (taskStreamingThinking) {
+                                assistantMessage.thinking = taskStreamingThinking;
                             }
 
-                            if (openCodeToolParts.length > 0) {
-                                assistantMessage.openCodeToolParts = openCodeToolParts.map(part => ({
+                            if (taskToolParts.length > 0) {
+                                assistantMessage.openCodeToolParts = taskToolParts.map(part => ({
                                     ...part,
                                 }));
                             }
-                            if (openCodeTimeline.length > 0) {
-                                assistantMessage.openCodeTimeline = cloneOpenCodeTimeline();
+                            if (taskTimeline.length > 0) {
+                                assistantMessage.openCodeTimeline = cloneOpenCodeTimelineItems(taskTimeline);
                             }
 
                             // 如果有生成的图片，保存到消息中
@@ -4991,6 +5226,27 @@
                                 }));
                             }
 
+                            if (!taskIsActive) {
+                                markTaskUnread(runTaskId);
+                                updateStoredTaskState(runTaskId, state => ({
+                                    ...state,
+                                    messages: [...state.messages, assistantMessage],
+                                    streamingMessage: '',
+                                    streamingThinking: '',
+                                    openCodeToolParts: [],
+                                    openCodeTimeline: [],
+                                    isThinkingPhase: false,
+                                    isLoading: false,
+                                    hasUnsavedChanges: true,
+                                }));
+                                setController(runTaskId, null);
+                                await closeDiagnosticLog(diagnosticLogger, 'ui.completed', {
+                                    messageCount: getStoredTaskState(runTaskId).messages.length,
+                                    finalTextChars: processedContent.length,
+                                });
+                                return;
+                            }
+
                             messages = [...messages, assistantMessage];
                             streamingMessage = '';
                             streamingThinking = '';
@@ -4998,7 +5254,7 @@
                             resetOpenCodeTimeline();
                             isThinkingPhase = false;
                             isLoading = false;
-                            setController(currentSessionId, null);
+                            setController(runTaskId, null);
                             hasUnsavedChanges = true;
 
                             // AI 回复完成后，自动保存当前会话
@@ -5012,6 +5268,36 @@
                             });
                         },
                         onError: (error: Error) => {
+                            if (!isActiveTask(runTaskId)) {
+                                if (error.message !== 'Request aborted') {
+                                    markTaskUnread(runTaskId);
+                                }
+                                updateStoredTaskState(runTaskId, state => ({
+                                    ...state,
+                                    messages:
+                                        error.message !== 'Request aborted'
+                                            ? [
+                                                  ...state.messages,
+                                                  {
+                                                      role: 'assistant',
+                                                      content: `❌ **${t('aiSidebar.errors.requestFailed')}**\n\n${error.message}`,
+                                                  },
+                                              ]
+                                            : state.messages,
+                                    streamingMessage: '',
+                                    streamingThinking: '',
+                                    openCodeToolParts: [],
+                                    openCodeTimeline: [],
+                                    isThinkingPhase: false,
+                                    isLoading: false,
+                                    hasUnsavedChanges: error.message !== 'Request aborted' || state.hasUnsavedChanges,
+                                }));
+                                setController(runTaskId, null);
+                                void closeDiagnosticLog(diagnosticLogger, 'ui.failed', {
+                                    error,
+                                });
+                                return;
+                            }
                             // 如果是主动中断，不显示错误
                             if (error.message !== 'Request aborted') {
                                 // 将错误消息作为一条 assistant 消息添加
@@ -5028,7 +5314,7 @@
                             openCodeToolParts = [];
                             resetOpenCodeTimeline();
                             isThinkingPhase = false;
-                            setController(currentSessionId, null);
+                            setController(runTaskId, null);
                             void closeDiagnosticLog(diagnosticLogger, 'ui.failed', {
                                 error,
                             });
@@ -5312,8 +5598,21 @@
         return false;
     }
 
+    function handleTaskTabShortcut(e: KeyboardEvent): boolean {
+        if (e.defaultPrevented || e.altKey || e.shiftKey) return false;
+        if (!e.metaKey && !e.ctrlKey) return false;
+        if (!/^[1-9]$/.test(e.key)) return false;
+        const index = Number(e.key) - 1;
+        const taskId = activeTaskIds[index];
+        if (!taskId) return false;
+        e.preventDefault();
+        selectActiveTaskTab(taskId);
+        return true;
+    }
+
     function handleKeydown(e: KeyboardEvent) {
         if (handleModeShortcut(e)) return;
+        if (handleTaskTabShortcut(e)) return;
 
         // 命令面板键盘导航
         if (showCommandPalette) {
@@ -7257,7 +7556,10 @@
                     await saveJsonFile(CHAT_SESSIONS_PATH, data);
                 }
             }
-            sessions = data?.sessions || [];
+            sessions = (data?.sessions || []).map(session => ({
+                ...session,
+                status: session.status || 'completed',
+            }));
             // 会话迁移已在 index.ts 的 loadSettings 中统一处理
         } catch (error) {
             console.error('Load sessions error:', error);
@@ -7273,6 +7575,7 @@
                 const { messages, ...rest } = s;
                 return {
                     ...rest,
+                    status: activeSessions.has(s.id) ? 'running' : (s.status || 'completed'),
                     messageCount:
                         s.messageCount ||
                         (s.messages ? s.messages.filter(m => m.role !== 'system').length : 0),
@@ -7360,8 +7663,10 @@
                         messageCount: messages.filter(m => m.role !== 'system').length,
                         createdAt: now,
                         updatedAt: now,
+                        status: 'completed',
                     };
                     sessions = [newSession, ...sessions];
+                    replaceActiveDraftWithTask(newSession.id);
                     await saveSessions();
 
                     // 保存完整内容
@@ -7393,9 +7698,11 @@
                     messageCount: messages.filter(m => m.role !== 'system').length,
                     createdAt: now,
                     updatedAt: now,
+                    status: 'completed',
                 };
                 sessions = [newSession, ...sessions];
                 currentSessionId = newSession.id;
+                replaceActiveDraftWithTask(newSession.id);
                 await saveSessions();
 
                 // 保存完整内容
@@ -7436,6 +7743,10 @@
     }
 
     async function loadSession(sessionId: string) {
+        saveActiveTaskState();
+        ensureActiveTaskTab(sessionId);
+        clearTaskUnread(sessionId);
+
         // 多任务模式：切换会话时不再中断上一个会话的后台任务
         // 如果有未保存的更改，先提示保存
         if (isWaitingForAnswerSelection && multiModelResponses.length > 0) {
@@ -7473,21 +7784,15 @@
             }
         }
 
-        if (hasUnsavedChanges) {
-            confirm(
-                t('aiSidebar.confirm.switchSession.title'),
-                t('aiSidebar.confirm.switchSession.message'),
-                async () => {
-                    await saveCurrentSession();
-                    await doLoadSession(sessionId);
-                },
-                async () => {
-                    await doLoadSession(sessionId);
-                }
-            );
-        } else {
-            await doLoadSession(sessionId);
+        if (sessionStates[sessionId]) {
+            currentSessionId = sessionId;
+            activeDraftTaskId = '';
+            applyTaskState(sessionStates[sessionId]);
+            await scrollToTop();
+            return;
         }
+
+        await doLoadSession(sessionId);
     }
 
     async function doLoadSession(sessionId: string) {
@@ -7723,6 +8028,9 @@
                     }
                 }
                 currentSessionId = sessionId;
+                activeDraftTaskId = '';
+                ensureActiveTaskTab(sessionId);
+                clearTaskUnread(sessionId);
                 hasUnsavedChanges = false;
 
                 // 如果会话被修改（迁移了 base64 图片或自动选择了模型），自动保存
@@ -7747,6 +8055,7 @@
     }
 
     async function newSession() {
+        saveActiveTaskState();
         // 多任务模式：新建会话不再中断其他会话的后台任务
         if (isWaitingForAnswerSelection && multiModelResponses.length > 0) {
             // 找到第一个成功的响应作为默认选择（如果所有都失败则不保存）
@@ -7792,10 +8101,19 @@
     }
 
     function doNewSession() {
-        messages = settings.aiSystemPrompt
-            ? [{ role: 'system', content: settings.aiSystemPrompt }]
-            : [];
-        contextDocuments = [];
+        const draftId = createDraftTaskId();
+        const state = blankTaskState();
+        activeDraftTaskId = draftId;
+        currentSessionId = '';
+        clearTaskUnread(draftId);
+        sessionStates = { ...sessionStates, [draftId]: state };
+        activeTaskIds = [...activeTaskIds, draftId];
+        if (activeTaskIds.length > MAX_ACTIVE_TASK_TABS) {
+            const removableIndex = activeTaskIds.findIndex(id => id !== draftId && !activeSessions.has(id));
+            activeTaskIds = activeTaskIds.filter((_, index) => index !== (removableIndex >= 0 ? removableIndex : 0));
+        }
+        applyTaskState(state);
+        contextDocuments = state.contextDocuments;
         currentSessionId = '';
         hasUnsavedChanges = false;
 
@@ -7804,6 +8122,47 @@
         isWaitingForAnswerSelection = false;
         selectedAnswerIndex = null;
         selectedTabIndex = 0;
+    }
+
+    async function selectActiveTaskTab(taskId: string) {
+        if (!taskId) return;
+        clearTaskUnread(taskId);
+        if (taskId === activeTaskKey()) return;
+        saveActiveTaskState();
+        if (isDraftTaskId(taskId)) {
+            currentSessionId = '';
+            activeDraftTaskId = taskId;
+            const state = sessionStates[taskId] || blankTaskState();
+            sessionStates = { ...sessionStates, [taskId]: state };
+            applyTaskState(state);
+            return;
+        }
+        await loadSession(taskId);
+    }
+
+    async function closeActiveTaskTab(taskId: string, event?: Event) {
+        if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+        if (activeTaskIds.length <= 1) {
+            doNewSession();
+            return;
+        }
+        const isCurrent = taskId === activeTaskKey();
+        const currentIndex = activeTaskIds.indexOf(taskId);
+        activeTaskIds = activeTaskIds.filter(id => id !== taskId);
+        const nextStates = { ...sessionStates };
+        delete nextStates[taskId];
+        sessionStates = nextStates;
+        clearTaskUnread(taskId);
+
+        if (isCurrent) {
+            const nextIndex = Math.min(Math.max(currentIndex, 0), activeTaskIds.length - 1);
+            currentSessionId = '';
+            activeDraftTaskId = '';
+            await selectActiveTaskTab(activeTaskIds[nextIndex]);
+        }
     }
 
     async function deleteSession(sessionId: string) {
@@ -7826,6 +8185,8 @@
                 if (currentSessionId === sessionId) {
                     doNewSession();
                 }
+                activeTaskIds = activeTaskIds.filter(id => id !== sessionId);
+                clearTaskUnread(sessionId);
             }
         );
     }
@@ -13529,6 +13890,39 @@
         on:dragleave={handleDragLeave}
         on:drop={handleDrop}
     >
+        <div class="ai-sidebar__task-tabs" aria-label="任务切换">
+            <div class="ai-sidebar__task-tab-list">
+                {#each activeTaskIds as taskId, index (taskId)}
+                    {@const active = taskId === currentActiveTaskId}
+                    {@const running = activeSessions.has(taskId)}
+                    {@const unread = unreadTaskIds.has(taskId)}
+                    <button
+                        type="button"
+                        class="ai-sidebar__task-tab"
+                        class:ai-sidebar__task-tab--active={active}
+                        class:ai-sidebar__task-tab--running={running}
+                        class:ai-sidebar__task-tab--unread={unread}
+                        title={`${index + 1}. ${getTaskTabTitle(taskId)} / Cmd/Ctrl + ${index + 1}`}
+                        on:click={() => selectActiveTaskTab(taskId)}
+                        on:contextmenu|preventDefault|stopPropagation={e => closeActiveTaskTab(taskId, e)}
+                    >
+                        <span class="ai-sidebar__task-tab-index">{index + 1}</span>
+                        {#if unread}
+                            <span class="ai-sidebar__task-tab-dot" aria-hidden="true"></span>
+                        {/if}
+                    </button>
+                {/each}
+                <button
+                    type="button"
+                    class="ai-sidebar__task-tab ai-sidebar__task-tab--add"
+                    title={t('aiSidebar.session.new')}
+                    on:click={newSession}
+                >
+                    <svg class="b3-button__icon"><use xlink:href="#iconAdd"></use></svg>
+                </button>
+            </div>
+        </div>
+
         <!-- 大输入框 -->
         <div class="ai-sidebar__chat-input-box">
             {#if showCommandPalette}
@@ -18865,6 +19259,112 @@
             box-shadow:
                 0 1px 2px rgba(0, 0, 0, 0.1),
                 0 12px 28px rgba(0, 0, 0, 0.06);
+        }
+    }
+
+    .ai-sidebar__task-tabs {
+        padding: 0 4px 8px;
+        min-height: 30px;
+    }
+
+    .ai-sidebar__task-tab-list {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        overflow-x: auto;
+        scrollbar-width: none;
+
+        &::-webkit-scrollbar {
+            display: none;
+        }
+    }
+
+    .ai-sidebar__task-tab {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        height: 28px;
+        min-width: 0;
+        width: 34px;
+        flex: 0 0 34px;
+        padding: 0;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 8px;
+        background: var(--b3-theme-surface);
+        color: var(--b3-theme-on-surface-light);
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition:
+            background 0.16s ease,
+            border-color 0.16s ease,
+            box-shadow 0.16s ease,
+            color 0.16s ease,
+            transform 0.16s ease;
+
+        &:hover {
+            border-color: var(--b3-theme-primary-light);
+            color: var(--b3-theme-on-surface);
+        }
+
+        &--active {
+            background: var(--b3-theme-primary-lightest);
+            color: var(--b3-theme-primary);
+        }
+
+        &--running:not(.ai-sidebar__task-tab--active) {
+            border-color: color-mix(in srgb, var(--b3-theme-primary) 46%, var(--b3-border-color));
+            box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--b3-theme-primary) 28%, transparent);
+        }
+
+        &--unread:not(.ai-sidebar__task-tab--active) {
+            color: var(--b3-theme-on-surface);
+        }
+
+        &--add {
+            flex: 0 0 28px;
+            width: 28px;
+            justify-content: center;
+            border-style: dashed;
+        }
+    }
+
+    .ai-sidebar__task-tab-index {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: auto;
+        height: auto;
+        border-radius: 0;
+        background: transparent;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1;
+        flex: 0 0 auto;
+    }
+
+    .ai-sidebar__task-tab-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--b3-theme-primary);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--b3-theme-primary) 16%, transparent);
+        flex: 0 0 6px;
+        animation: ai-sidebar-task-unread-pulse 1.4s ease-in-out infinite;
+    }
+
+    @keyframes ai-sidebar-task-unread-pulse {
+        0%,
+        100% {
+            opacity: 0.68;
+            transform: scale(0.86);
+        }
+
+        50% {
+            opacity: 1;
+            transform: scale(1);
         }
     }
 

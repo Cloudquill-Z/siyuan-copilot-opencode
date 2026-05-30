@@ -183,6 +183,21 @@
                     },
                 },
                 {
+                    key: 'maxConcurrentTasks',
+                    value: settings.maxConcurrentTasks,
+                    type: 'select',
+                    title: t('settings.maxConcurrentTasks.title') || '最大并行任务数',
+                    description:
+                        t('settings.maxConcurrentTasks.description') ||
+                        '限制后台同时运行的 OpenCode 任务数量',
+                    options: {
+                        1: '1',
+                        2: '2',
+                        3: '3',
+                        4: '4',
+                    },
+                },
+                {
                     key: 'diagnosticLogMode',
                     value: settings.diagnosticLogMode,
                     type: 'select',

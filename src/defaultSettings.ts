@@ -62,6 +62,7 @@ export const getDefaultSettings = () => ({
     // 操作设置
     sendMessageShortcut: 'ctrl+enter' as 'ctrl+enter' | 'enter', // 发送消息的快捷键
     executionMessageMode: 'guide' as 'guide' | 'queue', // 执行中发送消息的处理方式
+    maxConcurrentTasks: 2 as number, // 最大并行任务数
     diagnosticLogMode: 'off' as 'off' | 'next' | 'always', // OpenCode 诊断日志模式
     diagnosticLogLevel: 'safe' as 'safe' | 'full', // OpenCode 诊断日志详细程度
     diagnosticLastLogPath: '' as string, // 最近一次诊断日志路径

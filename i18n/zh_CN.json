@@ -79,6 +79,10 @@
                 "queue": "排队：交给 OpenCode 排队执行"
             }
         },
+        "maxConcurrentTasks": {
+            "title": "最大并行任务数",
+            "description": "限制后台同时运行的 OpenCode 任务数量"
+        },
         "diagnosticLogMode": {
             "title": "OpenCode 诊断日志",
             "description": "记录 OpenCode 请求时间线、工具事件、权限问答和可见思考片段",

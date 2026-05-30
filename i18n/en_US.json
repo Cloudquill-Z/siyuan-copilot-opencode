@@ -79,6 +79,10 @@
                 "queue": "Queue: let OpenCode process it next"
             }
         },
+        "maxConcurrentTasks": {
+            "title": "Max Concurrent Tasks",
+            "description": "Limit how many OpenCode tasks can run in the background at once"
+        },
         "diagnosticLogMode": {
             "title": "OpenCode Diagnostic Log",
             "description": "Record the OpenCode request timeline, tool events, permission prompts, and visible reasoning chunks",

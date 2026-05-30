@@ -82,5 +82,10 @@ export function normalizeSettings(rawSettings: any) {
         merged.aiSystemPrompt = DEFAULT_AI_SYSTEM_PROMPT;
     }
 
+    merged.maxConcurrentTasks = Math.min(
+        4,
+        Math.max(1, Math.floor(Number(merged.maxConcurrentTasks) || defaults.maxConcurrentTasks))
+    );
+
     return merged;
 }
