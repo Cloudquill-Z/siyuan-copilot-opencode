@@ -40,6 +40,7 @@ assert.match(getChatModeSystemInstruction('build'), /可以直接修改/);
 assert.match(getChatModeSystemInstruction('build'), /siyuan-sisyphus skill install/);
 assert.equal(getOpenCodeAgentForChatMode('plan'), 'plan');
 assert.equal(getOpenCodeAgentForChatMode('build'), 'build');
+assert.equal(getContextLimitForDisplay({}), 200000);
 assert.equal(getContextLimitForDisplay({ currentProvider: 'opencode', currentModelId: '' }), 200000);
 assert.equal(getContextLimitForDisplay({ currentProvider: 'opencode', currentModelId: 'anthropic/claude-sonnet-4' }), 200000);
 assert.equal(

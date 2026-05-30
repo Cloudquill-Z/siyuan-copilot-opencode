@@ -88,7 +88,10 @@ export function getContextLimitForDisplay(options: {
     );
     if (inferred) return inferred;
 
-    return options.currentProvider === 'opencode' ? 200_000 : undefined;
+    if (!options.currentProvider || options.currentProvider === 'opencode') {
+        return 200_000;
+    }
+    return undefined;
 }
 
 export function shouldToggleChatModeFromKeydown(e: Pick<
