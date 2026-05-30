@@ -200,10 +200,10 @@
         "unsavedChanges": "有未保存的更改",
         "mode": {
             "label": "模式",
-            "plan": "Plan",
-            "build": "Build",
-            "planDescription": "AI 分析和规划，不进行修改",
-            "buildDescription": "AI 对文件进行修改"
+            "plan": "问答模式",
+            "build": "修订模式",
+            "planDescription": "查询/阅读笔记，并直接在对话框回复，不修改笔记",
+            "buildDescription": "直接修改笔记，并在对话框汇报修改结果"
         },
         "empty": {
             "title": "开始对话",

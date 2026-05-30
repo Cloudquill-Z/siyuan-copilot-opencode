@@ -10,6 +10,7 @@ import {
     type RealtimeCompletionWatcher,
     type RealtimeSessionStatus,
 } from "./realtime-completion-watcher";
+import { getOpenCodeAgentForChatMode } from "../utils/chatMode";
 
 export type { OpenCodeModelInfo } from "./opencode-models";
 
@@ -441,7 +442,7 @@ function buildPromptBody(options: OpenCodeChatOptions, model: any): any {
         ...customBody,
         model,
         parts: [{ type: 'text', text: options.prompt }],
-        ...(options.mode ? { agent: options.mode === 'plan' ? 'plan' : 'build' } : {})
+        ...(options.mode ? { agent: getOpenCodeAgentForChatMode(options.mode) } : {})
     };
 }
 

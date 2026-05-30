@@ -201,10 +201,10 @@
         "unsavedChanges": "Unsaved changes",
         "mode": {
             "label": "Mode",
-            "plan": "Plan",
-            "build": "Build",
-            "planDescription": "AI analyzes and plans without making changes",
-            "buildDescription": "AI makes changes to files"
+            "plan": "Q&A Mode",
+            "build": "Revision Mode",
+            "planDescription": "Search/read notes and reply in the chat without changing notes",
+            "buildDescription": "Modify notes directly and report the result in the chat"
         },
         "empty": {
             "title": "Start Conversation",

@@ -71,6 +71,13 @@
     import { getModelCapabilities } from './utils/modelCapabilities';
     import { shouldSendMessageFromKeydown } from './utils/sendShortcut';
     import {
+        getChatModeDescription,
+        getChatModeLabel,
+        getChatModeSystemInstruction,
+        shouldToggleChatModeFromKeydown,
+        type ChatMode,
+    } from './utils/chatMode';
+    import {
         appendTokenUsageRecord,
         createTokenUsageRecord,
         formatTokenCount,
@@ -638,7 +645,6 @@
     };
 
     // 对话模式
-    type ChatMode = 'plan' | 'build';
     type ThinkingSelectValue = 'off' | ThinkingEffort;
     let chatMode: ChatMode = 'plan';
     const THINKING_EFFORT_OPTIONS: Array<{ value: ThinkingEffort; label: string }> = [
@@ -1556,6 +1562,14 @@
 
     function toggleChatMode() {
         setChatMode(chatMode === 'plan' ? 'build' : 'plan');
+    }
+
+    function getLocalizedChatModeLabel(mode: ChatMode): string {
+        return t(`aiSidebar.mode.${mode}`) || getChatModeLabel(mode);
+    }
+
+    function getLocalizedChatModeDescription(mode: ChatMode): string {
+        return t(`aiSidebar.mode.${mode}Description`) || getChatModeDescription(mode);
     }
 
     function getConnectionLabel(status: ConnectionStatus) {
@@ -4462,6 +4476,10 @@
         if (tempModelSettings.systemPrompt.trim()) {
             baseSystemPrompt = tempModelSettings.systemPrompt;
         }
+        const modeInstruction = getChatModeSystemInstruction(chatMode);
+        if (modeInstruction.trim()) {
+            baseSystemPrompt = `${baseSystemPrompt.trim()}\n\n${modeInstruction}`.trim();
+        }
 
         let hasToolInstruction = false;
         let hasSoulEnabled = false;
@@ -5858,8 +5876,7 @@
 
     // 处理键盘事件
     function handleModeShortcut(e: KeyboardEvent): boolean {
-        if (e.defaultPrevented) return false;
-        if (e.key === 'Tab' && e.shiftKey) {
+        if (shouldToggleChatModeFromKeydown(e)) {
             e.preventDefault();
             toggleChatMode();
             return true;
@@ -14376,12 +14393,12 @@
                 class:ai-sidebar__mode-toggle--build={chatMode === 'build'}
                 role="switch"
                 aria-checked={chatMode === 'build'}
-                aria-label={`${t('aiSidebar.mode.label')}：${chatMode === 'build' ? 'Build' : 'Plan'}`}
+                aria-label={`${t('aiSidebar.mode.label')}：${getLocalizedChatModeLabel(chatMode)}`}
                 on:click={toggleChatMode}
-                title={`${chatMode === 'build' ? t('aiSidebar.mode.buildDescription') : t('aiSidebar.mode.planDescription')} / Shift + Tab`}
+                title={`${getLocalizedChatModeDescription(chatMode)} / Tab`}
             >
                 <span class="ai-sidebar__mode-toggle-label">
-                    {chatMode === 'build' ? 'Build' : 'Plan'}
+                    {getLocalizedChatModeLabel(chatMode)}
                 </span>
                 <svg class="ai-sidebar__composer-chevron">
                     <use xlink:href="#iconDown"></use>
