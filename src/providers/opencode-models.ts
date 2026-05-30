@@ -124,7 +124,10 @@ function normalizeModelInfo(modelId: string, modelInfo: any, providerID: string)
     return model;
 }
 
-export function parseOpenCodeProviderModels(data: any): OpenCodeModelInfo[] {
+export function parseOpenCodeProviderModels(
+    data: any,
+    connectedProviders?: Set<string>
+): OpenCodeModelInfo[] {
     const providerSource = data?.all ?? data?.providers ?? [];
     const providers = Array.isArray(providerSource)
         ? providerSource
@@ -147,6 +150,13 @@ export function parseOpenCodeProviderModels(data: any): OpenCodeModelInfo[] {
     for (const provider of providers) {
         const providerID = getProviderId(provider);
         if (!providerID) continue;
+
+        if (connectedProviders !== undefined) {
+            const isConnected = connectedProviders.has(providerID);
+            const isFreeBuiltIn = providerID === 'opencode';
+            if (!isConnected && !isFreeBuiltIn) continue;
+        }
+
         const modelsObj = provider?.models;
         if (modelsObj && typeof modelsObj === 'object' && !Array.isArray(modelsObj)) {
             for (const [modelId, modelInfo] of Object.entries(modelsObj)) {

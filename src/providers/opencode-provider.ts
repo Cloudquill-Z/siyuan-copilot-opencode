@@ -1186,7 +1186,10 @@ export async function fetchOpenCodeModels(config: OpenCodeProviderConfig): Promi
             throw new Error(`Failed to parse models response from OpenCode${responseText ? ': ' + responseText.slice(0, 200) : ' (empty response)'}`);
         }
 
-        const models = parseOpenCodeProviderModels(data);
+        const connectedProviders = 'connected' in data
+            ? new Set<string>(Array.isArray(data.connected) ? data.connected : [])
+            : undefined;
+        const models = parseOpenCodeProviderModels(data, connectedProviders);
         const cliModels = await fetchOpenCodeCliModels();
         const mergedModels = mergeOpenCodeModelLists(models, cliModels);
 
