@@ -92,6 +92,30 @@
         debouncedSave();
     }
 
+    function getModelMatchKeys(modelId?: string, providerID?: string): string[] {
+        const raw = String(modelId || '').trim().toLowerCase();
+        if (!raw) return [];
+        const keys = new Set<string>([raw]);
+        const provider = String(providerID || '').trim().toLowerCase();
+        if (provider && !raw.startsWith(`${provider}/`)) {
+            keys.add(`${provider}/${raw}`);
+        }
+        const slashIndex = raw.indexOf('/');
+        if (slashIndex >= 0 && slashIndex < raw.length - 1) {
+            keys.add(raw.slice(slashIndex + 1));
+            keys.add(raw.split('/').pop() || raw);
+        }
+        return Array.from(keys).filter(Boolean);
+    }
+
+    function findModelById(models: ModelConfig[] = [], modelId?: string, providerID?: string) {
+        const targetKeys = new Set(getModelMatchKeys(modelId, providerID));
+        if (targetKeys.size === 0) return undefined;
+        return models.find(model =>
+            getModelMatchKeys(model.id, (model as any).providerID).some(key => targetKeys.has(key))
+        );
+    }
+
     async function refreshModels() {
         if (isRefreshingModels) return;
         isRefreshingModels = true;
@@ -100,13 +124,9 @@
             invalidateModelCache(serverUrl);
             const models = await fetchModels('opencode', '', serverUrl);
             if (models && models.length > 0) {
-                const existingModels: Record<string, ModelConfig> = {};
                 const existingCount = (opencodeConfig.models || []).length;
-                for (const m of opencodeConfig.models || []) {
-                    existingModels[m.id] = m;
-                }
                 const mergedModels: ModelConfig[] = models.map(m => {
-                    const existing = existingModels[m.id];
+                    const existing = findModelById(opencodeConfig.models || [], m.id, m.providerID);
                     const capabilities = getModelCapabilities(m.id);
                     if (existing && existingCount <= 100) {
                         return {

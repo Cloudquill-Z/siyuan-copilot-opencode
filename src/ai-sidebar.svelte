@@ -15,6 +15,7 @@
         sessionInit,
         estimateTokens,
         calculateTotalTokens,
+        invalidateModelCache,
     } from './ai-chat';
     import type { MessageContent } from './ai-chat';
     import { getActiveEditor, openTab } from 'siyuan';
@@ -126,6 +127,7 @@
         isThinkingPhase: boolean;
         isLoading: boolean;
         hasUnsavedChanges: boolean;
+        lastPreparedContextTokens: number;
     }
 
     let messages: Message[] = [];
@@ -434,6 +436,7 @@
             isThinkingPhase,
             isLoading,
             hasUnsavedChanges,
+            lastPreparedContextTokens,
         };
     }
 
@@ -458,6 +461,7 @@
         isThinkingPhase = state.isThinkingPhase;
         isLoading = state.isLoading;
         hasUnsavedChanges = state.hasUnsavedChanges;
+        lastPreparedContextTokens = state.lastPreparedContextTokens || 0;
     }
 
     function blankTaskState(): SidebarSessionState {
@@ -475,6 +479,7 @@
             isThinkingPhase: false,
             isLoading: false,
             hasUnsavedChanges: false,
+            lastPreparedContextTokens: 0,
         };
     }
 
@@ -612,6 +617,8 @@
     let multiModelViewMode: 'tab' | 'card' = 'tab'; // 多模型回答样式
     let isTokenDetailsOpen = false;
     let lastPreparedContextTokens = 0;
+    let tokenButtonElement: HTMLButtonElement | null = null;
+    let tokenPopoverStyle = '';
 
     // 模型临时设置
     let tempModelSettings = {
@@ -652,6 +659,30 @@
     let currentImageSrc = '';
     let currentImageName = '';
 
+    function getModelMatchKeys(modelId?: string, providerID?: string): string[] {
+        const raw = String(modelId || '').trim().toLowerCase();
+        if (!raw) return [];
+        const keys = new Set<string>([raw]);
+        const provider = String(providerID || '').trim().toLowerCase();
+        if (provider && !raw.startsWith(`${provider}/`)) {
+            keys.add(`${provider}/${raw}`);
+        }
+        const slashIndex = raw.indexOf('/');
+        if (slashIndex >= 0 && slashIndex < raw.length - 1) {
+            keys.add(raw.slice(slashIndex + 1));
+            keys.add(raw.split('/').pop() || raw);
+        }
+        return Array.from(keys).filter(Boolean);
+    }
+
+    function findModelById(models: any[] = [], modelId?: string, providerID?: string) {
+        const targetKeys = new Set(getModelMatchKeys(modelId, providerID));
+        if (targetKeys.size === 0) return null;
+        return models.find((model: any) =>
+            getModelMatchKeys(model?.id, model?.providerID).some(key => targetKeys.has(key))
+        );
+    }
+
     function inferContextLimitFromModelId(modelId: string): number | undefined {
         const id = (modelId || '').toLowerCase();
         if (!id) return undefined;
@@ -666,6 +697,9 @@
         if (id.includes('qwen') || id.includes('deepseek') || id.includes('kimi') || id.includes('glm')) {
             return 128_000;
         }
+        if (id.includes('mimo')) return 1_000_000;
+        if (id.includes('big-pickle') || id.includes('pickle')) return 200_000;
+        if (id.includes('nemotron')) return 204_800;
         return undefined;
     }
 
@@ -694,10 +728,14 @@
         return contextTokens + attachmentTokens;
     }
 
+    function estimateMessagesContextTokens(messagesToMeasure: Message[]): number {
+        return calculateTotalTokens(messagesToMeasure) + messagesToMeasure.length * 4;
+    }
+
     function estimateCurrentContextTokens(): number {
         const visibleMessages = messages.filter(message => message.role !== 'system');
         const messageTokens =
-            calculateTotalTokens(messages) +
+            estimateMessagesContextTokens(messages) +
             visibleMessages.reduce((sum, message) => sum + estimateMessageExtraTokens(message), 0);
         const draftTokens = estimateTokens(currentInput || '');
         const contextTokens = contextDocuments.reduce(
@@ -739,13 +777,32 @@
         }
     }
 
+    function updateTokenPopoverPosition() {
+        if (!tokenButtonElement || typeof window === 'undefined') return;
+        const rect = tokenButtonElement.getBoundingClientRect();
+        const margin = 12;
+        const width = Math.min(280, Math.max(220, window.innerWidth - margin * 2));
+        const left = Math.min(
+            Math.max(margin, rect.right - width),
+            Math.max(margin, window.innerWidth - width - margin)
+        );
+        const bottom = Math.max(margin, window.innerHeight - rect.top + 10);
+        tokenPopoverStyle = `--token-popover-left: ${left}px; --token-popover-bottom: ${bottom}px; --token-popover-width: ${width}px;`;
+    }
+
+    async function toggleTokenDetails(event: MouseEvent) {
+        event.stopPropagation();
+        isTokenDetailsOpen = !isTokenDetailsOpen;
+        if (isTokenDetailsOpen) {
+            await tick();
+            updateTokenPopoverPosition();
+        }
+    }
+
     $: currentContextTokens = estimateCurrentContextTokens();
     $: currentContextLimit =
         getCurrentContextLimit() || inferContextLimitFromModelId(currentModelId);
-    $: displayedContextTokens = Math.max(
-        currentContextTokens,
-        isLoading ? lastPreparedContextTokens : 0
-    );
+    $: displayedContextTokens = Math.max(currentContextTokens, lastPreparedContextTokens);
     $: displayedContextPercent = currentContextLimit
         ? Math.min(100, Math.round((displayedContextTokens / currentContextLimit) * 100))
         : 0;
@@ -1048,7 +1105,7 @@
             ),
             modelConfig.id
         );
-        lastPreparedContextTokens = calculateTotalTokens(messagesToSend);
+        lastPreparedContextTokens = estimateMessagesContextTokens(messagesToSend);
 
         // 本次请求的 AbortController（用于单个模型的中断）
         const localAbort = new AbortController();
@@ -1386,7 +1443,7 @@
             !!(modelConfig.capabilities?.thinking && (modelConfig.thinkingEnabled || false)),
             modelConfig.id
         );
-        lastPreparedContextTokens = calculateTotalTokens(messagesToSend);
+        lastPreparedContextTokens = estimateMessagesContextTokens(messagesToSend);
 
         const localAbort = new AbortController();
 
@@ -2105,6 +2162,7 @@
         document.addEventListener('scroll', closeContextMenu, true);
         // 添加全局复制事件监听器
         document.addEventListener('copy', handleCopyEvent);
+        window.addEventListener('resize', updateTokenPopoverPosition);
         // 监听文档总结事件
         window.addEventListener(SUMMARY_EVENT, handleSummarizeDoc as EventListener);
 
@@ -2117,15 +2175,13 @@
             if (needsFetch) {
                 try {
                     const providerConfig = settings.aiProviders.opencode;
-                    const models = await fetchModels('opencode', '', providerConfig?.serverUrl || 'http://localhost:4096');
+                    const serverUrl = providerConfig?.serverUrl || 'http://localhost:4096';
+                    invalidateModelCache(serverUrl);
+                    const models = await fetchModels('opencode', '', serverUrl);
                     if (models && models.length > 0) {
                         // 合并逻辑：保留已有模型的用户设置（hidden/temperature/thinkingEnabled 等）
-                        const existingMap: Record<string, any> = {};
-                        for (const m of existingModels) {
-                            existingMap[m.id] = m;
-                        }
                         const modelConfigs = models.map(m => {
-                            const existing = existingMap[m.id];
+                            const existing = findModelById(existingModels, m.id, m.providerID);
                             const capabilities = getModelCapabilities(m.id);
                             if (m.enableThinking) {
                                 capabilities.thinking = true;
@@ -2159,9 +2215,12 @@
                         if (!settings.currentProvider) {
                             settings.currentProvider = 'opencode';
                         }
-                        if (!settings.currentModelId || !modelConfigs.find(m => m.id === settings.currentModelId)) {
+                        if (!settings.currentModelId || !findModelById(modelConfigs, settings.currentModelId)) {
                             settings.currentModelId = modelConfigs[0].id;
                         }
+                        providers = settings.aiProviders;
+                        currentProvider = settings.currentProvider;
+                        currentModelId = settings.currentModelId;
                         await plugin.saveData('settings.json', settings);
                         updateSettings(JSON.parse(JSON.stringify(settings)));
                     }
@@ -2186,6 +2245,7 @@
         document.removeEventListener('scroll', closeContextMenu, true);
         // 移除全局复制事件监听器
         document.removeEventListener('copy', handleCopyEvent);
+        window.removeEventListener('resize', updateTokenPopoverPosition);
         // 移除文档总结事件监听器
         window.removeEventListener(SUMMARY_EVENT, handleSummarizeDoc as EventListener);
         revokeLoadedAssetUrls();
@@ -2829,14 +2889,7 @@
         if (!providerConfig || !currentModelId) {
             return null;
         }
-        const currentShortId = currentModelId.includes('/')
-            ? currentModelId.split('/').pop()
-            : currentModelId;
-        return providerConfig.models.find((m: any) => {
-            const modelShortId =
-                typeof m.id === 'string' && m.id.includes('/') ? m.id.split('/').pop() : m.id;
-            return m.id === currentModelId || modelShortId === currentShortId;
-        });
+        return findModelById(providerConfig.models || [], currentModelId);
     }
 
     // 思考模式状态（响应式）
@@ -3512,7 +3565,7 @@
             lastUserMessage.content as string,
             lastUserMessage
         );
-        lastPreparedContextTokens = calculateTotalTokens(messagesToSend);
+        lastPreparedContextTokens = estimateMessagesContextTokens(messagesToSend);
 
         // 过滤掉无效的模型并初始化多模型响应数组
         const validModels = selectedMultiModels.filter(model => {
@@ -4877,7 +4930,7 @@
             enableThinking,
             modelConfig.id
         );
-        lastPreparedContextTokens = calculateTotalTokens(messagesToSend);
+        lastPreparedContextTokens = estimateMessagesContextTokens(messagesToSend);
 
         // 创建新的 AbortController
         setController(currentSessionId, new AbortController());
@@ -5175,7 +5228,7 @@
                                     enableThinking,
                                     modelConfig.id
                                 );
-                                lastPreparedContextTokens = calculateTotalTokens(messagesToSend);
+                                lastPreparedContextTokens = estimateMessagesContextTokens(messagesToSend);
 
                                 // 通知工具执行完成
                                 toolExecutionComplete?.();
@@ -5789,6 +5842,7 @@
         streamingMessage = '';
         streamingThinking = '';
         isThinkingPhase = false;
+        lastPreparedContextTokens = 0;
         thinkingCollapsed = {};
         currentSessionId = '';
         hasUnsavedChanges = false;
@@ -9056,6 +9110,14 @@
         // 关闭打开窗口菜单
         if (showOpenWindowMenu && !target.closest('.ai-sidebar__open-window-menu-container')) {
             showOpenWindowMenu = false;
+        }
+
+        if (
+            isTokenDetailsOpen &&
+            !target.closest('.ai-sidebar__token-widget') &&
+            !target.closest('.ai-sidebar__token-popover')
+        ) {
+            isTokenDetailsOpen = false;
         }
 
         if (isPromptSelectorOpen) {
@@ -14231,18 +14293,23 @@
                 </div>
                 <div class="ai-sidebar__token-widget">
                     <button
+                        bind:this={tokenButtonElement}
                         type="button"
                         class="ai-sidebar__token-pill"
                         class:ai-sidebar__token-pill--warn={displayedContextPercent >= 80}
                         style={`--token-percent: ${displayedContextPercent};`}
-                        on:click={() => (isTokenDetailsOpen = !isTokenDetailsOpen)}
+                        on:click={toggleTokenDetails}
                         title="Token 使用详情"
                     >
                         <span class="ai-sidebar__token-ring" aria-hidden="true"></span>
                         <span>{currentContextLimit ? `${displayedContextPercent}%` : formatTokenCount(displayedContextTokens)}</span>
                     </button>
                     {#if isTokenDetailsOpen}
-                        <div class="ai-sidebar__token-popover">
+                        <div
+                            class="ai-sidebar__token-popover"
+                            style={tokenPopoverStyle}
+                            on:click|stopPropagation
+                        >
                             <div class="ai-sidebar__token-popover-header">
                                 <span>上下文长度</span>
                                 <button
@@ -19782,11 +19849,12 @@
     }
 
     .ai-sidebar__token-popover {
-        position: absolute;
-        right: 0;
-        bottom: calc(100% + 10px);
-        z-index: 40;
-        width: min(280px, calc(100vw - 48px));
+        position: fixed;
+        left: var(--token-popover-left, 12px);
+        bottom: var(--token-popover-bottom, 80px);
+        z-index: 1000;
+        width: var(--token-popover-width, 280px);
+        max-width: calc(100vw - 24px);
         padding: 12px;
         border: 1px solid var(--b3-border-color);
         border-radius: 8px;
