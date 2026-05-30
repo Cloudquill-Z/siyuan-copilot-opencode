@@ -6,6 +6,7 @@ const {
     mergeOpenCodeModelLists,
     parseOpenCodeModelListOutput,
     parseOpenCodeProviderModels,
+    uniqueOpenCodeModelRefs,
     shouldRefreshOpenCodeModelCatalog,
 } = await import('../src/providers/opencode-models.ts');
 
@@ -124,6 +125,26 @@ assert.equal(
 assert.equal(
     findOpenCodeModelConfigMatch(existingModelConfigs, 'deepseek/deepseek-v4-pro', 'deepseek')?.id,
     'deepseek/deepseek-v4-pro'
+);
+
+const duplicatedModelConfigs = [
+    { id: 'deepseek/deepseek-v4-flash', providerID: 'deepseek', name: 'DeepSeek V4 Flash' },
+    { id: 'deepseek/deepseek-v4-pro', providerID: 'deepseek', name: 'DeepSeek V4 Pro' },
+    { id: 'deepseek/deepseek-v4-flash', providerID: 'deepseek', name: 'DeepSeek V4 Flash copy' },
+    { id: 'deepseek/deepseek-v4-pro', providerID: 'deepseek', name: 'DeepSeek V4 Pro copy' },
+    { id: 'opencode-go/deepseek-v4-flash', providerID: 'opencode-go', name: 'OpenCode Go DeepSeek V4 Flash' },
+    { id: 'opencode-go/deepseek-v4-pro', providerID: 'opencode-go', name: 'OpenCode Go DeepSeek V4 Pro' },
+];
+
+assert.deepEqual(
+    uniqueOpenCodeModelRefs(duplicatedModelConfigs).map(model => model.id),
+    [
+        'deepseek/deepseek-v4-flash',
+        'deepseek/deepseek-v4-pro',
+        'opencode-go/deepseek-v4-flash',
+        'opencode-go/deepseek-v4-pro',
+    ],
+    'Only exact provider/model duplicates should be removed; DeepSeek and OpenCode Go models must both remain'
 );
 
 const aiSidebarSource = fs.readFileSync('src/ai-sidebar.svelte', 'utf8');

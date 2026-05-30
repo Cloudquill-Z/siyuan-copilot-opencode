@@ -73,6 +73,7 @@
     import {
         findOpenCodeModelConfigMatch,
         shouldRefreshOpenCodeModelCatalog,
+        uniqueOpenCodeModelRefs,
     } from './providers/opencode-models';
     import {
         getChatModeDescription,
@@ -2184,12 +2185,12 @@
                                 hidden: false,
                             };
                         });
-                        settings.aiProviders.opencode.models = modelConfigs;
+                        settings.aiProviders.opencode.models = uniqueOpenCodeModelRefs(modelConfigs);
                         if (!settings.currentProvider) {
                             settings.currentProvider = 'opencode';
                         }
-                        if (!settings.currentModelId || !findModelById(modelConfigs, settings.currentModelId)) {
-                            settings.currentModelId = modelConfigs[0].id;
+                        if (!settings.currentModelId || !findModelById(settings.aiProviders.opencode.models, settings.currentModelId)) {
+                            settings.currentModelId = settings.aiProviders.opencode.models[0].id;
                         }
                         providers = settings.aiProviders;
                         currentProvider = settings.currentProvider;

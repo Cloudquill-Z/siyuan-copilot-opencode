@@ -6,7 +6,10 @@
     import { normalizeSettings } from './settingsSchema';
     import { pushMsg, pushErrMsg, lsNotebooks, getBlockByID } from './api';
     import { fetchModels, invalidateModelCache } from './ai-chat';
-    import { findOpenCodeModelConfigMatch } from './providers/opencode-models';
+    import {
+        findOpenCodeModelConfigMatch,
+        uniqueOpenCodeModelRefs,
+    } from './providers/opencode-models';
     import { getModelCapabilities } from './utils/modelCapabilities';
     import type { ModelConfig } from './defaultSettings';
     import { confirm } from 'siyuan';
@@ -47,7 +50,7 @@
     }
 
     $: opencodeConfig = settings.aiProviders?.opencode || { serverUrl: 'http://localhost:4096', models: [] };
-    $: opencodeModels = opencodeConfig.models || [];
+    $: opencodeModels = uniqueOpenCodeModelRefs(opencodeConfig.models || []);
     $: visibleCount = opencodeModels.filter((m: any) => !m.hidden).length;
     $: totalCount = opencodeModels.length;
     $: filteredModels = (() => {
@@ -128,7 +131,7 @@
                         hidden: false,
                     };
                 });
-                opencodeConfig.models = mergedModels;
+                opencodeConfig.models = uniqueOpenCodeModelRefs(mergedModels);
                 settings.aiProviders = { ...settings.aiProviders };
                 await saveSettings();
                 pushMsg(`已刷新模型列表，共 ${mergedModels.length} 个模型`);

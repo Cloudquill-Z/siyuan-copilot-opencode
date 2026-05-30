@@ -244,6 +244,22 @@ export function findOpenCodeModelConfigMatch<T extends OpenCodeModelRef>(
     return models.find(model => isSameOpenCodeModelRef(model, modelId, providerID));
 }
 
+export function uniqueOpenCodeModelRefs<T extends OpenCodeModelRef>(models: T[] = []): T[] {
+    const unique: T[] = [];
+    const seen = new Set<string>();
+
+    for (const model of models) {
+        const identity = getOpenCodeModelIdentity(model.id, model.providerID);
+        if (!identity) continue;
+        const key = `${identity.providerID || ''}/${identity.modelID}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        unique.push(model);
+    }
+
+    return unique;
+}
+
 export function shouldRefreshOpenCodeModelCatalog(models: Array<{ contextLimit?: number }> = []): boolean {
     if (models.length === 0) return true;
     if (models.length < 100) return true;
