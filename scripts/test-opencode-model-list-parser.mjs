@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
 const {
     findOpenCodeModelConfigMatch,
@@ -123,6 +124,16 @@ assert.equal(
 assert.equal(
     findOpenCodeModelConfigMatch(existingModelConfigs, 'deepseek/deepseek-v4-pro', 'deepseek')?.id,
     'deepseek/deepseek-v4-pro'
+);
+
+const aiSidebarSource = fs.readFileSync('src/ai-sidebar.svelte', 'utf8');
+assert(
+    aiSidebarSource.includes('findOpenCodeModelConfigMatch'),
+    'ai-sidebar auto-fetch path must use provider-aware OpenCode model matching'
+);
+assert(
+    !aiSidebarSource.includes('function getModelMatchKeys'),
+    'ai-sidebar must not match OpenCode models by bare model id because providers can share model names'
 );
 
 assert.equal(shouldRefreshOpenCodeModelCatalog([]), true);

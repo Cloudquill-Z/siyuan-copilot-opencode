@@ -70,7 +70,10 @@
     import { t } from './utils/i18n';
     import { getModelCapabilities } from './utils/modelCapabilities';
     import { shouldSendMessageFromKeydown } from './utils/sendShortcut';
-    import { shouldRefreshOpenCodeModelCatalog } from './providers/opencode-models';
+    import {
+        findOpenCodeModelConfigMatch,
+        shouldRefreshOpenCodeModelCatalog,
+    } from './providers/opencode-models';
     import {
         getChatModeDescription,
         getChatModeLabel,
@@ -667,28 +670,8 @@
     let currentImageSrc = '';
     let currentImageName = '';
 
-    function getModelMatchKeys(modelId?: string, providerID?: string): string[] {
-        const raw = String(modelId || '').trim().toLowerCase();
-        if (!raw) return [];
-        const keys = new Set<string>([raw]);
-        const provider = String(providerID || '').trim().toLowerCase();
-        if (provider && !raw.startsWith(`${provider}/`)) {
-            keys.add(`${provider}/${raw}`);
-        }
-        const slashIndex = raw.indexOf('/');
-        if (slashIndex >= 0 && slashIndex < raw.length - 1) {
-            keys.add(raw.slice(slashIndex + 1));
-            keys.add(raw.split('/').pop() || raw);
-        }
-        return Array.from(keys).filter(Boolean);
-    }
-
     function findModelById(models: any[] = [], modelId?: string, providerID?: string) {
-        const targetKeys = new Set(getModelMatchKeys(modelId, providerID));
-        if (targetKeys.size === 0) return null;
-        return models.find((model: any) =>
-            getModelMatchKeys(model?.id, model?.providerID).some(key => targetKeys.has(key))
-        );
+        return findOpenCodeModelConfigMatch(models, modelId, providerID) || null;
     }
 
     function getCurrentContextLimit(): number | undefined {
@@ -2179,6 +2162,7 @@
                                 return {
                                     ...existing,
                                     name: m.name,
+                                    providerID: m.providerID || existing.providerID,
                                     contextLimit: m.contextLimit || existing.contextLimit,
                                     outputLimit: m.outputLimit || existing.outputLimit,
                                     maxTokens: m.outputLimit || existing.maxTokens,
@@ -2193,6 +2177,7 @@
                                 maxTokens: m.outputLimit || 4096,
                                 contextLimit: m.contextLimit,
                                 outputLimit: m.outputLimit,
+                                providerID: m.providerID,
                                 capabilities: Object.keys(capabilities).length > 0 ? capabilities : undefined,
                                 thinkingEnabled: m.enableThinking ?? false,
                                 thinkingEffort: m.reasoningEffort ?? 'low',
