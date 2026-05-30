@@ -58,7 +58,8 @@ export function getContextLimitForDisplay(options: {
     if (Number.isFinite(limit) && limit > 0) {
         return limit;
     }
-    return undefined;
+    // 默认 128K tokens，多数模型低于实际窗口，百分比展示保守可用
+    return 128000;
 }
 
 export function getContextLimitForActiveModels(options: {

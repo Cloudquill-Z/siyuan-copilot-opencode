@@ -11211,7 +11211,7 @@
                                 {@const finalAnswer = getOpenCodeFinalAnswer(message)}
                                 {@const processTimeline = getOpenCodeProcessTimeline(message)}
                                 {@const processKey = getOpenCodeProcessKey(message, `${messageIndex}-${msgIndex}`)}
-                                {@const processCollapsed = isOpenCodeProcessCollapsed(processKey)}
+                                {@const processCollapsed = openCodeProcessCollapsed[processKey] ?? true}
 
                                 {#if processTimeline.length > 0}
                                     <button
@@ -12875,7 +12875,7 @@
                 {#if openCodeTimeline.length > 0}
                     {@const streamingTimelineKey = 'opencode-timeline-streaming'}
                     {@const streamingTimelineItems = groupOpenCodeTimeline(openCodeTimeline)}
-                    {@const streamingTimelineHidden = isTimelineCollapsed(timelineCollapsed, streamingTimelineKey, false)}
+                    {@const streamingTimelineHidden = timelineCollapsed[streamingTimelineKey] ?? false}
                     {@const activeTimelineItemId = getActiveOpenCodeTimelineItemId(openCodeTimeline)}
                     <div class="ai-message__timeline-shell">
                         <button
