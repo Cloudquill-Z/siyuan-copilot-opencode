@@ -153,8 +153,9 @@ export function parseOpenCodeProviderModels(
 
         if (connectedProviders !== undefined) {
             const isConnected = connectedProviders.has(providerID);
+            const hasKey = !!provider?.key;
             const isFreeBuiltIn = providerID === 'opencode';
-            if (!isConnected && !isFreeBuiltIn) continue;
+            if (!isConnected && !isFreeBuiltIn && !hasKey) continue;
         }
 
         const modelsObj = provider?.models;
