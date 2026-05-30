@@ -186,6 +186,13 @@
         };
     }
 
+    function getOpenCodeProcessKey(message: Message, fallbackKey: string): string {
+        const timeline = message.openCodeTimeline || [];
+        const firstTimelineId = timeline[0]?.id || fallbackKey;
+        const lastTimelineId = timeline[timeline.length - 1]?.id || String(timeline.length);
+        return `opencode-process-${message.modelId || 'model'}-${firstTimelineId}-${lastTimelineId}`;
+    }
+
     function isThinkingCollapsed(
         stateOrKey: Record<string, any> | string | number,
         key?: string | number
@@ -676,17 +683,15 @@
     }
 
     function getCurrentContextLimit(): number | undefined {
-        const selectedModelConfigs =
-            enableMultiModel && chatMode === 'plan'
-                ? selectedMultiModels
-                      .map(model => getProviderAndModelConfig(model.provider, model.modelId)?.modelConfig)
-                      .filter(Boolean)
-                : [];
+        const modelConfig = getCurrentModelConfig();
+        const selectedModelConfigs = selectedMultiModels
+            .map(model => getProviderAndModelConfig(model.provider, model.modelId)?.modelConfig)
+            .filter(Boolean);
 
         return getContextLimitForActiveModels({
-            modelConfig: getCurrentModelConfig(),
+            modelConfig,
             selectedModelConfigs,
-            enableMultiModel,
+            enableMultiModel: enableMultiModel || !modelConfig,
             chatMode,
         });
     }
@@ -775,7 +780,16 @@
     }
 
     $: currentContextTokens = estimateCurrentContextTokens();
-    $: currentContextLimit = getCurrentContextLimit();
+    $: currentContextLimit = (
+        currentProvider,
+        currentModelId,
+        providers,
+        settings,
+        selectedMultiModels,
+        enableMultiModel,
+        chatMode,
+        getCurrentContextLimit()
+    );
     $: displayedContextTokens = Math.max(currentContextTokens, lastPreparedContextTokens);
     $: displayedContextPercent = currentContextLimit
         ? Math.min(100, Math.round((displayedContextTokens / currentContextLimit) * 100))
@@ -11196,7 +11210,7 @@
                             {#if message.role === 'assistant' && message.openCodeTimeline && message.openCodeTimeline.length > 0 && !(message.multiModelResponses && message.multiModelResponses.length > 0)}
                                 {@const finalAnswer = getOpenCodeFinalAnswer(message)}
                                 {@const processTimeline = getOpenCodeProcessTimeline(message)}
-                                {@const processKey = `opencode-process-${messageIndex}-${msgIndex}`}
+                                {@const processKey = getOpenCodeProcessKey(message, `${messageIndex}-${msgIndex}`)}
                                 {@const processCollapsed = isOpenCodeProcessCollapsed(processKey)}
 
                                 {#if processTimeline.length > 0}

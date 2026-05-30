@@ -8,11 +8,17 @@ for (const requiredText of [
   "appendOpenCodeTimelineText",
   "getOpenCodeFinalAnswer",
   "getOpenCodeProcessTimeline",
+  "getOpenCodeProcessKey",
   "openCodeProcessCollapsed",
   "过程",
 ]) {
   assert.ok(source.includes(requiredText), `missing threaded timeline marker: ${requiredText}`);
 }
+
+assert.ok(
+  !source.includes("opencode-process-${messageIndex}-${msgIndex}"),
+  "historical OpenCode process expansion key must not depend on unstable message indexes"
+);
 
 assert.ok(
   source.includes("appendOpenCodeTimelineText(chunk)") ||

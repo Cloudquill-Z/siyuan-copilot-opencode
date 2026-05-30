@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 
 const source = await readFile(new URL('../src/utils/chatMode.ts', import.meta.url), 'utf8');
+const sidebarSource = await readFile(new URL('../src/ai-sidebar.svelte', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, {
     compilerOptions: {
         module: ts.ModuleKind.ES2020,
@@ -75,6 +76,26 @@ assert.equal(
     300000,
     'build mode should still use the current single model limit'
 );
+const contextLimitStatementStart = sidebarSource.indexOf('$: currentContextLimit = (');
+assert.notEqual(contextLimitStatementStart, -1, 'currentContextLimit should use an explicit reactive dependency expression');
+const contextLimitStatement = sidebarSource.slice(
+    contextLimitStatementStart,
+    sidebarSource.indexOf(');', contextLimitStatementStart) + 2
+);
+for (const dependency of [
+    'currentProvider',
+    'currentModelId',
+    'providers',
+    'selectedMultiModels',
+    'enableMultiModel',
+    'chatMode',
+    'getCurrentContextLimit()',
+]) {
+    assert.ok(
+        contextLimitStatement.includes(dependency),
+        `currentContextLimit reactive statement should depend on ${dependency}`
+    );
+}
 assert.equal(shouldToggleChatModeFromKeydown(tabEvent()), true, 'plain Tab toggles chat mode');
 assert.equal(shouldToggleChatModeFromKeydown(tabEvent({ shiftKey: true })), false, 'Shift+Tab no longer toggles');
 assert.equal(shouldToggleChatModeFromKeydown(tabEvent({ ctrlKey: true })), false, 'Ctrl+Tab is left alone');
