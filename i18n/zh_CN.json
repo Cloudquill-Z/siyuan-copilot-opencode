@@ -15,7 +15,7 @@
             "tokenStats": "Token 统计",
             "noteExport": "对话导出",
             "sessionManagement": "会话管理",
-            "soul": "SOUL 文档",
+            "soul": "记忆",
             "webApp": "网页小程序",
             "group1": "页签1",
             "group2": "页签2",
@@ -183,8 +183,8 @@
             "description": "点击笔记中的网页链接时，在内置网页标签页中打开，而不是外部浏览器"
         },
         "soulDocId": {
-            "title": "SOUL 文档 ID",
-            "description": "设置 SOUL 数据存储的文档 ID",
+            "title": "灵魂文档 ID",
+            "description": "设置作为核心档案优先读取的思源文档 ID",
             "placeholder": "输入文档块 ID，如 20260312120000-xxxxxxxx",
             "validate": "验证",
             "validating": "验证中...",
@@ -192,6 +192,37 @@
             "notFound": "块不存在，请检查 ID 是否正确",
             "notDoc": "该 ID 不是文档类型",
             "error": "验证失败"
+        },
+        "memory": {
+            "enabled": {
+                "title": "启用长期记忆",
+                "description": "开启后，AI 会读取记忆笔记本中的 Agent 总览、核心档案和相关往事"
+            },
+            "notebook": {
+                "title": "记忆笔记本",
+                "description": "所有长期记忆文档都会保存在这个笔记本中，日常检索也只在这里进行"
+            },
+            "rootPath": {
+                "title": "记忆根目录",
+                "description": "笔记本内的相对路径。留空则直接使用记忆笔记本根目录"
+            },
+            "autoExtract": "自动提取记忆",
+            "saveFullConversation": "保存完整对话",
+            "maxEpisodicItems": "情景记忆条数",
+            "maxMemoryPromptChars": "最大注入长度",
+            "initialize": "初始化记忆目录",
+            "initialized": "记忆目录已初始化",
+            "scan": "扫描笔记仓库",
+            "scanning": "扫描中...",
+            "scanCollecting": "正在收集笔记仓库目录...",
+            "scanCompleted": "Agent 总览已生成",
+            "scanConfirmTitle": "扫描笔记仓库",
+            "scanConfirmMessage": "将读取整个思源笔记仓库的标题、路径和必要正文片段，并调用 OpenCode 生成 Agent 总览。是否继续？",
+            "openOverview": "查看 Agent 总览",
+            "openCore": "查看核心档案",
+            "noOverview": "还没有 Agent 总览，请先扫描笔记仓库",
+            "noCore": "还没有核心档案",
+            "needNotebook": "请先选择记忆笔记本"
         }
     },
     "aiSidebar": {
