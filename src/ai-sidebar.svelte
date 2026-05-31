@@ -316,12 +316,6 @@
         { name: 'init', desc: '初始化记忆，让 OpenCode 扫描思源笔记仓库', args: '' },
         { name: 'dream', desc: '整理记忆，合并相似内容并清理过时情景记忆', args: '' },
         { name: 'clear', desc: '清除当前会话', args: '' },
-        { name: 'undo', desc: '撤销上次修改', args: '' },
-        { name: 'redo', desc: '重做上次撤销', args: '' },
-        { name: 'compact', desc: '压缩会话上下文', args: '' },
-        { name: 'share', desc: '分享当前会话', args: '' },
-        { name: 'diff', desc: '查看文件差异', args: '' },
-        { name: 'status', desc: '查看 Git 状态', args: '' },
     ];
 
     // 右键菜单状态
