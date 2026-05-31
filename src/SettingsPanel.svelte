@@ -4,7 +4,7 @@
     import { t } from './utils/i18n';
     import { getDefaultSettings } from './defaultSettings';
     import { normalizeSettings } from './settingsSchema';
-    import { pushMsg, pushErrMsg, lsNotebooks, getBlockByID, openBlock } from './api';
+    import { pushMsg, pushErrMsg, lsNotebooks, getBlockByID } from './api';
     import { fetchModels, invalidateModelCache } from './ai-chat';
     import {
         findOpenCodeModelConfigMatch,
@@ -22,7 +22,6 @@
         normalizeTokenUsageRecords,
         summarizeTokenUsage,
     } from './utils/tokenUsage';
-    import { ensureMemoryBase } from './memory';
     export let plugin;
 
     let settings = { ...getDefaultSettings() };
@@ -505,34 +504,6 @@
         }
     }
 
-    async function openMemoryDoc(docId: string, missingMessage: string) {
-        if (!docId) {
-            pushErrMsg(missingMessage);
-            return;
-        }
-        try {
-            await openBlock(docId);
-        } catch (error) {
-            pushErrMsg(`打开文档失败: ${(error as Error).message}`);
-        }
-    }
-
-    async function initializeMemoryBase() {
-        ensureMemorySettings();
-        if (!settings.memory.notebookId) {
-            pushErrMsg(t('settings.memory.needNotebook') || '请先选择记忆笔记本');
-            return;
-        }
-        try {
-            settings.memory.enabled = true;
-            await ensureMemoryBase(settings);
-            await saveSettings();
-            pushMsg(t('settings.memory.initialized') || '记忆目录已初始化');
-        } catch (error) {
-            pushErrMsg(`初始化记忆失败: ${(error as Error).message}`);
-        }
-    }
-
     function updateGroupItems() {
         groups = groups.map(group => ({
             ...group,
@@ -997,38 +968,6 @@
                     </div>
                 </div>
 
-                <div class="memory-settings-panel__actions">
-                    <button
-                        class="b3-button b3-button--outline"
-                        on:click={initializeMemoryBase}
-                        disabled={!settings.memory.notebookId}
-                    >
-                        {t('settings.memory.initialize') || '初始化记忆目录'}
-                    </button>
-                    <button
-                        class="b3-button b3-button--outline"
-                        on:click={() =>
-                            openMemoryDoc(
-                                settings.memory.overviewDocId,
-                                t('settings.memory.noOverview') || '还没有 Agent 总览，请在聊天中发送 /init'
-                            )}
-                        disabled={!settings.memory.overviewDocId}
-                    >
-                        {t('settings.memory.openOverview') || '查看 Agent 总览'}
-                    </button>
-                    <button
-                        class="b3-button b3-button--outline"
-                        on:click={() =>
-                            openMemoryDoc(
-                                settings.soulDocId || settings.memory.coreDocId,
-                                t('settings.memory.noCore') || '还没有核心档案'
-                            )}
-                        disabled={!settings.soulDocId && !settings.memory.coreDocId}
-                    >
-                        {t('settings.memory.openCore') || '查看核心档案'}
-                    </button>
-                </div>
-
                 <div class="memory-settings-panel__meta">
                     {t('settings.memory.initCommandHint') ||
                         '在聊天中发送 /init，让 OpenCode 扫描笔记仓库并写入 Agent 总览。'}
@@ -1408,16 +1347,6 @@
         border: 1px solid var(--b3-border-color);
         border-radius: 6px;
         background: var(--b3-theme-surface);
-    }
-
-    .memory-settings-panel__actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-
-        .b3-button {
-            min-height: 32px;
-        }
     }
 
     .memory-settings-panel__meta {

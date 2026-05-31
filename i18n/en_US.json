@@ -211,13 +211,7 @@
             "saveFullConversation": "Save Full Conversation",
             "maxEpisodicItems": "Episodic Memory Items",
             "maxMemoryPromptChars": "Max Injected Length",
-            "initialize": "Initialize Memory Folder",
-            "initialized": "Memory folder initialized",
             "initCommandHint": "Send /init in chat to let OpenCode scan the note repository and write the Agent overview.",
-            "openOverview": "Open Agent Overview",
-            "openCore": "Open Core Profile",
-            "noOverview": "No Agent overview yet. Send /init in chat first",
-            "noCore": "No core profile yet",
             "needNotebook": "Select a memory notebook first"
         }
     },
