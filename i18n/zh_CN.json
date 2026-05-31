@@ -210,7 +210,7 @@
             "saveFullConversation": "保存完整对话",
             "maxEpisodicItems": "情景记忆条数",
             "maxMemoryPromptChars": "最大注入长度",
-            "initCommandHint": "在聊天中发送 /init，让 OpenCode 扫描笔记仓库并写入 Agent 总览。",
+            "initCommandHint": "在聊天中发送 /init 初始化记忆；发送 /dream 整理情景记忆、合并重复内容并沉淀纲领。",
             "needNotebook": "请先选择记忆笔记本"
         }
     },

@@ -88,11 +88,13 @@
         formatTokenCount,
     } from './utils/tokenUsage';
     import {
+        buildMemoryDreamPrompt,
         buildMemoryInitPrompt,
         buildMemoryPrompt,
         ensureMemoryBase,
         ensureMemoryOverviewTarget,
         extractEpisodicMemory,
+        isMemoryDreamCommand,
         isMemoryInitCommand,
     } from './memory';
     import type { TaskSession } from './task-types';
@@ -312,6 +314,7 @@
     const BUILTIN_COMMANDS = [
         { name: 'still', desc: '让 AI 继续生成', args: '[提示词]' },
         { name: 'init', desc: '初始化记忆，让 OpenCode 扫描思源笔记仓库', args: '' },
+        { name: 'dream', desc: '整理记忆，合并相似内容并清理过时情景记忆', args: '' },
         { name: 'clear', desc: '清除当前会话', args: '' },
         { name: 'undo', desc: '撤销上次修改', args: '' },
         { name: 'redo', desc: '重做上次撤销', args: '' },
@@ -4766,19 +4769,45 @@
         }
     }
 
+    async function prepareMemoryDreamPrompt(): Promise<string | null> {
+        const memorySettings = settings.memory || {};
+        if (!String(memorySettings.notebookId || '').trim()) {
+            pushErrMsg('请先在设置的“记忆”页选择记忆笔记本');
+            return null;
+        }
+
+        try {
+            settings.memory = {
+                ...memorySettings,
+                enabled: true,
+            };
+            await ensureMemoryBase(settings);
+            await plugin.saveSettings(settings);
+            updateSettings(JSON.parse(JSON.stringify(settings)));
+            return buildMemoryDreamPrompt(settings);
+        } catch (error) {
+            pushErrMsg(`准备记忆整理任务失败: ${(error as Error).message}`);
+            return null;
+        }
+    }
+
     async function sendMessage() {
         const trimmedInput = currentInput.trim();
         if ((!trimmedInput && currentAttachments.length === 0) || isLoading) return;
 
-        let memoryInitPromptForRun = '';
+        let memoryCommandPromptForRun = '';
         if (isMemoryInitCommand(trimmedInput)) {
             const prompt = await prepareMemoryInitPrompt();
             if (!prompt) return;
-            memoryInitPromptForRun = prompt;
+            memoryCommandPromptForRun = prompt;
+        } else if (isMemoryDreamCommand(trimmedInput)) {
+            const prompt = await prepareMemoryDreamPrompt();
+            if (!prompt) return;
+            memoryCommandPromptForRun = prompt;
         }
 
         // OpenCode 指令检测：以 / 开头的内容作为命令执行
-        if (!memoryInitPromptForRun && trimmedInput.startsWith('/') && currentSessionId) {
+        if (!memoryCommandPromptForRun && trimmedInput.startsWith('/') && currentSessionId) {
             await handleOpenCodeCommand(trimmedInput);
             return;
         }
@@ -4895,8 +4924,8 @@
 
         // 用户消息只保存原始输入（不包含文档内容）
         const userContent = currentInput.trim();
-        const effectiveUserContent = memoryInitPromptForRun || userContent;
-        const effectiveChatMode: ChatMode = memoryInitPromptForRun ? 'build' : chatMode;
+        const effectiveUserContent = memoryCommandPromptForRun || userContent;
+        const effectiveChatMode: ChatMode = memoryCommandPromptForRun ? 'build' : chatMode;
 
         const userMessage: Message = {
             role: 'user',
@@ -7934,9 +7963,10 @@
                 modelId: currentModelId,
                 serverUrl: settings.aiProviders?.opencode?.serverUrl,
             });
+            await plugin.saveSettings(settings);
+            updateSettings(JSON.parse(JSON.stringify(settings)));
             if (docId) {
-                await plugin.saveSettings(settings);
-                updateSettings(JSON.parse(JSON.stringify(settings)));
+                console.info('[memory] episodic memory saved:', docId);
             }
         } catch (error) {
             console.warn('[memory] extract episodic memory failed:', error);

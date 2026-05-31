@@ -19,7 +19,10 @@ export interface MemorySettings {
 export interface MemoryExtractionState {
     messageCount: number;
     messageHash: string;
-    memoryDocId: string;
+    memoryDocId?: string;
+    skipped?: boolean;
+    reason?: string;
+    importance?: number;
     updatedAt: number;
 }
 
@@ -46,6 +49,7 @@ export interface ExtractedMemoryDraft {
     topics: string[];
     importance: number;
     shouldRemember: boolean;
+    reason?: string;
 }
 
 export interface MemoryPromptOptions {

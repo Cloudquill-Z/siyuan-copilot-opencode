@@ -211,7 +211,7 @@
             "saveFullConversation": "Save Full Conversation",
             "maxEpisodicItems": "Episodic Memory Items",
             "maxMemoryPromptChars": "Max Injected Length",
-            "initCommandHint": "Send /init in chat to let OpenCode scan the note repository and write the Agent overview.",
+            "initCommandHint": "Send /init to initialize memory; send /dream to organize episodic memories, merge duplicates, and distill stable guidance.",
             "needNotebook": "Select a memory notebook first"
         }
     },

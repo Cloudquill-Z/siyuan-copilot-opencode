@@ -41,6 +41,7 @@ function parseDraft(text: string): ExtractedMemoryDraft | null {
             topics: Array.isArray(parsed.topics) ? parsed.topics.map(String) : [],
             importance: Math.max(0, Math.min(1, Number(parsed.importance) || 0)),
             shouldRemember: parsed.shouldRemember !== false,
+            reason: String(parsed.reason || ""),
         };
     } catch (error) {
         console.warn("[memory] parse extracted memory failed:", error);
@@ -98,7 +99,7 @@ function buildExtractionPrompt(messages: Message[]): string {
         .join("\n\n---\n\n");
 
     return [
-        "请从下面这轮对话中提取长期记忆草稿。",
+        "请先判断下面这轮对话是否值得写入长期记忆；只有有明确长期价值时才提取记忆草稿。",
         "",
         "只返回 JSON，不要写解释。结构：",
         "{",
@@ -108,13 +109,25 @@ function buildExtractionPrompt(messages: Message[]): string {
         '  "followUps": ["后续线索"],',
         '  "topics": ["主题"],',
         '  "importance": 0.0,',
-        '  "shouldRemember": true',
+        '  "shouldRemember": true,',
+        '  "reason": "一句话说明为什么需要或不需要记忆"',
         "}",
         "",
+        "写入条件：",
+        "- 用户表达了稳定偏好、长期目标、工作方式、沟通约定或身份背景。",
+        "- 对长期项目有新进展、关键决策、约束、待办或重要上下文。",
+        "- 这轮对话暴露了未来协作中反复会用到的事实或经验。",
+        "",
+        "不要写入的情况：",
+        "- 一次性问答、临时调试、普通闲聊、无后续价值的执行日志。",
+        "- 只是重复已有信息，或者结论不稳定、很快会过时。",
+        "- 只有泛泛情绪、礼貌用语、短确认、无具体事实。",
+        "",
         "规则：",
-        "- 只记录未来有帮助的偏好、项目、决策、约定和待办线索。",
+        "- shouldRemember 必须严格；不确定时返回 false。",
+        "- importance 低于 0.35 通常不应写入。",
         "- 不要记录密码、token、密钥、身份证、电话、地址等敏感信息。",
-        "- 如果只是闲聊或无长期价值，shouldRemember=false。",
+        "- facts 只写未来可复用的事实，不要复述整轮对话。",
         "",
         "对话：",
         visibleMessages,
@@ -137,9 +150,32 @@ export async function extractEpisodicMemory(input: MemoryExtractionInput): Promi
     if (visibleMessages.length < 2) return null;
 
     const messageCount = messages.filter(message => message.role !== "system").length;
+    const userTextLength = visibleMessages
+        .filter(message => message.role === "user")
+        .map(textFromMessage)
+        .join("\n")
+        .trim().length;
     const messageHash = getMemoryMessageHash(messages);
     const existing = settings.pluginData?.memoryExtractionState?.[sessionId];
     if (existing?.messageCount === messageCount && existing?.messageHash === messageHash) {
+        return null;
+    }
+
+    if (messageCount < 4 && userTextLength < 120) {
+        settings.pluginData = {
+            ...(settings.pluginData || {}),
+            memoryExtractionState: {
+                ...(settings.pluginData?.memoryExtractionState || {}),
+                [sessionId]: {
+                    messageCount,
+                    messageHash,
+                    skipped: true,
+                    reason: "会话太短，缺少长期记忆价值",
+                    importance: 0,
+                    updatedAt: Date.now(),
+                },
+            },
+        };
         return null;
     }
 
@@ -169,6 +205,20 @@ export async function extractEpisodicMemory(input: MemoryExtractionInput): Promi
 
     const draft = parseDraft(responseText);
     if (!draft || !draft.shouldRemember || draft.importance < Number(memory.minImportance || 0.35)) {
+        settings.pluginData = {
+            ...(settings.pluginData || {}),
+            memoryExtractionState: {
+                ...(settings.pluginData?.memoryExtractionState || {}),
+                [sessionId]: {
+                    messageCount,
+                    messageHash,
+                    skipped: true,
+                    reason: draft?.reason || "模型判断本轮会话不需要写入长期记忆",
+                    importance: draft?.importance || 0,
+                    updatedAt: Date.now(),
+                },
+            },
+        };
         return null;
     }
 
@@ -186,6 +236,9 @@ export async function extractEpisodicMemory(input: MemoryExtractionInput): Promi
                 messageCount,
                 messageHash,
                 memoryDocId: docId,
+                skipped: false,
+                reason: draft.reason || "模型判断本轮会话有长期记忆价值",
+                importance: draft.importance,
                 updatedAt: Date.now(),
             },
         },
