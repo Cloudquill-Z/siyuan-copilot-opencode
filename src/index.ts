@@ -94,6 +94,7 @@ interface WebViewHistory {
 
 export default class PluginSample extends Plugin {
     private aiSidebarApp: AISidebar;
+    private aiTabApps: Map<HTMLElement, AISidebar> = new Map();
     private chatDialogs: Map<string, { dialog: Dialog; app: ChatDialog }> = new Map();
     private settingDialog: Dialog | null = null;
     private settingPanel: SettingPanel | null = null;
@@ -524,16 +525,22 @@ export default class PluginSample extends Plugin {
                 element.style.flexDirection = 'column';
                 element.style.height = '100%';
                 // 创建AI聊天界面
-                new AISidebar({
+                const app = new AISidebar({
                     target: element,
                     props: {
                         plugin: pluginInstance,
                         respondToGlobalActions: true
                     }
                 });
+                pluginInstance.aiTabApps.set(element, app);
             },
             destroy() {
-                // Svelte组件会自动清理
+                const element = this.element as HTMLElement;
+                const app = pluginInstance.aiTabApps.get(element);
+                if (app) {
+                    app.$destroy();
+                    pluginInstance.aiTabApps.delete(element);
+                }
             }
         });
         // 注册小程序标签页类型
@@ -2089,6 +2096,10 @@ export default class PluginSample extends Plugin {
         this.settingDialog?.destroy();
         this.settingDialog = null;
         this.settingPanel = null;
+        for (const app of Array.from(this.aiTabApps.values())) {
+            app.$destroy();
+        }
+        this.aiTabApps.clear();
         this.aiSidebarApp?.$destroy();
         this.aiSidebarApp = null as any;
 

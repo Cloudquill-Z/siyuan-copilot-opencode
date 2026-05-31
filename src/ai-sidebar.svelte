@@ -97,7 +97,13 @@
         isMemoryDreamCommand,
         isMemoryInitCommand,
     } from './memory';
-    import type { TaskSession } from './task-types';
+    import {
+        appendTaskRuntimeText,
+        appendTaskRuntimeThinking,
+        applyTaskRuntimeToolUpdate,
+        type OpenCodeTimelineItem,
+        type TaskSession,
+    } from './task-types';
     // Agent 模式工具使用强制规则（统一常量）
     // STUBS: ./tools deleted, safe no-op replacements
     const AVAILABLE_TOOLS: any[] = [];
@@ -161,10 +167,6 @@
     let streamingToolCallsCollapsed = true;
     let streamingThinking = ''; // 流式思考内容
     let isThinkingPhase = false; // 是否在思考阶段
-    type OpenCodeTimelineItem =
-        | { type: 'text'; id: string; content: string; isFinal?: boolean }
-        | { type: 'thinking'; id: string; content: string }
-        | { type: 'tool'; id: string; toolPart: any };
     type OpenCodeTimelineDisplayItem =
         | { type: 'text'; id: string; content: string; isFinal?: boolean }
         | { type: 'thinking'; id: string; content: string }
@@ -428,6 +430,7 @@
     let activeTaskIds: string[] = [initialDraftTaskId];
     let unreadTaskIds = new Set<string>();
     let sessionStates: Record<string, SidebarSessionState> = {};
+    const backgroundTaskStates = new Map<string, SidebarSessionState>();
     const MAX_ACTIVE_TASK_TABS = 4;
     $: currentActiveTaskId = currentSessionId || activeDraftTaskId;
 
@@ -544,15 +547,30 @@
     }
 
     function getStoredTaskState(taskId: string): SidebarSessionState {
-        return sessionStates[taskId] || blankTaskState();
+        return backgroundTaskStates.get(taskId) || sessionStates[taskId] || blankTaskState();
     }
 
     function updateStoredTaskState(taskId: string, updater: (state: SidebarSessionState) => SidebarSessionState) {
         const nextState = updater(getStoredTaskState(taskId));
+        if (isActiveTask(taskId)) {
+            sessionStates = {
+                ...sessionStates,
+                [taskId]: nextState,
+            };
+            return;
+        }
+        backgroundTaskStates.set(taskId, nextState);
+    }
+
+    function flushBackgroundTaskState(taskId: string): SidebarSessionState | null {
+        const state = backgroundTaskStates.get(taskId);
+        if (!state) return null;
+        backgroundTaskStates.delete(taskId);
         sessionStates = {
             ...sessionStates,
-            [taskId]: nextState,
+            [taskId]: state,
         };
+        return state;
     }
 
     function appendStreamingTextForTask(taskId: string, chunk: string) {
@@ -563,19 +581,7 @@
             return;
         }
         markTaskUnread(taskId);
-        updateStoredTaskState(taskId, state => ({
-            ...state,
-            streamingMessage: state.streamingMessage + chunk,
-            openCodeTimeline: [
-                ...state.openCodeTimeline,
-                {
-                    type: 'text',
-                    id: `text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                    content: chunk,
-                },
-            ],
-            isLoading: true,
-        }));
+        updateStoredTaskState(taskId, state => appendTaskRuntimeText(state, chunk));
     }
 
     function appendThinkingForTask(taskId: string, chunk: string) {
@@ -585,20 +591,7 @@
             return;
         }
         markTaskUnread(taskId);
-        updateStoredTaskState(taskId, state => ({
-            ...state,
-            streamingThinking: state.streamingThinking + chunk,
-            openCodeTimeline: [
-                ...state.openCodeTimeline,
-                {
-                    type: 'thinking',
-                    id: `thinking-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                    content: chunk,
-                },
-            ],
-            isThinkingPhase: true,
-            isLoading: true,
-        }));
+        updateStoredTaskState(taskId, state => appendTaskRuntimeThinking(state, chunk));
     }
 
     function updateToolPartForTask(taskId: string, update: any) {
@@ -607,20 +600,7 @@
             return;
         }
         markTaskUnread(taskId);
-        updateStoredTaskState(taskId, state => ({
-            ...state,
-            openCodeToolParts: [...state.openCodeToolParts, update],
-            openCodeTimeline: [
-                ...state.openCodeTimeline,
-                {
-                    type: 'tool',
-                    id: `tool-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                    toolPart: update,
-                },
-            ],
-            isThinkingPhase: false,
-            isLoading: true,
-        }));
+        updateStoredTaskState(taskId, state => applyTaskRuntimeToolUpdate(state, update));
     }
 
     // 在新窗口打开菜单
@@ -5005,6 +4985,7 @@
         // 创建新的 AbortController
         setController(currentSessionId, new AbortController());
         const runTaskId = currentSessionId;
+        const runController = sessionControllers.get(runTaskId);
         sessionStates = {
             ...sessionStates,
             [runTaskId]: captureActiveTaskState(),
@@ -5075,7 +5056,7 @@
                 // 记录当前是第几轮工具调用
                 let currentToolCallRound = 0;
 
-                while (shouldContinue && !abortController.signal.aborted) {
+                while (shouldContinue && !(runController?.signal.aborted)) {
                     // 标记是否收到工具调用
                     let receivedToolCalls = false;
                     // 用于等待工具执行完成的 Promise
@@ -5096,16 +5077,25 @@
                             maxTokens:
                                 modelConfig.maxTokens > 0 ? modelConfig.maxTokens : undefined,
                             stream: true,
-                            signal: abortController.signal,
+                            signal: runController?.signal,
                             enableThinking,
                             reasoningEffort: modelConfig.thinkingEffort || 'low',
                             mode: effectiveChatMode,
                             tools: toolsForAgent,
                             customBody,
                             diagnosticLogger: diagnosticLogger || undefined,
-                            onThinkingChunk: appendStreamingThinking,
-                            onThinkingComplete: () => finishStreamingThinking(messages.length),
-                            onToolPartUpdate: updateOpenCodeToolPart,
+                            onThinkingChunk: (chunk: string) => appendThinkingForTask(runTaskId, chunk),
+                            onThinkingComplete: () => {
+                                if (isActiveTask(runTaskId)) {
+                                    finishStreamingThinking(messages.length);
+                                } else {
+                                    updateStoredTaskState(runTaskId, state => ({
+                                        ...state,
+                                        isThinkingPhase: false,
+                                    }));
+                                }
+                            },
+                            onToolPartUpdate: (update: any) => updateToolPartForTask(runTaskId, update),
                             onPermissionAsked: handleOpenCodePermissionAsked,
                             onQuestionAsked: handleOpenCodeQuestionAsked,
                             onToolCallComplete: async (toolCalls: ToolCall[]) => {
@@ -5304,13 +5294,14 @@
                                 toolExecutionComplete?.();
                             },
                             onChunk: async (chunk: string) => {
-                                streamingMessage += chunk;
-                                appendOpenCodeTimelineText(chunk);
-                                await scrollToBottom();
+                                appendStreamingTextForTask(runTaskId, chunk);
+                                if (isActiveTask(runTaskId)) {
+                                    await scrollToBottom();
+                                }
                             },
                             onComplete: async (fullText: string) => {
                                 // 如果已经中断，不再添加消息（避免重复）
-                                if (isAborted) {
+                                if (sessionIsAborted.get(runTaskId)) {
                                     shouldContinue = false;
                                     if (firstToolCallMessageIndex !== null) {
                                         pendingDocDiffsByMessage.delete(firstToolCallMessageIndex);
@@ -5328,9 +5319,15 @@
                                     // 处理content中的base64图片，保存为assets文件
                                     const processedContent =
                                         await saveBase64ImagesInContent(convertedText);
+                                    const taskIsActive = isActiveTask(runTaskId);
+                                    const backgroundState = taskIsActive ? null : getStoredTaskState(runTaskId);
+                                    const taskStreamingThinking = backgroundState?.streamingThinking ?? streamingThinking;
+                                    const taskToolParts = backgroundState?.openCodeToolParts ?? openCodeToolParts;
+                                    const taskTimeline = backgroundState?.openCodeTimeline ?? openCodeTimeline;
 
                                     // 如果之前有工具调用，将最终回复存储到 finalReply 字段
                                     if (
+                                        taskIsActive &&
                                         firstToolCallMessageIndex !== null &&
                                         processedContent.trim()
                                     ) {
@@ -5362,14 +5359,50 @@
                                         // 如果没有工具调用，创建新的assistant消息
                                         const assistantMessage = createAssistantMessage(convertedText);
 
-                                        if (streamingThinking) {
-                                            assistantMessage.thinking = streamingThinking;
+                                        if (taskStreamingThinking) {
+                                            assistantMessage.thinking = taskStreamingThinking;
                                             if (isDeepseekThinkingAgent) {
                                                 assistantMessage.reasoning_content =
-                                                    streamingThinking;
+                                                    taskStreamingThinking;
                                             }
                                         }
+                                        if (taskToolParts.length > 0) {
+                                            assistantMessage.openCodeToolParts = taskToolParts.map(part => ({
+                                                ...part,
+                                            }));
+                                        }
+                                        if (taskTimeline.length > 0) {
+                                            assistantMessage.openCodeTimeline = cloneOpenCodeTimelineItems(taskTimeline);
+                                        }
 
+                                        if (!taskIsActive) {
+                                            markTaskUnread(runTaskId);
+                                            updateStoredTaskState(runTaskId, state => ({
+                                                ...state,
+                                                messages: [...state.messages, assistantMessage],
+                                                streamingMessage: '',
+                                                streamingThinking: '',
+                                                openCodeToolParts: [],
+                                                openCodeTimeline: [],
+                                                isThinkingPhase: false,
+                                                isLoading: false,
+                                                hasUnsavedChanges: true,
+                                            }));
+                                            setController(runTaskId, null);
+                                            const completedState = getStoredTaskState(runTaskId);
+                                            await saveTaskStateSession(runTaskId, completedState);
+                                            await recordTokenUsage(
+                                                messagesToSend,
+                                                processedContent,
+                                                modelConfig
+                                            );
+                                            await closeDiagnosticLog(diagnosticLogger, 'ui.completed', {
+                                                messageCount: completedState.messages.length,
+                                                finalTextChars: processedContent.length,
+                                            });
+                                            toolExecutionComplete?.();
+                                            return;
+                                        }
                                         messages = [...messages, assistantMessage];
                                     }
                                     if (firstToolCallMessageIndex !== null) {
@@ -5380,7 +5413,7 @@
                                     streamingThinking = '';
                                     isThinkingPhase = false;
                                     isLoading = false;
-                                    setController(currentSessionId, null);
+                                    setController(runTaskId, null);
                                     hasUnsavedChanges = true;
 
                                     await recordTokenUsage(
@@ -5408,6 +5441,38 @@
                                 if (firstToolCallMessageIndex !== null) {
                                     pendingDocDiffsByMessage.delete(firstToolCallMessageIndex);
                                 }
+                                if (!isActiveTask(runTaskId)) {
+                                    if (error.message !== 'Request aborted') {
+                                        markTaskUnread(runTaskId);
+                                    }
+                                    updateStoredTaskState(runTaskId, state => ({
+                                        ...state,
+                                        messages:
+                                            error.message !== 'Request aborted'
+                                                ? [
+                                                      ...state.messages,
+                                                      {
+                                                          role: 'assistant',
+                                                          content: `❌ **${t('aiSidebar.errors.requestFailed')}**\n\n${error.message}`,
+                                                      },
+                                                  ]
+                                                : state.messages,
+                                        streamingMessage: '',
+                                        streamingThinking: '',
+                                        openCodeToolParts: [],
+                                        openCodeTimeline: [],
+                                        isThinkingPhase: false,
+                                        isLoading: false,
+                                        hasUnsavedChanges: error.message !== 'Request aborted' || state.hasUnsavedChanges,
+                                    }));
+                                    setController(runTaskId, null);
+                                    void saveTaskStateSession(runTaskId, getStoredTaskState(runTaskId));
+                                    void closeDiagnosticLog(diagnosticLogger, 'ui.failed', {
+                                        error,
+                                    });
+                                    toolExecutionComplete?.();
+                                    return;
+                                }
                                 if (error.message !== 'Request aborted') {
                                     const errorMessage = createAssistantMessage(
                                         `❌ **${t('aiSidebar.errors.requestFailed')}**\n\n${error.message}`
@@ -5419,7 +5484,7 @@
                                 streamingMessage = '';
                                 streamingThinking = '';
                                 isThinkingPhase = false;
-                                setController(currentSessionId, null);
+                                setController(runTaskId, null);
                                 void closeDiagnosticLog(diagnosticLogger, 'ui.failed', {
                                     error,
                                 });
@@ -5571,13 +5636,15 @@
                                     hasUnsavedChanges: true,
                                 }));
                                 setController(runTaskId, null);
+                                const completedState = getStoredTaskState(runTaskId);
+                                await saveTaskStateSession(runTaskId, completedState);
                                 await recordTokenUsage(
                                     messagesToSend,
                                     processedContent,
                                     modelConfig
                                 );
                                 await closeDiagnosticLog(diagnosticLogger, 'ui.completed', {
-                                    messageCount: getStoredTaskState(runTaskId).messages.length,
+                                    messageCount: completedState.messages.length,
                                     finalTextChars: processedContent.length,
                                 });
                                 return;
@@ -5631,6 +5698,7 @@
                                     hasUnsavedChanges: error.message !== 'Request aborted' || state.hasUnsavedChanges,
                                 }));
                                 setController(runTaskId, null);
+                                void saveTaskStateSession(runTaskId, getStoredTaskState(runTaskId));
                                 void closeDiagnosticLog(diagnosticLogger, 'ui.failed', {
                                     error,
                                 });
@@ -8111,6 +8179,53 @@
         }
     }
 
+    async function saveTaskStateSession(taskId: string, state: SidebarSessionState) {
+        if (!taskId || state.messages.filter(m => m.role !== 'system').length === 0) {
+            return;
+        }
+
+        const now = Date.now();
+        await loadSessions();
+        let session = sessions.find(s => s.id === taskId);
+        if (session) {
+            session.updatedAt = now;
+            session.messageCount = state.messages.filter(m => m.role !== 'system').length;
+        } else {
+            const userContent = state.messages.find(m => m.role === 'user')?.content || '';
+            session = {
+                id: taskId,
+                title:
+                    typeof userContent === 'string'
+                        ? userContent.substring(0, 30)
+                        : taskId.slice(0, 8),
+                messageCount: state.messages.filter(m => m.role !== 'system').length,
+                createdAt: now,
+                updatedAt: now,
+                status: 'completed',
+            };
+            sessions = [session, ...sessions];
+        }
+
+        await saveSessions();
+
+        const messagesToSave = state.messages.map(msg => ({
+            ...msg,
+            attachments: msg.attachments?.map(att => ({
+                ...att,
+                data: att.path ? '' : att.data,
+            })),
+            generatedImages: msg.generatedImages?.map(img => ({
+                ...img,
+                data: '',
+            })),
+        }));
+        const sessionBlob = new Blob(
+            [JSON.stringify({ messages: messagesToSave }, null, 2)],
+            { type: 'application/json' }
+        );
+        await putFile(getSessionPath(taskId), false, sessionBlob);
+    }
+
     async function loadSession(sessionId: string) {
         saveActiveTaskState();
         ensureActiveTaskTab(sessionId);
@@ -8153,10 +8268,11 @@
             }
         }
 
-        if (sessionStates[sessionId]) {
+        const flushedState = flushBackgroundTaskState(sessionId);
+        if (flushedState || sessionStates[sessionId]) {
             currentSessionId = sessionId;
             activeDraftTaskId = '';
-            applyTaskState(sessionStates[sessionId]);
+            applyTaskState(flushedState || sessionStates[sessionId]);
             await scrollToTop();
             return;
         }
@@ -8524,6 +8640,7 @@
         const nextStates = { ...sessionStates };
         delete nextStates[taskId];
         sessionStates = nextStates;
+        backgroundTaskStates.delete(taskId);
         clearTaskUnread(taskId);
 
         if (isCurrent) {
@@ -8555,6 +8672,7 @@
                     doNewSession();
                 }
                 activeTaskIds = activeTaskIds.filter(id => id !== sessionId);
+                backgroundTaskStates.delete(sessionId);
                 clearTaskUnread(sessionId);
             }
         );
@@ -8590,6 +8708,11 @@
                 // 如果当前会话被删除，创建新会话
                 if (sessionIds.includes(currentSessionId)) {
                     doNewSession();
+                }
+                for (const id of sessionIds) {
+                    activeTaskIds = activeTaskIds.filter(taskId => taskId !== id);
+                    backgroundTaskStates.delete(id);
+                    clearTaskUnread(id);
                 }
 
                 pushMsg(`成功删除 ${count} 个会话`);
