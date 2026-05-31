@@ -4,6 +4,7 @@ import { viteStaticCopy } from "vite-plugin-static-copy"
 import { svelte } from "@sveltejs/vite-plugin-svelte"
 import zipPack from "vite-plugin-zip-pack";
 import fg from 'fast-glob';
+import fs from 'fs';
 import { execSync } from 'child_process';
 
 
@@ -141,15 +142,11 @@ function cleanupDistFiles(options: { patterns: string[], distDir: string }) {
             sequential: true,
             order: 'post' as 'post',
             async handler() {
-                const fg = await import('fast-glob');
-                const fs = await import('fs');
-                // const path = await import('path');
-
                 // 使用 glob 语法，确保能匹配到文件
                 const distPatterns = patterns.map(pat => `${distDir}/${pat}`);
                 console.debug('Cleanup searching patterns:', distPatterns);
 
-                const files = await fg.default(distPatterns, {
+                const files = await fg(distPatterns, {
                     dot: true,
                     absolute: true,
                     onlyFiles: false
@@ -159,12 +156,12 @@ function cleanupDistFiles(options: { patterns: string[], distDir: string }) {
 
                 for (const file of files) {
                     try {
-                        if (fs.default.existsSync(file)) {
-                            const stat = fs.default.statSync(file);
+                        if (fs.existsSync(file)) {
+                            const stat = fs.statSync(file);
                             if (stat.isDirectory()) {
-                                fs.default.rmSync(file, { recursive: true });
+                                fs.rmSync(file, { recursive: true });
                             } else {
-                                fs.default.unlinkSync(file);
+                                fs.unlinkSync(file);
                             }
                             console.log(`Cleaned up: ${file}`);
                         }

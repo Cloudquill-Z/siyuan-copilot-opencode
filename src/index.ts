@@ -1,21 +1,14 @@
 import {
     Plugin,
-    showMessage,
     Dialog,
-    Menu,
     openTab,
-    adaptHotkey,
-    getFrontend,
     getBackend,
-    IModel,
     openWindow,
-    Constants,
-    lockScreen,
 } from "siyuan";
 
-import { appendBlock, pushMsg, pushErrMsg, sql, putFile, getFileBlob, readDir } from "./api";
+import { pushMsg, pushErrMsg, putFile, getFileBlob, readDir } from "./api";
 import { saveAsset, base64ToBlob } from "./utils/assets";
-import { ensureServerRunning, stopServe, detectOpenCodeCLI, getServedPort, isServeRunning } from "./opencode-runner";
+import { ensureServerRunning, stopServe, detectOpenCodeCLI } from "./opencode-runner";
 import { startHealthPoll, stopHealthPoll } from "./stores/connectionStatus";
 import "@/index.scss";
 
@@ -24,20 +17,16 @@ import { getDefaultSettings } from "./defaultSettings";
 import { normalizeSettings } from "./settingsSchema";
 import { ensureManagedOpenCodeWorkspace } from "./opencode-workspace";
 import { ensureMemoryBase } from "./memory";
-import { setPluginInstance, t, getCurrentLanguage } from "./utils/i18n";
+import { createAcceptLanguageHeader, setPluginInstance, t, getCurrentLanguage } from "./utils/i18n";
 import AISidebar from "./ai-sidebar.svelte";
 import ChatDialog from "./components/ChatDialog.svelte";
 import { updateSettings, getSettings } from "./stores/settings";
 import { getModelCapabilities } from "./utils/modelCapabilities";
-import { matchHotKey, getCustomHotKey } from "./utils/hotkey";
 import {
-    ASSET_DIR,
     CHAT_SESSIONS_PATH,
     OPENCODE_WORKSPACE_DIR,
     WEBVIEW_HISTORY_PATH,
     WEBAPP_ICON_DIR,
-    getPluginDataPath,
-    getPluginFileBlob,
     getSessionPath,
     getWebAppIconPath,
     loadJsonFile,
@@ -47,7 +36,6 @@ import {
     AI_SIDEBAR_TYPE,
     AI_TAB_TYPE,
     MAIN_ICON_ID,
-    OPENCODE_SESSION_TITLE,
     PLUGIN_BRAND_NAME,
     PLUGIN_DISPLAY_NAME,
     SUMMARY_EVENT,
@@ -97,7 +85,6 @@ export default class PluginSample extends Plugin {
     private aiTabApps: Map<HTMLElement, AISidebar> = new Map();
     private chatDialogs: Map<string, { dialog: Dialog; app: ChatDialog }> = new Map();
     private settingDialog: Dialog | null = null;
-    private settingPanel: SettingPanel | null = null;
     private webViewHistory: WebViewHistory[] = []; // WebView 历史记录
     private openMenuDoctreeBindThis = this.openMenuDoctree.bind(this);
     private clickEditorTitleIconBindThis = this.clickEditorTitleIcon.bind(this);
@@ -1115,7 +1102,7 @@ export default class PluginSample extends Plugin {
                     webview.setAttribute('useragent', userAgent);
 
                     // 设置 Accept-Language，使 webview 请求携带插件当前语言优先级
-                    webview.setAttribute('accept-language', `en,en-GB;q=0.9,en-US;q=0.8,zh-CN;q=0.7,zh;q=0.6`);
+                    webview.setAttribute('accept-language', createAcceptLanguageHeader(getCurrentLanguage()));
 
 
                     // 最后设置 src，因为 partition 等属性必须在加载 URL 之前设置
@@ -2095,7 +2082,6 @@ export default class PluginSample extends Plugin {
         this.chatDialogs.clear();
         this.settingDialog?.destroy();
         this.settingDialog = null;
-        this.settingPanel = null;
         for (const app of Array.from(this.aiTabApps.values())) {
             app.$destroy();
         }
@@ -2217,7 +2203,6 @@ export default class PluginSample extends Plugin {
                 pannel?.$destroy();
                 if (this.settingDialog === dialog) {
                     this.settingDialog = null;
-                    this.settingPanel = null;
                 }
             }
         });
@@ -2229,7 +2214,6 @@ export default class PluginSample extends Plugin {
             }
         });
         this.settingDialog = dialog;
-        this.settingPanel = pannel;
     }
     /**
      * 加载设置
@@ -2251,7 +2235,7 @@ export default class PluginSample extends Plugin {
                 const newPlatform = {
                     id: newId,
                     name: legacy.name || 'V3 API',
-                    apiKey: legacy.apiKey || settings.aiApiKey || '',
+                    apiKey: legacy.apiKey || (settings as any).aiApiKey || '',
                     customApiUrl: legacy.customApiUrl || 'https://api.gpt.ge',
                     models: legacy.models || []
                 };
@@ -2289,7 +2273,7 @@ export default class PluginSample extends Plugin {
                 delete settings.aiProviders.v3;
 
                 // 如果存在老的单个平台字段，也一并清理（兼容旧版本）
-                if (settings.aiProvider === 'v3') delete settings.aiProvider;
+                if ((settings as any).aiProvider === 'v3') delete (settings as any).aiProvider;
 
                 shouldPersist = true;
                 pushMsg('检测到旧的 V3 配置，已迁移为自定义平台');

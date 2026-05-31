@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+import { get, writable } from 'svelte/store';
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected';
 
@@ -24,9 +24,7 @@ let healthTimer: ReturnType<typeof setInterval> | null = null;
 let currentServerUrl = '';
 
 export function getConnectionStatus(): ConnectionStatus {
-    let current: ConnectionStatus = initialState;
-    connectionStatusStore.subscribe((v) => { current = v; })();
-    return current;
+    return get(connectionStatusStore);
 }
 
 export function startHealthPoll(serverUrl: string, intervalMs: number = 5000): void {

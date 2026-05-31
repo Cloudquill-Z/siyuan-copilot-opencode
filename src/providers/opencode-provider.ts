@@ -12,6 +12,7 @@ import {
     type RealtimeSessionStatus,
 } from "./realtime-completion-watcher";
 import { getOpenCodeAgentForChatMode } from "../utils/chatMode";
+import { getNodeModule, getOpenCodeCliEnv } from "../utils/opencode";
 
 export type { OpenCodeModelInfo } from "./opencode-models";
 
@@ -67,42 +68,6 @@ function debugOpenCode(...args: any[]) {
     if (OPENCODE_DEBUG_LOGS) {
         console.debug(...args);
     }
-}
-
-function getNodeModule(moduleName: string): any {
-    try {
-        if (typeof window !== 'undefined' && (window as any).require) {
-            return (window as any).require(moduleName);
-        }
-        if (typeof globalThis !== 'undefined' && (globalThis as any).require) {
-            return (globalThis as any).require(moduleName);
-        }
-    } catch {
-        // Node APIs are optional here; browser-only environments simply skip CLI supplementation.
-    }
-    return null;
-}
-
-function getOpenCodeCliEnv(): Record<string, string> {
-    const env: Record<string, string> =
-        typeof process !== 'undefined' && process.env
-            ? Object.fromEntries(
-                  Object.entries(process.env).filter(([, value]) => value !== undefined && value !== null) as [string, string][]
-              )
-            : {};
-
-    const isWin = typeof process !== 'undefined' && process.platform === 'win32';
-    if (isWin) return env;
-
-    const home = env.HOME || '';
-    const extraPaths = [
-        ...(home ? [`${home}/.opencode/bin`] : []),
-        '/usr/local/bin',
-        '/opt/homebrew/bin',
-        ...(home ? [`${home}/.local/bin`, `${home}/bin`] : []),
-    ].filter(Boolean);
-    const existingPath = env.PATH || '';
-    return { ...env, PATH: [...extraPaths, existingPath].filter(Boolean).join(':') };
 }
 
 async function fetchOpenCodeCliModels(): Promise<OpenCodeModelInfo[]> {

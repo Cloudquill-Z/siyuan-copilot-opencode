@@ -4,6 +4,7 @@
  */
 import { chatOpenCode, fetchOpenCodeModels, deleteOpenCodeSession, type OpenCodeToolPartUpdate, listCommands as fetchOpenCodeCommands, executeCommand as execOpenCodeCommand, sendPromptAsync as sendOpenCodePromptAsync, initSession as initOpenCodeSession, type OpenCodeCommand, respondToPermission as respondOpenCodePermission, replyToQuestion as replyOpenCodeQuestion, rejectQuestion as rejectOpenCodeQuestion, type PermissionRequest, type QuestionRequest } from './providers/opencode-provider';
 import type { DiagnosticLogger } from './diagnostic-logger';
+import { parseOpenCodeModelId } from './utils/opencode';
 
 export interface MessageAttachment {
     type: 'image' | 'file';
@@ -177,7 +178,7 @@ async function processCleanupQueue() {
 
 export { invalidateModelCache } from './providers/opencode-provider';
 export async function fetchModels(
-    provider: string,
+    _provider: string,
     _apiKey: string,
     customApiUrl?: string,
     _advancedConfig?: { customModelsUrl?: string; customChatUrl?: string }
@@ -214,15 +215,7 @@ export async function chat(
     }
     const prompt = conversationLines.join('\n\n');
 
-    let modelInfo: { providerID: string; modelID: string } | undefined;
-    if (options.model.includes('/')) {
-        const parts = options.model.split('/');
-        const modelID = parts.pop() || '';
-        const providerID = parts.join('/');
-        if (providerID && modelID) {
-            modelInfo = { providerID, modelID };
-        }
-    }
+    const modelInfo = parseOpenCodeModelId(options.model);
 
     const sessionIdFromBody = typeof options.customBody?.sessionId === 'string'
         ? options.customBody.sessionId
@@ -337,13 +330,7 @@ export async function executeCommand(
     args?: string,
     modelId?: string
 ): Promise<{ success: boolean; sessionId: string; parts?: any[] }> {
-    let model: { providerID: string; modelID: string } | undefined;
-    if (modelId?.includes('/')) {
-        const parts = modelId.split('/');
-        const mid = parts.pop() || '';
-        const pid = parts.join('/');
-        if (pid && mid) model = { providerID: pid, modelID: mid };
-    }
+    const model = parseOpenCodeModelId(modelId);
     return execOpenCodeCommand({ serverUrl }, sessionId, command, args, model);
 }
 
@@ -357,13 +344,7 @@ export async function sendStillPrompt(
         noReply?: boolean;
     }
 ): Promise<void> {
-    let model: { providerID: string; modelID: string } | undefined;
-    if (modelId?.includes('/')) {
-        const parts = modelId.split('/');
-        const mid = parts.pop() || '';
-        const pid = parts.join('/');
-        if (pid && mid) model = { providerID: pid, modelID: mid };
-    }
+    const model = parseOpenCodeModelId(modelId);
     return sendOpenCodePromptAsync({ serverUrl }, sessionId, prompt, model, options);
 }
 
@@ -372,13 +353,7 @@ export async function sessionInit(
     sessionId: string,
     modelId?: string
 ): Promise<boolean> {
-    let model: { providerID: string; modelID: string } | undefined;
-    if (modelId?.includes('/')) {
-        const parts = modelId.split('/');
-        const mid = parts.pop() || '';
-        const pid = parts.join('/');
-        if (pid && mid) model = { providerID: pid, modelID: mid };
-    }
+    const model = parseOpenCodeModelId(modelId);
     return initOpenCodeSession({ serverUrl }, sessionId, undefined, model);
 }
 

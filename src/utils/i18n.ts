@@ -24,6 +24,21 @@ export function getCurrentLanguage(): string {
     }
 }
 
+export function createAcceptLanguageHeader(language: string): string {
+    const normalized = (language || 'zh_CN').replace('_', '-');
+    const primary = normalized.split('-')[0].toLowerCase();
+
+    if (primary === 'zh') {
+        return `${normalized},zh;q=0.9,en;q=0.8`;
+    }
+
+    if (primary === 'en') {
+        return `${normalized},en;q=0.9,zh-CN;q=0.8,zh;q=0.7`;
+    }
+
+    return `${normalized},${primary};q=0.9,en;q=0.8,zh-CN;q=0.7,zh;q=0.6`;
+}
+
 /**
  * 翻译函数
  */

@@ -12,6 +12,7 @@
     "build": "cross-env NODE_ENV=production vite build && node --no-warnings ./scripts/make_install.js",
     "make-link": "node --no-warnings ./scripts/make_dev_link.js",
     "make_dev_copy": "node --no-warnings ./scripts/make_dev_copy.js",
+    "test:utils": "node --loader ts-node/esm scripts/test-utils.ts",
     "update-version": "node --no-warnings ./scripts/update_version.js",
     "make-install": "npm run build"
   },

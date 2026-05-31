@@ -1,3 +1,5 @@
+import { expandOpenCodeCliPath, getNodeModule, isWindowsRuntime } from './utils/opencode';
+
 const DEFAULT_PORT = 4096;
 const DEFAULT_HOSTNAME = '127.0.0.1';
 const DEFAULT_CLI_CMD = 'opencode';
@@ -15,39 +17,6 @@ function debugRunner(...args: any[]) {
 
 function isElectron(): boolean {
     return typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('electron');
-}
-
-function getNodeModule(moduleName: string): any {
-    try {
-        if (typeof window !== 'undefined' && (window as any).require) {
-            return (window as any).require(moduleName);
-        }
-        if (typeof globalThis !== 'undefined' && (globalThis as any).require) {
-            return (globalThis as any).require(moduleName);
-        }
-    } catch (e) {
-        console.warn(`[OpenCode Runner] Failed to load Node module "${moduleName}":`, e);
-    }
-    return null;
-}
-
-function getIsWin(): boolean {
-    const ua = typeof navigator !== 'undefined' ? navigator.userAgent.toLowerCase() : '';
-    const plat = typeof process !== 'undefined' ? process.platform : '';
-    return ua.includes('win') || plat === 'win32';
-}
-
-function expandPathForMacOS(env: Record<string, string>): Record<string, string> {
-    if (getIsWin()) return env;
-    const home = env.HOME || '';
-    const extraPaths = [
-        ...(home ? [`${home}/.opencode/bin`] : []),
-        '/usr/local/bin',
-        '/opt/homebrew/bin',
-        ...(home ? [`${home}/.local/bin`, `${home}/bin`] : []),
-    ].filter(Boolean);
-    const existingPath = env.PATH || '';
-    return { ...env, PATH: [...extraPaths, existingPath].filter(Boolean).join(':') };
 }
 
 export interface OpenCodeRunnerOptions {
@@ -128,8 +97,8 @@ export function startServe(options?: OpenCodeRunnerOptions): OpenCodeRunnerResul
         ...(options?.env || {}),
     };
 
-    const isWin = getIsWin();
-    const expandedEnv = expandPathForMacOS(env);
+    const isWin = isWindowsRuntime();
+    const expandedEnv = expandOpenCodeCliPath(env, isWin);
 
     try {
         serveProcess = childProcess.spawn(cliPath, args, {
@@ -181,7 +150,7 @@ export function startServe(options?: OpenCodeRunnerOptions): OpenCodeRunnerResul
 export function stopServe(): void {
     if (serveProcess && !serveProcess.killed) {
         try {
-            if (getIsWin()) {
+            if (isWindowsRuntime()) {
                 const childProcess = getNodeModule('child_process');
                 if (childProcess) {
                     childProcess.spawn('taskkill', ['/T', '/F', '/PID', String(serveProcess.pid)], {
@@ -313,12 +282,13 @@ export async function detectOpenCodeCLI(): Promise<{ found: boolean; path?: stri
     }
 
     return new Promise((resolve) => {
-        const isWin = getIsWin();
+        const isWin = isWindowsRuntime();
         const cmd = isWin ? 'where' : 'which';
-        const expandedEnv = expandPathForMacOS(
+        const expandedEnv = expandOpenCodeCliPath(
             typeof process !== 'undefined' && process.env
                 ? (process.env as Record<string, string>)
-                : {}
+                : {},
+            isWin
         );
         const child = childProcess.spawn(cmd, [DEFAULT_CLI_CMD], {
             shell: true,
