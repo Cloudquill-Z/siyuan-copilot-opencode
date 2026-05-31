@@ -1,3 +1,7 @@
+## Unreleased
+- 📝 更新 `README.md`、`README_en_US.md` 与 `README_zh_CN.md`，统一为独立 OpenCode 插件说明
+- 📝 补充当前功能、安装方式、开发命令、已知说明与 OpenCode 连接能力文档
+
 ## v2.0.0 / 20260524
 - ✨ Plan/Build 模式切换重构为单个 toggle 开关，带滑动动画
 - 🎨 思考/工具折叠状态管理重构，提取统一 `toggleThinkingCollapsed`/`isThinkingCollapsed` 函数
