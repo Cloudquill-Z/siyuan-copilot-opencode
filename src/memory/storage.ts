@@ -113,7 +113,7 @@ export function buildDefaultOverview(): string {
         "# Agent 总览",
         "",
         "## 仓库概况",
-        "- 尚未扫描。请在设置页点击“扫描笔记仓库”。",
+        "- 尚未扫描。请在聊天中发送 `/init`，让 OpenCode 探索思源笔记仓库后填充本页。",
         "",
         "## 主要主题",
         "- ",
@@ -130,7 +130,6 @@ export function buildDefaultOverview(): string {
 
 export async function ensureMemoryBase(settings: any): Promise<void> {
     if (!isMemoryEnabled(settings)) return;
-    await ensureMemoryDoc(settings, "overviewDocId", MEMORY_OVERVIEW_FILENAME, buildDefaultOverview());
     if (!String(settings.soulDocId || "").trim()) {
         await ensureMemoryDoc(settings, "coreDocId", MEMORY_CORE_FILENAME, buildDefaultCoreProfile());
     }

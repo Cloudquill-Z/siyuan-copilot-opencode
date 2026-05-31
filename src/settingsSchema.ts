@@ -64,10 +64,6 @@ export function normalizeSettings(rawSettings: any) {
     merged.pluginData.memoryExtractionState = isPlainObject(merged.pluginData.memoryExtractionState)
         ? merged.pluginData.memoryExtractionState
         : {};
-    merged.pluginData.memoryOverviewScanState = deepMerge(
-        defaults.pluginData.memoryOverviewScanState,
-        merged.pluginData.memoryOverviewScanState || {}
-    );
 
     merged.memory.enabled = !!merged.memory.enabled;
     merged.memory.notebookId =

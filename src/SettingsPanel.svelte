@@ -22,7 +22,7 @@
         normalizeTokenUsageRecords,
         summarizeTokenUsage,
     } from './utils/tokenUsage';
-    import { ensureMemoryBase, scanMemoryOverview } from './memory';
+    import { ensureMemoryBase } from './memory';
     export let plugin;
 
     let settings = { ...getDefaultSettings() };
@@ -41,8 +41,6 @@
     }
 
     let isRefreshingModels = false;
-    let isScanningMemoryOverview = false;
-    let memoryScanMessage = '';
     let modelSearchQuery = '';
     let tokenStatsRange: 'today' | '7d' | '30d' | 'all' = '7d';
 
@@ -535,62 +533,6 @@
         }
     }
 
-    function scanMemoryRepository() {
-        ensureMemorySettings();
-        if (!settings.memory.notebookId) {
-            pushErrMsg(t('settings.memory.needNotebook') || '请先选择记忆笔记本');
-            return;
-        }
-
-        confirm(
-            t('settings.memory.scanConfirmTitle') || '扫描笔记仓库',
-            t('settings.memory.scanConfirmMessage') ||
-                '将读取整个思源笔记仓库的标题、路径和必要正文片段，并调用 OpenCode 生成 Agent 总览。是否继续？',
-            async () => {
-                isScanningMemoryOverview = true;
-                memoryScanMessage = t('settings.memory.scanCollecting') || '正在收集笔记仓库目录...';
-                settings.pluginData = {
-                    ...(settings.pluginData || {}),
-                    memoryOverviewScanState: {
-                        ...(settings.pluginData?.memoryOverviewScanState || {}),
-                        status: 'running',
-                    },
-                };
-                await saveSettings();
-
-                try {
-                    const result = await scanMemoryOverview({
-                        settings,
-                        modelId: settings.currentModelId,
-                        serverUrl: settings.aiProviders?.opencode?.serverUrl,
-                        onProgress: progress => {
-                            memoryScanMessage = progress.message;
-                        },
-                    });
-                    settings.memory.overviewDocId = result.overviewDocId;
-                    await saveSettings();
-                    pushMsg(
-                        (t('settings.memory.scanCompleted') || 'Agent 总览已生成') +
-                            `（${result.scannedDocCount} 篇）`
-                    );
-                } catch (error) {
-                    settings.pluginData = {
-                        ...(settings.pluginData || {}),
-                        memoryOverviewScanState: {
-                            ...(settings.pluginData?.memoryOverviewScanState || {}),
-                            status: 'failed',
-                            error: (error as Error).message,
-                        },
-                    };
-                    await saveSettings();
-                    pushErrMsg(`扫描失败: ${(error as Error).message}`);
-                } finally {
-                    isScanningMemoryOverview = false;
-                }
-            }
-        );
-    }
-
     function updateGroupItems() {
         groups = groups.map(group => ({
             ...group,
@@ -1064,20 +1006,11 @@
                         {t('settings.memory.initialize') || '初始化记忆目录'}
                     </button>
                     <button
-                        class="b3-button b3-button--text"
-                        on:click={scanMemoryRepository}
-                        disabled={!settings.memory.notebookId || isScanningMemoryOverview}
-                    >
-                        {isScanningMemoryOverview
-                            ? t('settings.memory.scanning') || '扫描中...'
-                            : t('settings.memory.scan') || '扫描笔记仓库'}
-                    </button>
-                    <button
                         class="b3-button b3-button--outline"
                         on:click={() =>
                             openMemoryDoc(
                                 settings.memory.overviewDocId,
-                                t('settings.memory.noOverview') || '还没有 Agent 总览，请先扫描笔记仓库'
+                                t('settings.memory.noOverview') || '还没有 Agent 总览，请在聊天中发送 /init'
                             )}
                         disabled={!settings.memory.overviewDocId}
                     >
@@ -1096,20 +1029,10 @@
                     </button>
                 </div>
 
-                {#if memoryScanMessage}
-                    <div class="memory-settings-panel__status">
-                        {memoryScanMessage}
-                    </div>
-                {/if}
-
-                {#if settings.pluginData?.memoryOverviewScanState?.lastScanAt}
-                    <div class="memory-settings-panel__meta">
-                        上次扫描：{new Date(
-                            settings.pluginData.memoryOverviewScanState.lastScanAt
-                        ).toLocaleString()}
-                        · {settings.pluginData.memoryOverviewScanState.lastScanDocCount || 0} 篇文档
-                    </div>
-                {/if}
+                <div class="memory-settings-panel__meta">
+                    {t('settings.memory.initCommandHint') ||
+                        '在聊天中发送 /init，让 OpenCode 扫描笔记仓库并写入 Agent 总览。'}
+                </div>
             </div>
         {:else}
             <SettingPanel
@@ -1497,7 +1420,6 @@
         }
     }
 
-    .memory-settings-panel__status,
     .memory-settings-panel__meta {
         padding: 8px 12px;
         border-radius: 6px;

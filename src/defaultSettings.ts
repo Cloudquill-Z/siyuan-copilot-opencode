@@ -190,12 +190,6 @@ export const getDefaultSettings = () => ({
         modelCapabilitiesInitialized: true,
         tokenUsageRecords: [] as any[],
         memoryExtractionState: {} as Record<string, any>,
-        memoryOverviewScanState: {
-            lastScanAt: 0,
-            lastScanDocCount: 0,
-            lastScanNotebookIds: [] as string[],
-            status: 'idle' as 'idle' | 'running' | 'failed' | 'completed',
-        },
     },
 
 });

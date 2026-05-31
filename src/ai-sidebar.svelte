@@ -12,7 +12,6 @@
         fetchModels,
         executeCommand,
         sendStillPrompt,
-        sessionInit,
         estimateTokens,
         calculateTotalTokens,
         invalidateModelCache,
@@ -88,7 +87,14 @@
         createTokenUsageRecord,
         formatTokenCount,
     } from './utils/tokenUsage';
-    import { buildMemoryPrompt, extractEpisodicMemory } from './memory';
+    import {
+        buildMemoryInitPrompt,
+        buildMemoryPrompt,
+        ensureMemoryBase,
+        ensureMemoryOverviewTarget,
+        extractEpisodicMemory,
+        isMemoryInitCommand,
+    } from './memory';
     import type { TaskSession } from './task-types';
     // Agent 模式工具使用强制规则（统一常量）
     // STUBS: ./tools deleted, safe no-op replacements
@@ -305,7 +311,7 @@
     let commandPaletteIndex = 0;
     const BUILTIN_COMMANDS = [
         { name: 'still', desc: '让 AI 继续生成', args: '[提示词]' },
-        { name: 'init', desc: '初始化项目，创建 AGENTS.md', args: '' },
+        { name: 'init', desc: '初始化记忆，让 OpenCode 扫描思源笔记仓库', args: '' },
         { name: 'clear', desc: '清除当前会话', args: '' },
         { name: 'undo', desc: '撤销上次修改', args: '' },
         { name: 'redo', desc: '重做上次撤销', args: '' },
@@ -4707,10 +4713,6 @@
                 await sendStillPrompt(serverUrl, currentSessionId, prompt, currentModelId);
                 pushMsg('已发送继续指令');
             }
-            else if (command === 'init') {
-                const ok = await sessionInit(serverUrl, currentSessionId, currentModelId);
-                pushMsg(ok ? '项目初始化已启动' : '项目初始化失败');
-            }
             else {
                 const result = await executeCommand(serverUrl, currentSessionId, command, args, currentModelId);
                 if (result.parts && result.parts.length > 0) {
@@ -4741,12 +4743,42 @@
         }
     }
 
+    async function prepareMemoryInitPrompt(): Promise<string | null> {
+        const memorySettings = settings.memory || {};
+        if (!String(memorySettings.notebookId || '').trim()) {
+            pushErrMsg('请先在设置的“记忆”页选择记忆笔记本');
+            return null;
+        }
+
+        try {
+            settings.memory = {
+                ...memorySettings,
+                enabled: true,
+            };
+            await ensureMemoryBase(settings);
+            const overviewDocId = await ensureMemoryOverviewTarget(settings);
+            await plugin.saveSettings(settings);
+            updateSettings(JSON.parse(JSON.stringify(settings)));
+            return buildMemoryInitPrompt(settings, overviewDocId);
+        } catch (error) {
+            pushErrMsg(`初始化记忆任务失败: ${(error as Error).message}`);
+            return null;
+        }
+    }
+
     async function sendMessage() {
         const trimmedInput = currentInput.trim();
         if ((!trimmedInput && currentAttachments.length === 0) || isLoading) return;
 
+        let memoryInitPromptForRun = '';
+        if (isMemoryInitCommand(trimmedInput)) {
+            const prompt = await prepareMemoryInitPrompt();
+            if (!prompt) return;
+            memoryInitPromptForRun = prompt;
+        }
+
         // OpenCode 指令检测：以 / 开头的内容作为命令执行
-        if (trimmedInput.startsWith('/') && currentSessionId) {
+        if (!memoryInitPromptForRun && trimmedInput.startsWith('/') && currentSessionId) {
             await handleOpenCodeCommand(trimmedInput);
             return;
         }
@@ -4863,6 +4895,8 @@
 
         // 用户消息只保存原始输入（不包含文档内容）
         const userContent = currentInput.trim();
+        const effectiveUserContent = memoryInitPromptForRun || userContent;
+        const effectiveChatMode: ChatMode = memoryInitPromptForRun ? 'build' : chatMode;
 
         const userMessage: Message = {
             role: 'user',
@@ -4917,7 +4951,7 @@
         await scrollToBottom(true);
 
         // DeepSeek 思考模式：开启新一轮对话前清理历史消息中的 reasoning_content，保留工具调用链
-        if (chatMode === 'plan' && userToolCount > 0 && currentProvider === 'deepseek') {
+        if (effectiveChatMode === 'plan' && userToolCount > 0 && currentProvider === 'deepseek') {
             messages = messages.map(msg => {
                 if (msg.role === 'assistant' && msg.reasoning_content) {
                     const { reasoning_content, ...rest } = msg as any;
@@ -4928,7 +4962,7 @@
         }
 
         const isDeepseekThinkingAgent =
-            chatMode === 'plan' &&
+            effectiveChatMode === 'plan' &&
             userToolCount > 0 &&
             modelConfig.capabilities?.thinking &&
             (modelConfig.thinkingEnabled || false);
@@ -4938,7 +4972,7 @@
         let messagesToSend = await prepareMessagesForAI(
             messages,
             contextDocumentsWithLatestContent,
-            userContent,
+            effectiveUserContent,
             userMessage,
             enableThinking,
             modelConfig.id
@@ -4952,14 +4986,14 @@
             ...sessionStates,
             [runTaskId]: captureActiveTaskState(),
         };
-        const diagnosticLogger = await startDiagnosticLog(userContent, modelConfig);
+        const diagnosticLogger = await startDiagnosticLog(effectiveUserContent, modelConfig);
 
         try {
             // 准备工具列表
             let toolsForAgent: any[] | undefined = undefined;
-            if (chatMode === 'plan' && userToolCount > 0) {
+            if (effectiveChatMode === 'plan' && userToolCount > 0) {
                 // 根据选中的工具名称筛选出对应的工具定义
-                const currentSelectedTools = chatMode === 'plan' ? selectedToolsAsk : selectedTools;
+                const currentSelectedTools = effectiveChatMode === 'plan' ? selectedToolsAsk : selectedTools;
                 const selectedToolDefs = AVAILABLE_TOOLS.filter(tool =>
                     currentSelectedTools.some(t => t.name === tool.function.name)
                 );
@@ -4967,7 +5001,7 @@
                     tool => tool.function.name !== 'get_siyuan_skills'
                 );
                 const descTool =
-                    chatMode === 'plan'
+                    effectiveChatMode === 'plan'
                         ? createGetSiyuanSkillsTool(
                               filteredToolDefs.map(tool => tool.function.name)
                           )
@@ -5008,7 +5042,7 @@
 
             // Agent 模式或启用工具的问答模式使用循环调用
             if (
-                chatMode === 'plan' &&
+                effectiveChatMode === 'plan' &&
                 toolsForAgent &&
                 toolsForAgent.length > 0
             ) {
@@ -5042,7 +5076,7 @@
                             signal: abortController.signal,
                             enableThinking,
                             reasoningEffort: modelConfig.thinkingEffort || 'low',
-                            mode: chatMode,
+                            mode: effectiveChatMode,
                             tools: toolsForAgent,
                             customBody,
                             diagnosticLogger: diagnosticLogger || undefined,
@@ -5400,7 +5434,7 @@
                         signal: abortController.signal,
                         enableThinking,
                         reasoningEffort: modelConfig.thinkingEffort || 'low',
-                        mode: chatMode,
+                        mode: effectiveChatMode,
                         tools: webSearchTools, // 传递联网搜索工具
                         customBody,
                         diagnosticLogger: diagnosticLogger || undefined,

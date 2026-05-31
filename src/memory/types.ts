@@ -23,14 +23,6 @@ export interface MemoryExtractionState {
     updatedAt: number;
 }
 
-export interface MemoryOverviewScanState {
-    lastScanAt: number;
-    lastScanDocCount: number;
-    lastScanNotebookIds: string[];
-    status: "idle" | "running" | "failed" | "completed";
-    error?: string;
-}
-
 export interface MemoryContextItem {
     id: string;
     title: string;
@@ -54,28 +46,6 @@ export interface ExtractedMemoryDraft {
     topics: string[];
     importance: number;
     shouldRemember: boolean;
-}
-
-export interface MemoryScanProgress {
-    phase: "collecting" | "summarizing" | "writing" | "completed";
-    message: string;
-    current?: number;
-    total?: number;
-}
-
-export interface MemoryScanResult {
-    overviewDocId: string;
-    markdown: string;
-    scannedDocCount: number;
-    scannedNotebookIds: string[];
-}
-
-export interface MemoryScanOptions {
-    settings: any;
-    modelId?: string;
-    serverUrl?: string;
-    signal?: AbortSignal;
-    onProgress?: (progress: MemoryScanProgress) => void;
 }
 
 export interface MemoryPromptOptions {

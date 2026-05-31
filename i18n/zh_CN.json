@@ -212,15 +212,10 @@
             "maxMemoryPromptChars": "最大注入长度",
             "initialize": "初始化记忆目录",
             "initialized": "记忆目录已初始化",
-            "scan": "扫描笔记仓库",
-            "scanning": "扫描中...",
-            "scanCollecting": "正在收集笔记仓库目录...",
-            "scanCompleted": "Agent 总览已生成",
-            "scanConfirmTitle": "扫描笔记仓库",
-            "scanConfirmMessage": "将读取整个思源笔记仓库的标题、路径和必要正文片段，并调用 OpenCode 生成 Agent 总览。是否继续？",
+            "initCommandHint": "在聊天中发送 /init，让 OpenCode 扫描笔记仓库并写入 Agent 总览。",
             "openOverview": "查看 Agent 总览",
             "openCore": "查看核心档案",
-            "noOverview": "还没有 Agent 总览，请先扫描笔记仓库",
+            "noOverview": "还没有 Agent 总览，请在聊天中发送 /init",
             "noCore": "还没有核心档案",
             "needNotebook": "请先选择记忆笔记本"
         }

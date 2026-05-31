@@ -213,15 +213,10 @@
             "maxMemoryPromptChars": "Max Injected Length",
             "initialize": "Initialize Memory Folder",
             "initialized": "Memory folder initialized",
-            "scan": "Scan Note Repository",
-            "scanning": "Scanning...",
-            "scanCollecting": "Collecting note repository index...",
-            "scanCompleted": "Agent overview generated",
-            "scanConfirmTitle": "Scan Note Repository",
-            "scanConfirmMessage": "This will read titles, paths, and necessary excerpts from the whole SiYuan note repository, then call OpenCode to generate an Agent overview. Continue?",
+            "initCommandHint": "Send /init in chat to let OpenCode scan the note repository and write the Agent overview.",
             "openOverview": "Open Agent Overview",
             "openCore": "Open Core Profile",
-            "noOverview": "No Agent overview yet. Scan the note repository first",
+            "noOverview": "No Agent overview yet. Send /init in chat first",
             "noCore": "No core profile yet",
             "needNotebook": "Select a memory notebook first"
         }
