@@ -1,8 +1,6 @@
 import { OPENCODE_SESSION_TITLE } from "../pluginNamespace";
 import type { DiagnosticLogger } from "../diagnostic-logger";
 import {
-    mergeOpenCodeModelLists,
-    parseOpenCodeModelListOutput,
     parseOpenCodeProviderModels,
     type OpenCodeModelInfo,
 } from "./opencode-models";
@@ -12,7 +10,6 @@ import {
     type RealtimeSessionStatus,
 } from "./realtime-completion-watcher";
 import { getOpenCodeAgentForChatMode } from "../utils/chatMode";
-import { getNodeModule, getOpenCodeCliEnv } from "../utils/opencode";
 
 export type { OpenCodeModelInfo } from "./opencode-models";
 
@@ -72,33 +69,6 @@ function debugOpenCode(...args: any[]) {
     if (OPENCODE_DEBUG_LOGS) {
         console.debug(...args);
     }
-}
-
-async function fetchOpenCodeCliModels(): Promise<OpenCodeModelInfo[]> {
-    const childProcess = getNodeModule('child_process');
-    if (!childProcess?.execFile) {
-        return [];
-    }
-
-    return new Promise((resolve) => {
-        childProcess.execFile(
-            'opencode',
-            ['models'],
-            {
-                env: getOpenCodeCliEnv(),
-                timeout: 5_000,
-                windowsHide: true,
-            },
-            (error: Error | null, stdout: string) => {
-                if (error) {
-                    debugOpenCode('[OpenCode] CLI model supplementation skipped:', error.message);
-                    resolve([]);
-                    return;
-                }
-                resolve(parseOpenCodeModelListOutput(stdout));
-            }
-        );
-    });
 }
 
 function logDiagnostic(logger: DiagnosticLogger | undefined, event: string, data?: unknown) {
@@ -1196,11 +1166,9 @@ export async function fetchOpenCodeModels(config: OpenCodeProviderConfig): Promi
             ? new Set<string>(Array.isArray(data.connected) ? data.connected : [])
             : undefined;
         const models = parseOpenCodeProviderModels(data, connectedProviders);
-        const cliModels = await fetchOpenCodeCliModels();
-        const mergedModels = mergeOpenCodeModelLists(models, cliModels);
 
-        modelCache.set(serverUrl, { models: mergedModels, timestamp: Date.now() });
-        return mergedModels;
+        modelCache.set(serverUrl, { models, timestamp: Date.now() });
+        return models;
     } catch (error) {
         const err = error as Error;
         if (err.name === 'AbortError') {

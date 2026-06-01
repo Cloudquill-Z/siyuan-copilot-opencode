@@ -148,6 +148,7 @@ assert.deepEqual(
 );
 
 const aiSidebarSource = fs.readFileSync('src/ai-sidebar.svelte', 'utf8');
+const openCodeProviderSource = fs.readFileSync('src/providers/opencode-provider.ts', 'utf8');
 assert(
     aiSidebarSource.includes('findOpenCodeModelConfigMatch'),
     'ai-sidebar auto-fetch path must use provider-aware OpenCode model matching'
@@ -155,6 +156,14 @@ assert(
 assert(
     !aiSidebarSource.includes('function getModelMatchKeys'),
     'ai-sidebar must not match OpenCode models by bare model id because providers can share model names'
+);
+assert(
+    !openCodeProviderSource.includes('fetchOpenCodeCliModels'),
+    'Model catalog must come from the running OpenCode server, not the CLI, because CLI and server versions can differ'
+);
+assert(
+    !/execFile\([\s\S]*\['models'\]/.test(openCodeProviderSource),
+    'OpenCode provider must not supplement server models with `opencode models` output'
 );
 
 assert.equal(shouldRefreshOpenCodeModelCatalog([]), true);
