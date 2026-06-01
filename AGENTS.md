@@ -74,6 +74,7 @@ src/utils/                        — i18n, hotkey, assets, modelCapabilities, w
 ## Git commit convention
 
 - 每次完成修改并验证后，都执行一次 Git commit；提交标题和提交摘要使用中文，简洁说明本次修改内容与验证结果。
+- 每次完成任何代码、文档或配置修改后，都将 `plugin.json` 与 `package.json` 的 patch 小版本号同步加一（例如 `3.0.0` → `3.0.1`），再执行验证与 Git commit。
 
 ## OpenCode provider API
 

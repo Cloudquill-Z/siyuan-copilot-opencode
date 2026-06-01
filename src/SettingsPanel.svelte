@@ -1,5 +1,6 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
+    import { onDestroy, onMount } from 'svelte';
+    import pluginManifest from '../plugin.json';
     import SettingPanel from '@/libs/components/setting-panel.svelte';
     import { t } from './utils/i18n';
     import { getDefaultSettings } from './defaultSettings';
@@ -14,6 +15,11 @@
     import type { ModelConfig } from './defaultSettings';
     import { confirm } from 'siyuan';
     import { PLUGIN_ID } from './pluginPaths';
+    import {
+        connectionStatusStore,
+        startHealthPoll,
+        type ConnectionStatus,
+    } from './stores/connectionStatus';
     import { updateSettings } from './stores/settings';
     import {
         filterTokenUsageByRange,
@@ -40,8 +46,19 @@
     }
 
     let isRefreshingModels = false;
+    let isRestartingOpenCode = false;
     let modelSearchQuery = '';
     let tokenStatsRange: 'today' | '7d' | '30d' | 'all' = '7d';
+    let connectionStatus: ConnectionStatus = {
+        state: 'disconnected',
+        version: '',
+        serverUrl: '',
+        lastChecked: 0,
+        error: '',
+    };
+    const unsubscribeConnectionStatus = connectionStatusStore.subscribe(status => {
+        connectionStatus = status;
+    });
 
     let saveTimer: ReturnType<typeof setTimeout> | null = null;
     function debouncedSave() {
@@ -156,6 +173,47 @@
 
     function handleProviderChange() {
         saveSettings();
+    }
+
+    function getOpenCodeStatusText(): string {
+        if (connectionStatus.state === 'connected') {
+            return connectionStatus.version
+                ? `已连接 · v${connectionStatus.version}`
+                : '已连接';
+        }
+        if (connectionStatus.state === 'connecting') {
+            return '连接中...';
+        }
+        return connectionStatus.error ? `未连接 · ${connectionStatus.error}` : '未连接';
+    }
+
+    function reconnectOpenCodeServer() {
+        const serverUrl = opencodeConfig.serverUrl || 'http://localhost:4096';
+        startHealthPoll(serverUrl);
+    }
+
+    async function restartOpenCodeServer() {
+        if (isRestartingOpenCode) return;
+        isRestartingOpenCode = true;
+        try {
+            await saveSettings();
+            if (!plugin?.restartOpenCodeServer) {
+                pushErrMsg('当前插件环境不支持重启 OpenCode Server');
+                return;
+            }
+            const result = await plugin.restartOpenCodeServer(settings);
+            if (result?.success) {
+                pushMsg('OpenCode Server 已重新连接');
+            } else {
+                pushErrMsg(`重启 OpenCode Server 失败: ${result?.error || '未知错误'}`);
+                reconnectOpenCodeServer();
+            }
+        } catch (error) {
+            pushErrMsg(`重启 OpenCode Server 失败: ${(error as Error).message}`);
+            reconnectOpenCodeServer();
+        } finally {
+            isRestartingOpenCode = false;
+        }
     }
 
     function setTokenStatsRange(range: string) {
@@ -410,6 +468,10 @@
         await runload();
     });
 
+    onDestroy(() => {
+        unsubscribeConnectionStatus();
+    });
+
     async function runload() {
         const loadedSettings = await plugin.loadSettings();
         settings = normalizeSettings(loadedSettings);
@@ -576,6 +638,38 @@
                                 }}
                                 placeholder="http://localhost:4096"
                             />
+                        </div>
+                    </div>
+                    <div class="opencode-runtime-panel">
+                        <div class="opencode-runtime-panel__row">
+                            <span>插件版本</span>
+                            <strong>v{pluginManifest.version}</strong>
+                        </div>
+                        <div class="opencode-runtime-panel__row">
+                            <span>OpenCode Server</span>
+                            <strong class:opencode-runtime-panel__status--ok={connectionStatus.state === 'connected'} class:opencode-runtime-panel__status--warn={connectionStatus.state === 'connecting'} class:opencode-runtime-panel__status--error={connectionStatus.state === 'disconnected'}>
+                                {getOpenCodeStatusText()}
+                            </strong>
+                        </div>
+                        <div class="opencode-runtime-panel__row">
+                            <span>服务地址</span>
+                            <code>{connectionStatus.serverUrl || opencodeConfig.serverUrl || 'http://localhost:4096'}</code>
+                        </div>
+                        <div class="opencode-runtime-panel__actions">
+                            <button
+                                class="b3-button b3-button--outline"
+                                on:click={reconnectOpenCodeServer}
+                                disabled={isRestartingOpenCode}
+                            >
+                                重新连接
+                            </button>
+                            <button
+                                class="b3-button"
+                                on:click={restartOpenCodeServer}
+                                disabled={isRestartingOpenCode}
+                            >
+                                {isRestartingOpenCode ? '重启中...' : '重启 OpenCode Server'}
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -1025,6 +1119,64 @@
         padding: 12px 16px;
     }
 
+    .opencode-runtime-panel {
+        display: grid;
+        gap: 8px;
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid var(--b3-border-color);
+    }
+
+    .opencode-runtime-panel__row {
+        display: grid;
+        grid-template-columns: 120px minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
+        min-height: 28px;
+        color: var(--b3-theme-on-surface);
+        font-size: 13px;
+
+        span {
+            color: var(--b3-theme-on-surface-light);
+        }
+
+        strong,
+        code {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--b3-theme-on-background);
+            font-size: 13px;
+        }
+
+        code {
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: var(--b3-theme-background);
+            font-family: var(--b3-font-family-code);
+        }
+    }
+
+    .opencode-runtime-panel__status--ok {
+        color: var(--b3-card-success-color) !important;
+    }
+
+    .opencode-runtime-panel__status--warn {
+        color: var(--b3-card-warning-color) !important;
+    }
+
+    .opencode-runtime-panel__status--error {
+        color: var(--b3-card-error-color) !important;
+    }
+
+    .opencode-runtime-panel__actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding-top: 4px;
+    }
+
     .model-management-panel__toolbar {
         display: flex;
         align-items: center;
@@ -1442,6 +1594,11 @@
         .model-management-panel__toolbar {
             flex-direction: column;
             align-items: stretch;
+        }
+
+        .opencode-runtime-panel__row {
+            grid-template-columns: 1fr;
+            gap: 4px;
         }
 
         .model-management-panel__toolbar-left {

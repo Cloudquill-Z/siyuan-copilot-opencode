@@ -2025,10 +2025,10 @@ export default class PluginSample extends Plugin {
         return !this.isUnloaded && this.openCodeInitRunId === runId;
     }
 
-    private async initOpenCodeServer(settingsOverride?: any, runId = this.openCodeInitRunId) {
+    private async initOpenCodeServer(settingsOverride?: any, runId = this.openCodeInitRunId): Promise<{ success: boolean; error?: string }> {
         try {
             const settings = settingsOverride || await getSettings();
-            if (!this.isOpenCodeInitCurrent(runId)) return;
+            if (!this.isOpenCodeInitCurrent(runId)) return { success: false, error: 'OpenCode initialization was superseded.' };
 
             const serverUrl = settings?.aiProviders?.opencode?.serverUrl || 'http://localhost:4096';
             const url = new URL(serverUrl);
@@ -2040,18 +2040,18 @@ export default class PluginSample extends Plugin {
             } catch (err) {
                 console.warn('[OpenCode] Failed to prepare managed workspace:', err);
             }
-            if (!this.isOpenCodeInitCurrent(runId)) return;
+            if (!this.isOpenCodeInitCurrent(runId)) return { success: false, error: 'OpenCode initialization was superseded.' };
 
             const available = await ensureServerRunning({
                 port,
                 hostname,
                 workingDir: this.getOpenCodeWorkingDir(),
             });
-            if (!this.isOpenCodeInitCurrent(runId)) return;
+            if (!this.isOpenCodeInitCurrent(runId)) return { success: false, error: 'OpenCode initialization was superseded.' };
 
             if (!available.success) {
                 const cliCheck = await detectOpenCodeCLI();
-                if (!this.isOpenCodeInitCurrent(runId)) return;
+                if (!this.isOpenCodeInitCurrent(runId)) return { success: false, error: 'OpenCode initialization was superseded.' };
 
                 if (!cliCheck.found) {
                     pushErrMsg(t('aiSidebar.errors.opencodeNotFound') || 'OpenCode CLI not found. Please install it from https://opencode.ai');
@@ -2059,13 +2059,28 @@ export default class PluginSample extends Plugin {
                     pushErrMsg(t('aiSidebar.errors.opencodeStartFailed') || `Failed to start OpenCode server: ${available.error}`);
                 }
                 console.warn(`[OpenCode] ${available.error}`);
+                return { success: false, error: available.error };
             } else {
                 console.log(`[OpenCode] Server ready at ${hostname}:${port}`);
                 startHealthPoll(serverUrl);
+                return { success: true };
             }
         } catch (err) {
             console.warn('[OpenCode] Failed to auto-start server:', err);
+            return {
+                success: false,
+                error: err instanceof Error ? err.message : String(err),
+            };
         }
+    }
+
+    async restartOpenCodeServer(settingsOverride?: any): Promise<{ success: boolean; error?: string }> {
+        clearPendingOpenCodeStop();
+        const runId = ++this.openCodeInitRunId;
+        stopHealthPoll(false);
+        stopServe();
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return this.initOpenCodeServer(settingsOverride, runId);
     }
 
     onunload() {
