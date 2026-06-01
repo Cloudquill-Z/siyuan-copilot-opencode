@@ -18,6 +18,8 @@ export type { OpenCodeModelInfo } from "./opencode-models";
 
 export interface OpenCodeProviderConfig {
     serverUrl: string;
+    directory?: string;
+    workspace?: string;
 }
 
 export interface OpenCodeToolPartUpdate {
@@ -54,6 +56,8 @@ export interface OpenCodeChatOptions {
     onQuestionAsked?: (req: QuestionRequest) => void;
     mode?: 'plan' | 'build';
     diagnosticLogger?: DiagnosticLogger;
+    directory?: string;
+    workspace?: string;
 }
 
 const DEFAULT_SERVER_URL = 'http://localhost:4096';
@@ -125,6 +129,43 @@ function normalizeServerUrl(serverUrl: string): string {
         return DEFAULT_SERVER_URL;
     }
     return trimmed.replace(/\/$/, '');
+}
+
+function normalizeQueryValue(value: any): string | undefined {
+    if (typeof value !== 'string') return undefined;
+    const trimmed = value.trim();
+    return trimmed || undefined;
+}
+
+function getOpenCodeRequestContext(
+    options?: Pick<OpenCodeChatOptions, 'customBody' | 'directory' | 'workspace'>,
+    config?: Pick<OpenCodeProviderConfig, 'directory' | 'workspace'>
+): { directory?: string; workspace?: string } {
+    const customBody = options?.customBody && typeof options.customBody === 'object'
+        ? options.customBody
+        : {};
+
+    return {
+        directory:
+            normalizeQueryValue(options?.directory) ??
+            normalizeQueryValue(customBody.directory) ??
+            normalizeQueryValue(config?.directory),
+        workspace:
+            normalizeQueryValue(options?.workspace) ??
+            normalizeQueryValue(customBody.workspace) ??
+            normalizeQueryValue(config?.workspace),
+    };
+}
+
+function withOpenCodeRequestContext(
+    path: string,
+    context?: { directory?: string; workspace?: string }
+): string {
+    const params = new URLSearchParams();
+    if (context?.directory) params.set('directory', context.directory);
+    if (context?.workspace) params.set('workspace', context.workspace);
+    const query = params.toString();
+    return query ? `${path}${path.includes('?') ? '&' : '?'}${query}` : path;
 }
 
 function extractTextFromParts(parts: any): string {
@@ -1275,6 +1316,7 @@ export async function chatOpenCode(
 ): Promise<{ sessionId: string }> {
     const serverUrl = normalizeServerUrl(config.serverUrl);
     const diagnosticLogger = options.diagnosticLogger;
+    const requestContext = getOpenCodeRequestContext(options, config);
     let sessionId = options.sessionId;
     let sessionCreated = false;
     let eventStream: EventStreamClient | null = null;
@@ -1293,7 +1335,7 @@ export async function chatOpenCode(
             });
             const createFetchResult = await openCodeFetch(
                 serverUrl,
-                '/session',
+                withOpenCodeRequestContext('/session', requestContext),
                 {
                     method: 'POST',
                     body: JSON.stringify({ title: OPENCODE_SESSION_TITLE })
@@ -1472,14 +1514,15 @@ export async function chatOpenCode(
 
         if (eventStream) {
             const asyncPath = `/session/${encodeURIComponent(sessionId)}/prompt_async`;
+            const asyncRequestPath = withOpenCodeRequestContext(asyncPath, requestContext);
             logDiagnostic(diagnosticLogger, 'request.sent', {
                 method: 'POST',
-                path: asyncPath,
+                path: asyncRequestPath,
                 purpose: 'prompt-async',
             });
             const asyncFetchResult = await openCodeFetch(
                 serverUrl,
-                asyncPath,
+                asyncRequestPath,
                 {
                     method: 'POST',
                     body: JSON.stringify(promptBody)
@@ -1490,7 +1533,7 @@ export async function chatOpenCode(
             try {
                 logDiagnostic(diagnosticLogger, 'request.response', {
                     method: 'POST',
-                    path: asyncPath,
+                    path: asyncRequestPath,
                     status: asyncFetchResult.response.status,
                     ok: asyncFetchResult.response.ok,
                 });
@@ -1518,14 +1561,15 @@ export async function chatOpenCode(
 
         // Send the message
         const messagePath = `/session/${encodeURIComponent(sessionId)}/message`;
+        const messageRequestPath = withOpenCodeRequestContext(messagePath, requestContext);
         logDiagnostic(diagnosticLogger, 'request.sent', {
             method: 'POST',
-            path: messagePath,
+            path: messageRequestPath,
             purpose: 'message',
         });
         const messageFetchResult = await openCodeFetch(
             serverUrl,
-            messagePath,
+            messageRequestPath,
             {
                 method: 'POST',
                 body: JSON.stringify(promptBody)
@@ -1536,7 +1580,7 @@ export async function chatOpenCode(
         const { response, resetTimeout } = messageFetchResult;
         logDiagnostic(diagnosticLogger, 'request.response', {
             method: 'POST',
-            path: messagePath,
+            path: messageRequestPath,
             status: response.status,
             ok: response.ok,
             contentType: response.headers.get('content-type') || '',

@@ -5,6 +5,7 @@
 import { chatOpenCode, fetchOpenCodeModels, deleteOpenCodeSession, type OpenCodeToolPartUpdate, listCommands as fetchOpenCodeCommands, executeCommand as execOpenCodeCommand, sendPromptAsync as sendOpenCodePromptAsync, initSession as initOpenCodeSession, type OpenCodeCommand, respondToPermission as respondOpenCodePermission, replyToQuestion as replyOpenCodeQuestion, rejectQuestion as rejectOpenCodeQuestion, type PermissionRequest, type QuestionRequest } from './providers/opencode-provider';
 import type { DiagnosticLogger } from './diagnostic-logger';
 import { parseOpenCodeModelId } from './utils/opencode';
+import { OPENCODE_WORKSPACE_DIR } from './pluginPaths';
 
 export interface MessageAttachment {
     type: 'image' | 'file';
@@ -133,6 +134,8 @@ export interface ChatOptions {
     onImageGenerated?: (images: GeneratedImageData[]) => void;
     mode?: 'plan' | 'build';
     diagnosticLogger?: DiagnosticLogger;
+    directory?: string;
+    workspace?: string;
 }
 
 export interface ModelInfo {
@@ -157,6 +160,18 @@ export const EFFORT_RATIO: Record<ThinkingEffort, number> = {
 };
 
 const sessionCleanupQueue: Array<{ serverUrl: string; sessionId: string }> = [];
+
+function getManagedOpenCodeDirectory(): string | undefined {
+    try {
+        const workspaceDir = (window as any)?.siyuan?.config?.system?.workspaceDir;
+        if (typeof workspaceDir === 'string' && workspaceDir.trim()) {
+            return `${workspaceDir.replace(/[\\/]+$/, '')}${OPENCODE_WORKSPACE_DIR}`;
+        }
+    } catch {
+        // Ignore non-browser test/runtime environments.
+    }
+    return undefined;
+}
 
 function scheduleSessionCleanup(serverUrl: string, sessionId: string) {
     sessionCleanupQueue.push({ serverUrl, sessionId });
@@ -242,9 +257,14 @@ export async function chat(
             onPermissionAsked: options.onPermissionAsked,
             onQuestionAsked: options.onQuestionAsked,
             mode: options.mode,
-            diagnosticLogger: options.diagnosticLogger
+            diagnosticLogger: options.diagnosticLogger,
+            directory: options.directory,
+            workspace: options.workspace
         },
-        { serverUrl }
+        {
+            serverUrl,
+            directory: getManagedOpenCodeDirectory()
+        }
     );
 
     return result;
