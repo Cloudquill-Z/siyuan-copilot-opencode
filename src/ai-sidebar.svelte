@@ -14461,118 +14461,120 @@
 
             <!-- 输入框底部工具栏 -->
             <div class="ai-sidebar__chat-input-toolbar">
-                <div class="ai-sidebar__chat-input-tools">
-                    <button
-                        class="ai-sidebar__chat-input-tool"
-                        on:click={triggerFileUpload}
-                        disabled={isUploadingFile || isLoading}
-                        title={t('aiSidebar.actions.upload')}
-                    >
-                        {#if isUploadingFile}
-                            <svg class="b3-button__icon ai-sidebar__loading-icon"><use xlink:href="#iconRefresh"></use></svg>
-                        {:else}
-                            <svg class="b3-button__icon"><use xlink:href="#iconAdd"></use></svg>
-                        {/if}
-                    </button>
-                    <button
-                        class="ai-sidebar__chat-input-tool"
-                        on:click={openWebLinkDialog}
-                        disabled={isFetchingWebContent || isLoading}
-                        title={t('aiSidebar.actions.addWebLink')}
-                    >
-                        {#if isFetchingWebContent}
-                            <svg class="b3-button__icon ai-sidebar__loading-icon"><use xlink:href="#iconRefresh"></use></svg>
-                        {:else}
-                            <svg class="b3-button__icon"><use xlink:href="#iconLink"></use></svg>
-                        {/if}
-                    </button>
-                    <button
-                        class="ai-sidebar__chat-input-tool"
-                        on:click={addCurrentDocToContext}
-                        title={t('aiSidebar.actions.addCurrentDoc')}
-                    >
-                        <svg class="b3-button__icon"><use xlink:href="#iconFile"></use></svg>
-                    </button>
-                    <button
-                        class="ai-sidebar__chat-input-tool"
-                        on:click={() => {
-                            isSearchDialogOpen = !isSearchDialogOpen;
-                            if (isSearchDialogOpen && !searchKeyword.trim()) {
-                                searchDocuments();
-                            }
-                        }}
-                        title={t('aiSidebar.actions.search')}
-                    >
-                        <svg class="b3-button__icon"><use xlink:href="#iconSearch"></use></svg>
-                    </button>
-                    <div class="ai-sidebar__chat-input-divider"></div>
-                    <button
-                        class="ai-sidebar__chat-input-tool ai-sidebar__prompt-tool"
-                        on:click={() => (isPromptSelectorOpen = !isPromptSelectorOpen)}
-                        title="常用提示词和指令"
-                    >
-                        <svg class="b3-button__icon"><use xlink:href="#iconEdit"></use></svg>
-                    </button>
-                </div>
-                <div class="ai-sidebar__token-widget">
-                    <button
-                        bind:this={tokenButtonElement}
-                        type="button"
-                        class="ai-sidebar__token-pill"
-                        class:ai-sidebar__token-pill--warn={displayedContextPercent >= 80}
-                        style={`--token-percent: ${displayedContextPercent};`}
-                        on:click={toggleTokenDetails}
-                        title="Token 使用详情"
-                    >
-                        <span class="ai-sidebar__token-ring" aria-hidden="true"></span>
-                        <span>{currentContextLimit ? `${displayedContextPercent}%` : formatTokenCount(displayedContextTokens)}</span>
-                    </button>
-                    {#if isTokenDetailsOpen}
-                        <div
-                            class="ai-sidebar__token-popover"
-                            style={tokenPopoverStyle}
-                            on:click|stopPropagation
+                <div class="ai-sidebar__chat-input-left">
+                    <div class="ai-sidebar__chat-input-tools">
+                        <button
+                            class="ai-sidebar__chat-input-tool"
+                            on:click={triggerFileUpload}
+                            disabled={isUploadingFile || isLoading}
+                            title={t('aiSidebar.actions.upload')}
                         >
-                            <div class="ai-sidebar__token-popover-header">
-                                <span>上下文长度</span>
-                                <button
-                                    type="button"
-                                    class="ai-sidebar__token-close"
-                                    on:click={() => (isTokenDetailsOpen = false)}
-                                    title="关闭"
-                                >
-                                    ×
-                                </button>
-                            </div>
-                            <div class="ai-sidebar__token-meter">
-                                <div
-                                    class="ai-sidebar__token-meter-fill"
-                                    style={`width: ${currentContextLimit ? displayedContextPercent : 0}%`}
-                                ></div>
-                            </div>
-                            {#if isContextCompactionLikely}
-                                <div class="ai-sidebar__token-status">
-                                    正在接近上下文上限，OpenCode 可能会自动压缩上下文。
-                                </div>
+                            {#if isUploadingFile}
+                                <svg class="b3-button__icon ai-sidebar__loading-icon"><use xlink:href="#iconRefresh"></use></svg>
+                            {:else}
+                                <svg class="b3-button__icon"><use xlink:href="#iconAdd"></use></svg>
                             {/if}
-                            <div class="ai-sidebar__token-row">
-                                <span>上下文上限</span>
-                                <strong>
-                                    {currentContextLimit
-                                        ? formatTokenCount(currentContextLimit)
-                                        : '未设置'}
-                                </strong>
+                        </button>
+                        <button
+                            class="ai-sidebar__chat-input-tool"
+                            on:click={openWebLinkDialog}
+                            disabled={isFetchingWebContent || isLoading}
+                            title={t('aiSidebar.actions.addWebLink')}
+                        >
+                            {#if isFetchingWebContent}
+                                <svg class="b3-button__icon ai-sidebar__loading-icon"><use xlink:href="#iconRefresh"></use></svg>
+                            {:else}
+                                <svg class="b3-button__icon"><use xlink:href="#iconLink"></use></svg>
+                            {/if}
+                        </button>
+                        <button
+                            class="ai-sidebar__chat-input-tool"
+                            on:click={addCurrentDocToContext}
+                            title={t('aiSidebar.actions.addCurrentDoc')}
+                        >
+                            <svg class="b3-button__icon"><use xlink:href="#iconFile"></use></svg>
+                        </button>
+                        <button
+                            class="ai-sidebar__chat-input-tool"
+                            on:click={() => {
+                                isSearchDialogOpen = !isSearchDialogOpen;
+                                if (isSearchDialogOpen && !searchKeyword.trim()) {
+                                    searchDocuments();
+                                }
+                            }}
+                            title={t('aiSidebar.actions.search')}
+                        >
+                            <svg class="b3-button__icon"><use xlink:href="#iconSearch"></use></svg>
+                        </button>
+                        <div class="ai-sidebar__chat-input-divider"></div>
+                        <button
+                            class="ai-sidebar__chat-input-tool ai-sidebar__prompt-tool"
+                            on:click={() => (isPromptSelectorOpen = !isPromptSelectorOpen)}
+                            title="常用提示词和指令"
+                        >
+                            <svg class="b3-button__icon"><use xlink:href="#iconEdit"></use></svg>
+                        </button>
+                    </div>
+                    <div class="ai-sidebar__token-widget">
+                        <button
+                            bind:this={tokenButtonElement}
+                            type="button"
+                            class="ai-sidebar__token-pill"
+                            class:ai-sidebar__token-pill--warn={displayedContextPercent >= 80}
+                            style={`--token-percent: ${displayedContextPercent};`}
+                            on:click={toggleTokenDetails}
+                            title="Token 使用详情"
+                        >
+                            <span class="ai-sidebar__token-ring" aria-hidden="true"></span>
+                            <span>{currentContextLimit ? `${displayedContextPercent}%` : formatTokenCount(displayedContextTokens)}</span>
+                        </button>
+                        {#if isTokenDetailsOpen}
+                            <div
+                                class="ai-sidebar__token-popover"
+                                style={tokenPopoverStyle}
+                                on:click|stopPropagation
+                            >
+                                <div class="ai-sidebar__token-popover-header">
+                                    <span>上下文长度</span>
+                                    <button
+                                        type="button"
+                                        class="ai-sidebar__token-close"
+                                        on:click={() => (isTokenDetailsOpen = false)}
+                                        title="关闭"
+                                    >
+                                        ×
+                                    </button>
+                                </div>
+                                <div class="ai-sidebar__token-meter">
+                                    <div
+                                        class="ai-sidebar__token-meter-fill"
+                                        style={`width: ${currentContextLimit ? displayedContextPercent : 0}%`}
+                                    ></div>
+                                </div>
+                                {#if isContextCompactionLikely}
+                                    <div class="ai-sidebar__token-status">
+                                        正在接近上下文上限，OpenCode 可能会自动压缩上下文。
+                                    </div>
+                                {/if}
+                                <div class="ai-sidebar__token-row">
+                                    <span>上下文上限</span>
+                                    <strong>
+                                        {currentContextLimit
+                                            ? formatTokenCount(currentContextLimit)
+                                            : '未设置'}
+                                    </strong>
+                                </div>
+                                <div class="ai-sidebar__token-row">
+                                    <span>当前使用百分比</span>
+                                    <strong>{currentContextLimit ? `${displayedContextPercent}%` : '无法计算'}</strong>
+                                </div>
+                                <div class="ai-sidebar__token-row">
+                                    <span>当前使用的上下文</span>
+                                    <strong>{formatTokenCount(displayedContextTokens)}</strong>
+                                </div>
                             </div>
-                            <div class="ai-sidebar__token-row">
-                                <span>当前使用百分比</span>
-                                <strong>{currentContextLimit ? `${displayedContextPercent}%` : '无法计算'}</strong>
-                            </div>
-                            <div class="ai-sidebar__token-row">
-                                <span>当前使用的上下文</span>
-                                <strong>{formatTokenCount(displayedContextTokens)}</strong>
-                            </div>
-                        </div>
-                    {/if}
+                        {/if}
+                    </div>
                 </div>
                 <button
                     class="ai-sidebar__chat-send-btn"
@@ -19955,13 +19957,21 @@
     }
 
     .ai-sidebar__chat-input-toolbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 44px;
+        align-items: center;
+        justify-content: stretch;
+        gap: 8px;
+        padding: 10px 14px 14px 20px;
+        border-top: 1px solid transparent;
+    }
+
+    .ai-sidebar__chat-input-left {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 8px;
-        flex-wrap: wrap;
-        padding: 10px 14px 14px 20px;
-        border-top: 1px solid transparent;
+        min-width: 0;
     }
 
     .ai-sidebar__chat-input-tools {
@@ -19969,7 +19979,6 @@
         align-items: center;
         gap: 2px;
         flex-wrap: wrap;
-        flex: 1 1 150px;
         min-width: 0;
     }
 
@@ -20021,8 +20030,8 @@
         position: relative;
         display: flex;
         align-items: center;
-        margin-left: auto;
-        margin-right: 8px;
+        justify-self: end;
+        margin: 0;
         flex: 0 1 auto;
         min-width: 0;
     }
@@ -20194,39 +20203,61 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 42px;
-        min-width: 42px;
-        max-width: 42px;
-        height: 42px;
-        flex: 0 0 42px;
+        justify-self: end;
+        width: 44px;
+        min-width: 44px;
+        max-width: 44px;
+        height: 44px;
+        flex: 0 0 44px;
         border: none;
-        border-radius: 8px;
-        background: #9E9E9E;
+        border-radius: 14px;
+        background: var(--b3-theme-primary);
         color: #fff;
         cursor: pointer;
-        transition: all 0.2s ease;
+        box-shadow:
+            0 6px 16px color-mix(in srgb, var(--b3-theme-primary) 28%, transparent),
+            inset 0 1px 0 rgba(255, 255, 255, 0.22);
+        transition:
+            background 0.16s ease,
+            box-shadow 0.16s ease,
+            opacity 0.16s ease,
+            transform 0.16s ease;
         flex-shrink: 0;
         .b3-button__icon {
-            width: 16px;
-            height: 16px;
+            width: 18px;
+            height: 18px;
         }
         &:hover:not(:disabled) {
-            background: #858585;
-            transform: none;
+            background: color-mix(in srgb, var(--b3-theme-primary) 88%, #fff);
+            box-shadow:
+                0 8px 20px color-mix(in srgb, var(--b3-theme-primary) 34%, transparent),
+                inset 0 1px 0 rgba(255, 255, 255, 0.26);
+            transform: translateY(-1px);
+        }
+
+        &:active:not(:disabled) {
+            transform: translateY(0);
+            box-shadow:
+                0 3px 10px color-mix(in srgb, var(--b3-theme-primary) 24%, transparent),
+                inset 0 1px 0 rgba(255, 255, 255, 0.18);
         }
         &:disabled {
-            opacity: 0.4;
+            opacity: 0.38;
             cursor: not-allowed;
+            box-shadow: none;
         }
         &--abort {
             background: var(--b3-theme-error) !important;
+            box-shadow:
+                0 6px 16px color-mix(in srgb, var(--b3-theme-error) 26%, transparent),
+                inset 0 1px 0 rgba(255, 255, 255, 0.22);
             &:hover:not(:disabled) {
-                background: var(--b3-theme-error-lighter) !important;
+                background: color-mix(in srgb, var(--b3-theme-error) 88%, #fff) !important;
             }
         }
 
         &--followup {
-            background: $primary;
+            background: color-mix(in srgb, var(--b3-theme-primary) 92%, var(--b3-theme-on-background));
         }
     }
 
@@ -20314,7 +20345,12 @@
         .ai-sidebar__chat-input-toolbar {
             align-items: flex-end;
             gap: 8px;
+            grid-template-columns: minmax(0, 1fr) 44px;
             padding: 8px 10px 12px 16px;
+        }
+
+        .ai-sidebar__chat-input-left {
+            align-items: flex-end;
         }
 
         .ai-sidebar__chat-input-tools {
@@ -20383,13 +20419,18 @@
 
         .ai-sidebar__chat-input-toolbar {
             display: grid;
-            grid-template-columns: minmax(0, 1fr) 42px;
+            grid-template-columns: minmax(0, 1fr) 44px;
             align-items: center;
             padding: 8px 10px 10px 12px;
         }
 
+        .ai-sidebar__chat-input-left {
+            align-items: center;
+            gap: 4px;
+        }
+
         .ai-sidebar__chat-input-tools {
-            grid-column: 1 / -1;
+            gap: 2px;
         }
 
         .ai-sidebar__token-widget {
