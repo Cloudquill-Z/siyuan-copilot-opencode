@@ -19632,18 +19632,13 @@
 
     // ── Composer Controls ────────────────────────────────────────
     .ai-sidebar__composer-controls {
-        display: flex;
+        display: grid;
         align-items: center;
-        gap: 18px;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 6px 16px;
         min-height: 38px;
         padding: 6px 22px 0;
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        scrollbar-width: none;
-
-        &::-webkit-scrollbar {
-            display: none;
-        }
+        overflow: visible;
     }
 
     .ai-sidebar__mode-toggle {
@@ -19659,6 +19654,7 @@
         color: var(--b3-theme-on-surface);
         cursor: pointer;
         transition: color 0.16s ease;
+        min-width: 0;
 
         &:hover {
             color: var(--b3-theme-primary);
@@ -19691,11 +19687,11 @@
         height: 30px;
         width: fit-content;
         min-width: 0;
-        max-width: 150px;
+        max-width: 100%;
         border: none;
         border-radius: 0;
         background: transparent;
-        overflow: visible;
+        overflow: hidden;
         flex: 0 0 auto;
     }
 
@@ -19711,6 +19707,7 @@
         font-size: 14px;
         font-weight: 600;
         cursor: pointer;
+        white-space: nowrap;
     }
 
     .ai-sidebar__thinking-chip--active {
@@ -19721,7 +19718,7 @@
     .ai-sidebar__thinking-select {
         height: 30px;
         width: auto;
-        min-width: 56px;
+        min-width: 62px;
         max-width: 88px;
         flex: 0 1 auto;
         border: none;
@@ -19746,9 +19743,10 @@
     .ai-sidebar__model-control {
         display: flex;
         align-items: center;
-        min-width: 128px;
+        min-width: 0;
         max-width: 100%;
-        flex: 0 1 auto;
+        flex: 1 1 auto;
+        overflow: hidden;
 
         :global(.multi-model-selector) {
             min-width: 0;
@@ -19768,6 +19766,7 @@
             font-weight: 600;
             gap: 8px;
             box-shadow: none;
+            min-width: 0;
         }
 
         :global(.multi-model-selector__label),
@@ -19959,6 +19958,8 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
+        gap: 8px;
+        flex-wrap: wrap;
         padding: 10px 14px 14px 20px;
         border-top: 1px solid transparent;
     }
@@ -19968,6 +19969,7 @@
         align-items: center;
         gap: 2px;
         flex-wrap: wrap;
+        flex: 1 1 150px;
         min-width: 0;
     }
 
@@ -20021,6 +20023,8 @@
         align-items: center;
         margin-left: auto;
         margin-right: 8px;
+        flex: 0 1 auto;
+        min-width: 0;
     }
 
     .ai-sidebar__token-pill {
@@ -20035,6 +20039,7 @@
         color: var(--b3-theme-on-surface-light);
         font-size: 12px;
         line-height: 1;
+        white-space: nowrap;
         cursor: pointer;
         transition:
             background 0.16s ease,
@@ -20268,15 +20273,14 @@
         }
 
         .ai-sidebar__composer-controls {
-            display: flex;
-            gap: 12px;
-            padding: 6px 18px 0;
-            overflow-x: auto;
+            grid-template-columns: auto minmax(0, 1fr);
+            gap: 4px 12px;
+            padding: 6px 16px 0;
         }
 
         .ai-sidebar__model-control {
-            width: auto;
             min-width: 0;
+            width: 100%;
         }
 
         .ai-sidebar__mode-toggle {
@@ -20288,6 +20292,7 @@
             width: auto;
             min-width: 0;
             max-width: 140px;
+            justify-self: start;
         }
 
         .ai-sidebar__thinking-chip {
@@ -20314,7 +20319,7 @@
 
         .ai-sidebar__chat-input-tools {
             flex: 1 1 auto;
-            max-width: calc(100% - 44px);
+            max-width: none;
             gap: 4px;
         }
 
@@ -20341,18 +20346,59 @@
         .ai-sidebar__toolbar-btn,
         .ai-sidebar__icon-btn,
         .ai-sidebar__chat-input-tool {
-            width: 30px;
-            min-width: 30px;
-            max-width: 30px;
-            height: 30px;
-            flex: 0 0 30px;
+            width: 28px;
+            min-width: 28px;
+            max-width: 28px;
+            height: 28px;
+            flex: 0 0 28px;
         }
 
         .ai-sidebar__prompt-tool {
-            width: 30px;
+            width: 28px;
             max-width: none;
-            min-width: 30px;
-            flex: 0 0 30px;
+            min-width: 28px;
+            flex: 0 0 28px;
+        }
+
+        .ai-sidebar__composer-controls {
+            grid-template-columns: minmax(0, 1fr);
+            gap: 4px;
+            padding: 6px 14px 0;
+        }
+
+        .ai-sidebar__mode-toggle,
+        .ai-sidebar__model-control,
+        .ai-sidebar__thinking-control {
+            width: 100%;
+            justify-self: stretch;
+        }
+
+        .ai-sidebar__mode-toggle {
+            justify-content: flex-start;
+        }
+
+        .ai-sidebar__thinking-control {
+            max-width: none;
+        }
+
+        .ai-sidebar__chat-input-toolbar {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 42px;
+            align-items: center;
+            padding: 8px 10px 10px 12px;
+        }
+
+        .ai-sidebar__chat-input-tools {
+            grid-column: 1 / -1;
+        }
+
+        .ai-sidebar__token-widget {
+            justify-self: start;
+            margin: 0;
+        }
+
+        .ai-sidebar__chat-send-btn {
+            justify-self: end;
         }
     }
 </style>
