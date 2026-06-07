@@ -31,6 +31,9 @@ export interface OpenCodeRunnerResult {
     success: boolean;
     error?: string;
     port?: number;
+    serverVersion?: string;
+    cliVersion?: string;
+    restarted?: boolean;
 }
 
 export function getServedPort(): number {
@@ -39,6 +42,121 @@ export function getServedPort(): number {
 
 export function isServeRunning(): boolean {
     return serveRunning;
+}
+
+function getExpandedEnv(options?: Pick<OpenCodeRunnerOptions, 'env'>): Record<string, string> {
+    const env: Record<string, string> = {
+        ...(typeof process !== 'undefined' && process.env ? Object.fromEntries(
+            Object.entries(process.env).filter(([, v]) => v !== undefined && v !== null) as [string, string][]
+        ) : {}),
+        ...(options?.env || {}),
+    };
+
+    return expandOpenCodeCliPath(env, isWindowsRuntime());
+}
+
+function runChildProcess(
+    command: string,
+    args: string[],
+    options?: {
+        env?: Record<string, string>;
+        shell?: boolean;
+        timeoutMs?: number;
+    }
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+    const childProcess = getNodeModule('child_process');
+    if (!childProcess) {
+        return Promise.resolve({ code: 1, stdout: '', stderr: 'child_process unavailable' });
+    }
+
+    return new Promise((resolve) => {
+        const child = childProcess.spawn(command, args, {
+            shell: !!options?.shell,
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: options?.env,
+        });
+
+        let stdout = '';
+        let stderr = '';
+        const timer = options?.timeoutMs
+            ? setTimeout(() => {
+                  try { child.kill(); } catch {}
+              }, options.timeoutMs)
+            : null;
+
+        child.stdout?.on('data', (data: Buffer) => {
+            stdout += data.toString();
+        });
+        child.stderr?.on('data', (data: Buffer) => {
+            stderr += data.toString();
+        });
+        child.on('close', (code: number | null) => {
+            if (timer) clearTimeout(timer);
+            resolve({ code, stdout, stderr });
+        });
+        child.on('error', (err: Error) => {
+            if (timer) clearTimeout(timer);
+            resolve({ code: 1, stdout, stderr: err.message });
+        });
+    });
+}
+
+function normalizeOpenCodeVersion(version: string): string {
+    return (version || '').trim().replace(/^v/i, '');
+}
+
+export function isOpenCodeVersionMismatch(serverVersion?: string, cliVersion?: string): boolean {
+    const server = normalizeOpenCodeVersion(serverVersion || '');
+    const cli = normalizeOpenCodeVersion(cliVersion || '');
+    return !!server && !!cli && server !== cli;
+}
+
+async function waitForServerUnavailable(hostname: string, port: number): Promise<boolean> {
+    for (let i = 0; i < 20; i++) {
+        const available = await checkServerAvailable(hostname, port, 500);
+        if (!available) return true;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return false;
+}
+
+export async function stopExistingOpenCodeServeOnPort(port: number): Promise<boolean> {
+    if (!isElectron()) return false;
+
+    const isWin = isWindowsRuntime();
+    if (isWin) {
+        const netstat = await runChildProcess('netstat', ['-ano'], { shell: true, timeoutMs: 5000 });
+        const pids = new Set<string>();
+        for (const line of netstat.stdout.split(/\r?\n/)) {
+            if (!line.includes(`:${port}`) || !/LISTENING/i.test(line)) continue;
+            const pid = line.trim().split(/\s+/).pop();
+            if (pid) pids.add(pid);
+        }
+
+        let stopped = false;
+        for (const pid of pids) {
+            const task = await runChildProcess('wmic', ['process', 'where', `ProcessId=${pid}`, 'get', 'CommandLine', '/value'], { shell: true, timeoutMs: 5000 });
+            if (!/opencode/i.test(task.stdout)) continue;
+            const killed = await runChildProcess('taskkill', ['/T', '/F', '/PID', pid], { shell: true, timeoutMs: 5000 });
+            stopped = stopped || killed.code === 0;
+        }
+        return stopped;
+    }
+
+    const lsof = await runChildProcess('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { timeoutMs: 5000 });
+    const pids = lsof.stdout.split(/\s+/).map((pid) => pid.trim()).filter(Boolean);
+    let stopped = false;
+
+    for (const pid of pids) {
+        const ps = await runChildProcess('ps', ['-p', pid, '-o', 'command='], { timeoutMs: 5000 });
+        if (!/\bopencode\b/i.test(ps.stdout)) continue;
+
+        const kill = await runChildProcess('kill', [pid], { timeoutMs: 5000 });
+        stopped = stopped || kill.code === 0;
+    }
+
+    return stopped;
 }
 
 export async function checkServerAvailable(
@@ -90,15 +208,8 @@ export function startServe(options?: OpenCodeRunnerOptions): OpenCodeRunnerResul
 
     const args = ['serve', '--port', String(port), '--hostname', hostname];
 
-    const env: Record<string, string> = {
-        ...(typeof process !== 'undefined' && process.env ? Object.fromEntries(
-            Object.entries(process.env).filter(([, v]) => v !== undefined && v !== null) as [string, string][]
-        ) : {}),
-        ...(options?.env || {}),
-    };
-
     const isWin = isWindowsRuntime();
-    const expandedEnv = expandOpenCodeCliPath(env, isWin);
+    const expandedEnv = getExpandedEnv(options);
 
     try {
         serveProcess = childProcess.spawn(cliPath, args, {
@@ -173,11 +284,29 @@ export async function ensureServerRunning(options?: OpenCodeRunnerOptions): Prom
     const port = options?.port || DEFAULT_PORT;
     const hostname = options?.hostname || DEFAULT_HOSTNAME;
 
-    const available = await checkServerAvailable(hostname, port);
-    if (available) {
-        detectedPort = port;
-        serveRunning = true;
-        return { success: true, port };
+    const health = await checkServerHealth(hostname, port, 3000);
+    if (health.healthy) {
+        const cli = await detectOpenCodeCLIVersion(options);
+        if (isOpenCodeVersionMismatch(health.version, cli.version)) {
+            const mismatchError = `OpenCode server version mismatch: server v${health.version}, CLI v${cli.version}.`;
+            console.warn(`[OpenCode Runner] ${mismatchError} Restarting stale server on port ${port}.`);
+            stopServe();
+            const stopped = await stopExistingOpenCodeServeOnPort(port);
+            const unavailable = stopped ? await waitForServerUnavailable(hostname, port) : false;
+            if (!stopped || !unavailable) {
+                return {
+                    success: false,
+                    port,
+                    serverVersion: health.version,
+                    cliVersion: cli.version,
+                    error: `${mismatchError} Please stop the existing opencode serve process on port ${port} and reconnect.`,
+                };
+            }
+        } else {
+            detectedPort = port;
+            serveRunning = true;
+            return { success: true, port, serverVersion: health.version, cliVersion: cli.version };
+        }
     }
 
     const result = startServe(options);
@@ -189,9 +318,17 @@ export async function ensureServerRunning(options?: OpenCodeRunnerOptions): Prom
         await new Promise((r) => setTimeout(r, 500));
         const ready = await checkServerAvailable(hostname, port);
         if (ready) {
+            const readyHealth = await checkServerHealth(hostname, port, 3000);
+            const cli = await detectOpenCodeCLIVersion(options);
             detectedPort = port;
             serveRunning = true;
-            return { success: true, port };
+            return {
+                success: true,
+                port,
+                serverVersion: readyHealth.version,
+                cliVersion: cli.version,
+                restarted: health.healthy,
+            };
         }
     }
 
@@ -265,7 +402,31 @@ export async function checkServerHealth(
     }
 }
 
-export async function detectOpenCodeCLI(): Promise<{ found: boolean; path?: string; error?: string }> {
+export async function detectOpenCodeCLIVersion(options?: Pick<OpenCodeRunnerOptions, 'cliPath' | 'env'>): Promise<{ found: boolean; path?: string; version?: string; error?: string }> {
+    const cli = await detectOpenCodeCLI(options);
+    if (!cli.found) return cli;
+
+    const expandedEnv = getExpandedEnv(options);
+    const version = await runChildProcess(cli.path || options?.cliPath || DEFAULT_CLI_CMD, ['--version'], {
+        env: expandedEnv,
+        shell: isWindowsRuntime(),
+        timeoutMs: 5000,
+    });
+
+    if (version.code === 0 && version.stdout.trim()) {
+        return {
+            ...cli,
+            version: normalizeOpenCodeVersion(version.stdout.trim().split(/\s+/).pop() || version.stdout.trim()),
+        };
+    }
+
+    return {
+        ...cli,
+        error: version.stderr || 'Failed to detect opencode CLI version',
+    };
+}
+
+export async function detectOpenCodeCLI(options?: Pick<OpenCodeRunnerOptions, 'env'>): Promise<{ found: boolean; path?: string; error?: string }> {
     if (!isElectron()) {
         return {
             found: false,
@@ -284,12 +445,7 @@ export async function detectOpenCodeCLI(): Promise<{ found: boolean; path?: stri
     return new Promise((resolve) => {
         const isWin = isWindowsRuntime();
         const cmd = isWin ? 'where' : 'which';
-        const expandedEnv = expandOpenCodeCliPath(
-            typeof process !== 'undefined' && process.env
-                ? (process.env as Record<string, string>)
-                : {},
-            isWin
-        );
+        const expandedEnv = getExpandedEnv(options);
         const child = childProcess.spawn(cmd, [DEFAULT_CLI_CMD], {
             shell: true,
             windowsHide: true,
