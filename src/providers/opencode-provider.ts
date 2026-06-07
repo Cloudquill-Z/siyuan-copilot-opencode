@@ -1355,8 +1355,9 @@ export async function chatOpenCode(
             }
         }
 
-        // Try real-time event stream for thinking/tool updates
-        wantRealtime = !!(options.onThinkingChunk || options.onToolPartUpdate);
+        // Prefer prompt_async + event stream for all chats. Newer OpenCode server
+        // builds have regressed the synchronous /message path with seq write errors.
+        wantRealtime = true;
         let completionWatcher: RealtimeCompletionWatcher | null = null;
 
         if (wantRealtime) {
@@ -1527,13 +1528,13 @@ export async function chatOpenCode(
             }
         }
 
-        // Send the message
+        // Fallback to synchronous /message only if the event stream is unavailable.
         const messagePath = `/session/${encodeURIComponent(sessionId)}/message`;
         const messageRequestPath = withOpenCodeRequestContext(messagePath, requestContext);
         logDiagnostic(diagnosticLogger, 'request.sent', {
             method: 'POST',
             path: messageRequestPath,
-            purpose: 'message',
+            purpose: 'message-fallback',
         });
         const messageFetchResult = await openCodeFetch(
             serverUrl,
