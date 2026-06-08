@@ -8,7 +8,7 @@ import {
 
 import { pushMsg, pushErrMsg, putFile, getFileBlob, readDir } from "./api";
 import { saveAsset, base64ToBlob } from "./utils/assets";
-import { ensureServerRunning, stopServe, detectOpenCodeCLI } from "./opencode-runner";
+import { ensureServerRunning, restartServe, stopServe, detectOpenCodeCLI } from "./opencode-runner";
 import { startHealthPoll, stopHealthPoll } from "./stores/connectionStatus";
 import "@/index.scss";
 
@@ -2075,12 +2075,40 @@ export default class PluginSample extends Plugin {
     }
 
     async restartOpenCodeServer(settingsOverride?: any): Promise<{ success: boolean; error?: string }> {
-        clearPendingOpenCodeStop();
-        const runId = ++this.openCodeInitRunId;
-        stopHealthPoll(false);
-        stopServe();
-        await new Promise(resolve => setTimeout(resolve, 500));
-        return this.initOpenCodeServer(settingsOverride, runId);
+        try {
+            clearPendingOpenCodeStop();
+            const runId = ++this.openCodeInitRunId;
+            stopHealthPoll(false);
+
+            const settings = settingsOverride || await getSettings();
+            if (!this.isOpenCodeInitCurrent(runId)) return { success: false, error: 'OpenCode initialization was superseded.' };
+
+            const serverUrl = settings?.aiProviders?.opencode?.serverUrl || 'http://localhost:4096';
+            const url = new URL(serverUrl);
+            const port = parseInt(url.port) || 4096;
+            const hostname = url.hostname || '127.0.0.1';
+
+            const restarted = await restartServe({
+                port,
+                hostname,
+                workingDir: this.getOpenCodeWorkingDir(),
+            });
+            if (!this.isOpenCodeInitCurrent(runId)) return { success: false, error: 'OpenCode initialization was superseded.' };
+
+            if (!restarted.success) {
+                pushErrMsg(t('aiSidebar.errors.opencodeStartFailed') || `Failed to restart OpenCode server: ${restarted.error}`);
+                return { success: false, error: restarted.error };
+            }
+
+            startHealthPoll(serverUrl);
+            return { success: true };
+        } catch (err) {
+            console.warn('[OpenCode] Failed to restart server:', err);
+            return {
+                success: false,
+                error: err instanceof Error ? err.message : String(err),
+            };
+        }
     }
 
     onunload() {

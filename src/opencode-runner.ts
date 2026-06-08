@@ -280,6 +280,25 @@ export function stopServe(): void {
     }
 }
 
+export async function restartServe(options?: OpenCodeRunnerOptions): Promise<OpenCodeRunnerResult> {
+    const port = options?.port || DEFAULT_PORT;
+    const hostname = options?.hostname || DEFAULT_HOSTNAME;
+
+    stopServe();
+    await stopExistingOpenCodeServeOnPort(port);
+
+    const unavailable = await waitForServerUnavailable(hostname, port);
+    if (!unavailable) {
+        return {
+            success: false,
+            port,
+            error: `Failed to stop the existing opencode serve process on port ${port}. Please stop it manually and try again.`,
+        };
+    }
+
+    return ensureServerRunning(options);
+}
+
 export async function ensureServerRunning(options?: OpenCodeRunnerOptions): Promise<OpenCodeRunnerResult> {
     const port = options?.port || DEFAULT_PORT;
     const hostname = options?.hostname || DEFAULT_HOSTNAME;

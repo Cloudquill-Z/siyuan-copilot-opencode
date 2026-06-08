@@ -6,6 +6,7 @@ const settingsPanelSource = readFileSync(
     'utf8'
 );
 const indexSource = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
+const runnerSource = readFileSync(new URL('../src/opencode-runner.ts', import.meta.url), 'utf8');
 const agentsSource = readFileSync(new URL('../AGENTS.md', import.meta.url), 'utf8');
 
 assert.match(
@@ -34,8 +35,32 @@ assert.match(
 
 assert.match(
     indexSource,
-    /stopServe\(\);[\s\S]*return this\.initOpenCodeServer/,
-    'Restart should stop the managed server before starting it again'
+    /restartServe\(/,
+    'Restart should use the runner restart flow'
+);
+
+assert.match(
+    runnerSource,
+    /export async function restartServe/,
+    'Runner should expose an explicit restart flow'
+);
+
+assert.match(
+    runnerSource,
+    /stopServe\(\);[\s\S]*stopExistingOpenCodeServeOnPort/,
+    'Restart should stop the managed server and any existing opencode serve process on the target port'
+);
+
+assert.match(
+    runnerSource,
+    /waitForServerUnavailable[\s\S]*ensureServerRunning/,
+    'Restart should wait until the old server is unavailable before starting it again'
+);
+
+assert.match(
+    runnerSource,
+    /stopExistingOpenCodeServeOnPort/,
+    'Restart should stop an existing opencode serve process on the target port before starting it again'
 );
 
 assert.match(
