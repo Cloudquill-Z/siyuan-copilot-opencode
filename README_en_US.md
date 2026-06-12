@@ -1,112 +1,79 @@
 # SiYuan OpenCode
 
-Standalone SiYuan plugin for note-aware OpenCode chat, task execution, and lightweight in-app web workflows.
+> An experimental SiYuan desktop plugin that connects [OpenCode](https://opencode.ai) to SiYuan Note.
 
 [![GitHub](https://img.shields.io/badge/GitHub-Cloudquill--Z/siyuan--copilot--opencode-green.svg)](https://github.com/Cloudquill-Z/siyuan-copilot-opencode)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## Overview
+## About
 
-This repository is now a standalone SiYuan desktop plugin. It uses [OpenCode](https://opencode.ai) as the only AI backend and no longer follows the old multi-provider Copilot plugin shape.
+This project is a fork of [Achuan-2/siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot).
 
-Core capabilities:
+The original project provided much of the SiYuan plugin foundation: sidebar UI, chat panels, settings, and note-context workflows. This fork keeps that foundation, removes the old multi-provider direction, and focuses only on OpenCode. Thanks to Achuan-2 and the original contributors for the base work.
 
-- note-aware chat inside the SiYuan sidebar
-- `Plan` / `Build` chat mode switching
-- real-time streaming for text, reasoning, tool updates, permission prompts, and follow-up questions
-- OpenCode session lifecycle management with concurrent task handling
-- embedded WebApp / WebView tab for browsing alongside chat
-- optional auto-start of `opencode serve` in Electron environments
+This fork is currently a personal OpenCode entry point for SiYuan, not a polished all-purpose AI assistant. Its clearest practical advantage is simple: it makes it easier to use the free or low-cost models available through OpenCode from inside SiYuan.
 
-## Features
+## Who It Is For
 
-### OpenCode chat workflow
+This plugin may be useful if you already use OpenCode and want a chat sidebar inside SiYuan.
 
-- SSE / EventStream incremental rendering
-- grouped timeline for reasoning, tool calls, and final output
-- in-UI handling for permission requests and questions from OpenCode
-- slash-command support for available OpenCode commands
+It is probably not what you want if you expect a fully automatic, stable knowledge-base agent out of the box. OpenCode handles models, sessions, and tool calls. This plugin mainly connects that workflow to the SiYuan interface.
 
-### Model and provider management
+## Use With Sisyphus MCP
 
-- fetch model catalog from OpenCode `/provider`
-- manually add models when needed
-- per-model settings for temperature, max output, visibility, and custom JSON body
-- model capability badges for reasoning, vision, tool calling, image generation, and web search
+If you want OpenCode to read, search, create, or modify SiYuan notes, use it together with:
 
-### Sessions and tasks
+[yangtaihong59/siyuan-plugins-mcp-sisyphus](https://github.com/yangtaihong59/siyuan-plugins-mcp-sisyphus)
 
-- create, switch, rename, pin, and batch-delete sessions
-- export conversations to a SiYuan note or Markdown file
-- configurable background task concurrency
-- token usage statistics in settings
+In short:
 
-### WebApp / browser helper
+- This plugin provides the OpenCode chat entry inside SiYuan.
+- OpenCode handles model calls and MCP tool usage.
+- Sisyphus MCP exposes SiYuan note operations to OpenCode.
 
-- dedicated `opencode-webapp` tab type
-- Electron `<webview>` with `<iframe>` fallback
-- address bar, history search, built-in sites, and favicon fetching
-- webpage-to-Markdown parsing for chat context
+Without Sisyphus MCP, you can still chat, summarize, rewrite, and work with content you provide manually, but OpenCode will not automatically gain full note-operation capabilities.
 
-### OpenCode connection management
+## Basic Usage
 
-- default server URL: `http://localhost:4096`
-- startup health check
-- optional auto-start attempt when the desktop app detects no running server
-- connection indicator, retry action, and diagnostic logging
+1. Install and configure OpenCode, and make sure `opencode` is available in your shell.
+2. Install and enable this plugin in the SiYuan desktop app.
+3. Open plugin settings and confirm the OpenCode server URL. The default is `http://localhost:4096`.
+4. Refresh the model list and choose which models to show.
+5. Open the sidebar and start chatting.
 
-## Main API endpoints
-
-The plugin primarily talks to these OpenCode endpoints:
-
-- `GET /global/health`
-- `GET /provider`
-- `POST /session`
-- `POST /session/{id}/message`
-- `DELETE /session/{id}`
-
-The codebase also includes support for related command and async-task endpoints used by newer workflows.
+To let OpenCode operate on SiYuan notes, install and configure Sisyphus MCP separately, then enable the corresponding MCP tools in OpenCode.
 
 ## Installation
 
-### Option 1: Download a release
+### From Release
 
-Download the latest package from [Releases](https://github.com/Cloudquill-Z/siyuan-copilot-opencode/releases) and place it in the SiYuan plugins directory:
+Download `package.zip` from [Releases](https://github.com/Cloudquill-Z/siyuan-copilot-opencode/releases), unzip it, and place it in the SiYuan plugins directory:
 
 - macOS: `~/Library/Application Support/siyuan/data/plugins/siyuan-copilot-opencode/`
 - Linux: `~/.config/siyuan/data/plugins/siyuan-copilot-opencode/`
 - Windows: `%APPDATA%\\siyuan\\data\\plugins\\siyuan-copilot-opencode\\`
 
-### Option 2: Build from source
+Then restart SiYuan or refresh the plugin list.
+
+### Build From Source
 
 ```bash
 git clone https://github.com/Cloudquill-Z/siyuan-copilot-opencode.git
 cd siyuan-copilot-opencode
+pnpm install
+pnpm run build
+```
+
+You can also use npm:
+
+```bash
 npm install
 npm run build
 ```
 
-Build output:
+The build creates `dist/` and `package.zip`. If the build script can detect your SiYuan workspace, it will also try to install the plugin automatically.
 
-- `dist/`
-- `package.zip`
-
-If `SIYUAN_PLUGIN_DIR` is set, the build step will also try to install the production output automatically.
-
-## Prerequisites
-
-1. Install the OpenCode CLI and make sure `opencode` is available in your shell.
-2. Use the SiYuan desktop app.
-3. Confirm that the OpenCode server is reachable, defaulting to `http://localhost:4096`.
-
-## Quick start
-
-1. Enable `SiYuan OpenCode` in SiYuan.
-2. Open plugin settings and verify the `OpenCode Server` URL.
-3. Refresh the model list and choose the models you want to expose.
-4. Open the sidebar and start chatting in `Plan` or `Build` mode.
-
-## Development commands
+## Development Commands
 
 ```bash
 npm run dev
@@ -117,22 +84,25 @@ npm run make-install
 npm run update-version
 ```
 
-- `npm run dev`: build into `dev/` and auto-copy into the SiYuan plugins directory
-- `npm run build`: build into `dist/`, create `package.zip`, and try auto-install
-- `npm run make-link`: symlink `dev/` into the SiYuan plugins directory
-- `npm run make_dev_copy`: one-shot copy from `dev/` into the plugins directory
-- `npm run make-install`: same as `npm run build`
-- `npm run update-version`: update both `plugin.json` and `package.json`
+The common ones are:
 
-## Notes
+- `npm run dev`: build into `dev/` and try to copy it into the SiYuan plugin directory.
+- `npm run build`: build into `dist/` and create `package.zip`.
+- `npm run update-version`: update both `plugin.json` and `package.json`.
 
-- The project currently has no built-in `test`, `lint`, or `typecheck` script.
+## Current Limits
+
+- Mainly targets the SiYuan desktop app.
 - Auto-starting OpenCode depends on the Electron desktop runtime.
-- The plugin is intentionally focused on OpenCode only, not the legacy multi-provider Copilot setup.
+- The project currently has no built-in `test`, `lint`, or `typecheck` script.
+- Real note reading, writing, and searching should be provided through Sisyphus MCP.
+- This is a personally maintained fork, and future changes will prioritize the OpenCode workflow.
 
-## Changelog
+## Thanks
 
-See [CHANGELOG.md](./CHANGELOG.md)
+- Thanks to [Achuan-2/siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot) for the original project foundation.
+- Thanks to [OpenCode](https://opencode.ai) for the local AI coding and tool-calling workflow.
+- Thanks to [yangtaihong59/siyuan-plugins-mcp-sisyphus](https://github.com/yangtaihong59/siyuan-plugins-mcp-sisyphus) for SiYuan MCP capabilities.
 
 ## License
 
