@@ -2,7 +2,7 @@
 
 > 独立的思源笔记 OpenCode 插件，提供基于笔记上下文的本地 AI 对话、任务执行与 WebView 辅助工作流。
 
-[![GitHub](https://img.shields.io/badge/GitHub-zzl793780096--creator/siyuan--copilot--opencode-green.svg)](https://github.com/zzl793780096-creator/siyuan-copilot-opencode)
+[![GitHub](https://img.shields.io/badge/GitHub-Cloudquill--Z/siyuan--copilot--opencode-green.svg)](https://github.com/Cloudquill-Z/siyuan-copilot-opencode)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ## 项目简介
@@ -71,7 +71,7 @@
 
 ### 方式一：下载 Release
 
-前往 [Releases](https://github.com/zzl793780096-creator/siyuan-copilot-opencode/releases) 下载最新包，将内容放入思源插件目录：
+前往 [Releases](https://github.com/Cloudquill-Z/siyuan-copilot-opencode/releases) 下载最新包，将内容放入思源插件目录：
 
 - macOS: `~/Library/Application Support/siyuan/data/plugins/siyuan-copilot-opencode/`
 - Linux: `~/.config/siyuan/data/plugins/siyuan-copilot-opencode/`
@@ -80,7 +80,7 @@
 ### 方式二：从源码构建
 
 ```bash
-git clone https://github.com/zzl793780096-creator/siyuan-copilot-opencode.git
+git clone https://github.com/Cloudquill-Z/siyuan-copilot-opencode.git
 cd siyuan-copilot-opencode
 npm install
 npm run build

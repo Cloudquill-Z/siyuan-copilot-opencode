@@ -1,8 +1,8 @@
 {
   "name": "siyuan-copilot-opencode",
-  "author": "Achuan-2",
-  "url": "https://github.com/zzl793780096-creator/siyuan-copilot-opencode",
-  "version": "3.0.6",
+  "author": "Cloudquill-Z",
+  "url": "https://github.com/Cloudquill-Z/siyuan-copilot-opencode",
+  "version": "3.0.7",
   "minAppVersion": "3.6.0",
   "backends": [
     "all"
@@ -25,9 +25,7 @@
     "zh_CN": "README.md"
   },
   "funding": {
-    "custom": [
-      "https://fastly.jsdelivr.net/gh/Achuan-2/PicBed/assets/20241128221208-2024-11-28.png"
-    ]
+    "custom": []
   },
   "keywords": [
     "opencode",

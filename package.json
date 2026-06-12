@@ -1,11 +1,11 @@
 {
   "name": "siyuan-copilot-opencode",
-  "version": "3.0.6",
+  "version": "3.0.7",
   "type": "module",
   "description": "Independent SiYuan OpenCode plugin for note-aware chat, tools, and local OpenCode workflows",
-  "repository": "https://github.com/zzl793780096-creator/siyuan-copilot-opencode",
-  "homepage": "https://github.com/zzl793780096-creator/siyuan-copilot-opencode",
-  "author": "Achuan-2",
+  "repository": "https://github.com/Cloudquill-Z/siyuan-copilot-opencode",
+  "homepage": "https://github.com/Cloudquill-Z/siyuan-copilot-opencode",
+  "author": "Cloudquill-Z",
   "license": "MIT",
   "scripts": {
     "dev": "cross-env NODE_ENV=development VITE_SOURCEMAP=inline vite build --watch",

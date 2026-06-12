@@ -2,7 +2,7 @@
 
 Standalone SiYuan plugin for note-aware OpenCode chat, task execution, and lightweight in-app web workflows.
 
-[![GitHub](https://img.shields.io/badge/GitHub-zzl793780096--creator/siyuan--copilot--opencode-green.svg)](https://github.com/zzl793780096-creator/siyuan-copilot-opencode)
+[![GitHub](https://img.shields.io/badge/GitHub-Cloudquill--Z/siyuan--copilot--opencode-green.svg)](https://github.com/Cloudquill-Z/siyuan-copilot-opencode)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ## Overview
@@ -71,7 +71,7 @@ The codebase also includes support for related command and async-task endpoints 
 
 ### Option 1: Download a release
 
-Download the latest package from [Releases](https://github.com/zzl793780096-creator/siyuan-copilot-opencode/releases) and place it in the SiYuan plugins directory:
+Download the latest package from [Releases](https://github.com/Cloudquill-Z/siyuan-copilot-opencode/releases) and place it in the SiYuan plugins directory:
 
 - macOS: `~/Library/Application Support/siyuan/data/plugins/siyuan-copilot-opencode/`
 - Linux: `~/.config/siyuan/data/plugins/siyuan-copilot-opencode/`
@@ -80,7 +80,7 @@ Download the latest package from [Releases](https://github.com/zzl793780096-crea
 ### Option 2: Build from source
 
 ```bash
-git clone https://github.com/zzl793780096-creator/siyuan-copilot-opencode.git
+git clone https://github.com/Cloudquill-Z/siyuan-copilot-opencode.git
 cd siyuan-copilot-opencode
 npm install
 npm run build
