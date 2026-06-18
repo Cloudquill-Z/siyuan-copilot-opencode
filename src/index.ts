@@ -22,6 +22,7 @@ import AISidebar from "./ai-sidebar.svelte";
 import ChatDialog from "./components/ChatDialog.svelte";
 import { updateSettings, getSettings } from "./stores/settings";
 import { getModelCapabilities } from "./utils/modelCapabilities";
+import { ComponentMountRegistry } from "./utils/componentMountRegistry";
 import {
     CHAT_SESSIONS_PATH,
     OPENCODE_WORKSPACE_DIR,
@@ -81,7 +82,7 @@ interface WebViewHistory {
 
 
 export default class PluginSample extends Plugin {
-    private aiSidebarApp: AISidebar;
+    private aiSidebarApps = new ComponentMountRegistry<AISidebar>();
     private aiTabApps: Map<HTMLElement, AISidebar> = new Map();
     private chatDialogs: Map<string, { dialog: Dialog; app: ChatDialog }> = new Map();
     private settingDialog: Dialog | null = null;
@@ -1710,6 +1711,7 @@ export default class PluginSample extends Plugin {
     `);
         //布局加载完成的时候,会自动调用这个函数
         // 注册AI侧栏
+        const pluginInstance = this;
         this.addDock({
             config: {
                 position: "RightBottom",
@@ -1721,18 +1723,17 @@ export default class PluginSample extends Plugin {
                 text: PLUGIN_BRAND_NAME
             },
             type: AI_SIDEBAR_TYPE,
-            init: (dock) => {
-                this.aiSidebarApp = new AISidebar({
+            init(dock) {
+                const element = dock.element as HTMLElement;
+                pluginInstance.aiSidebarApps.set(element, new AISidebar({
                     target: dock.element,
                     props: {
-                        plugin: this
+                        plugin: pluginInstance
                     }
-                });
+                }));
             },
-            destroy: () => {
-                if (this.aiSidebarApp) {
-                    this.aiSidebarApp.$destroy();
-                }
+            destroy() {
+                pluginInstance.aiSidebarApps.destroy(this.element as HTMLElement);
             }
         });
         // 注册已保存的小程序图标
@@ -2129,8 +2130,7 @@ export default class PluginSample extends Plugin {
             app.$destroy();
         }
         this.aiTabApps.clear();
-        this.aiSidebarApp?.$destroy();
-        this.aiSidebarApp = null as any;
+        this.aiSidebarApps.destroyAll();
 
         // SiYuan sync can transiently unload/reload plugins. Delay stopping the
         // spawned OpenCode server so in-flight async sessions are not interrupted.

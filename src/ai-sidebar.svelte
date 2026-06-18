@@ -87,6 +87,7 @@
         createTokenUsageRecord,
         formatTokenCount,
     } from './utils/tokenUsage';
+    import { formatComposerStatusSummary } from './utils/composerControls';
     import {
         buildMemoryDreamPrompt,
         buildMemoryInitPrompt,
@@ -178,6 +179,7 @@
     let textareaElement: HTMLTextAreaElement;
     let inputContainer: HTMLElement;
     let fileInputElement: HTMLInputElement;
+    let imageInputElement: HTMLInputElement;
     let isInitialLoading = true;
 
     // 思考过程折叠状态管理
@@ -413,6 +415,9 @@
     let prompts: Prompt[] = [];
     let isPromptManagerOpen = false;
     let isPromptSelectorOpen = false;
+    let isAddMenuOpen = false;
+    let isStatusMenuOpen = false;
+    let isModelSelectorOpen = false;
     let editingPrompt: Prompt | null = null;
     let newPromptTitle = '';
     let newPromptContent = '';
@@ -2491,7 +2496,13 @@
 
     // 触发文件选择
     function triggerFileUpload() {
+        isAddMenuOpen = false;
         fileInputElement?.click();
+    }
+
+    function triggerImageUpload() {
+        isAddMenuOpen = false;
+        imageInputElement?.click();
     }
 
     // 处理文件选择
@@ -2505,6 +2516,26 @@
 
         // 清空 input，允许重复选择同一文件
         input.value = '';
+    }
+
+    async function addClipboardText() {
+        isAddMenuOpen = false;
+        try {
+            const text = await navigator.clipboard.readText();
+            if (!text.trim()) {
+                pushErrMsg('剪贴板中没有可用文本');
+                return;
+            }
+            currentInput = currentInput.trimEnd()
+                ? `${currentInput.trimEnd()}\n\n${text}`
+                : text;
+            await tick();
+            autoResizeTextarea();
+            textareaElement?.focus();
+        } catch (error) {
+            console.error('Read clipboard error:', error);
+            pushErrMsg('无法读取剪贴板，请检查系统权限');
+        }
     }
 
     // 移除附件
@@ -2704,6 +2735,8 @@
         settings.currentProvider = provider;
         settings.currentModelId = modelId;
         plugin.saveSettings(settings);
+        isStatusMenuOpen = false;
+        isModelSelectorOpen = false;
     }
 
     // 处理多模型选择变化
@@ -3087,6 +3120,39 @@
     $: currentThinkingSelectValue = (
         showThinkingToggle && isThinkingModeEnabled ? currentThinkingEffort : 'off'
     ) as ThinkingSelectValue;
+    $: composerStatusSummary = formatComposerStatusSummary({
+        mode: chatMode,
+        modelName: getCurrentModelConfig()?.name || currentModelId,
+        thinking: currentThinkingSelectValue,
+        supportsThinking: showThinkingToggle,
+    });
+
+    function closeComposerMenus() {
+        isAddMenuOpen = false;
+        isStatusMenuOpen = false;
+        isModelSelectorOpen = false;
+    }
+
+    function toggleAddMenu() {
+        const nextOpen = !isAddMenuOpen;
+        closeComposerMenus();
+        isPromptSelectorOpen = false;
+        isTokenDetailsOpen = false;
+        isAddMenuOpen = nextOpen;
+    }
+
+    function toggleStatusMenu() {
+        const nextOpen = !isStatusMenuOpen;
+        closeComposerMenus();
+        isPromptSelectorOpen = false;
+        isTokenDetailsOpen = false;
+        isStatusMenuOpen = nextOpen;
+    }
+
+    function selectComposerMode(mode: ChatMode) {
+        setChatMode(mode);
+        isStatusMenuOpen = false;
+    }
 
     // 更新思考程度
     async function updateThinkingEffort(effort: ThinkingEffort) {
@@ -3152,14 +3218,12 @@
         await plugin.saveSettings(settings);
     }
 
-    async function handleThinkingSelectChange(event: Event) {
-        const target = event.currentTarget as HTMLSelectElement;
-        const nextValue = target.value as ThinkingSelectValue;
-
+    async function selectThinkingValue(nextValue: ThinkingSelectValue) {
         if (nextValue === 'off') {
             if (isThinkingModeEnabled) {
                 await toggleThinkingMode();
             }
+            isStatusMenuOpen = false;
             return;
         }
 
@@ -3167,6 +3231,12 @@
             await toggleThinkingMode();
         }
         await updateThinkingEffort(nextValue);
+        isStatusMenuOpen = false;
+    }
+
+    async function handleThinkingSelectChange(event: Event) {
+        const target = event.currentTarget as HTMLSelectElement;
+        await selectThinkingValue(target.value as ThinkingSelectValue);
     }
 
     // 切换思考模式
@@ -9211,6 +9281,7 @@
     }
 
     function openPromptManager() {
+        isAddMenuOpen = false;
         isPromptSelectorOpen = false;
         isPromptManagerOpen = true;
         editingPrompt = null;
@@ -9314,6 +9385,7 @@
 
     function usePrompt(prompt: Prompt) {
         currentInput = prompt.content;
+        isAddMenuOpen = false;
         isPromptSelectorOpen = false;
         tick().then(() => {
             autoResizeTextarea();
@@ -9324,6 +9396,24 @@
     // 点击外部关闭提示词选择器
     function handleClickOutside(event: MouseEvent) {
         const target = event.target as HTMLElement;
+
+        if (
+            isAddMenuOpen &&
+            !target.closest('.ai-sidebar__add-menu') &&
+            !target.closest('.ai-sidebar__add-trigger')
+        ) {
+            isAddMenuOpen = false;
+        }
+
+        if (
+            isStatusMenuOpen &&
+            !target.closest('.ai-sidebar__status-menu') &&
+            !target.closest('.ai-sidebar__status-trigger') &&
+            !target.closest('.multi-model-selector__dropdown')
+        ) {
+            isStatusMenuOpen = false;
+            isModelSelectorOpen = false;
+        }
 
         // 关闭右键菜单
         if (contextMenuVisible && !target.closest('.ai-sidebar__context-menu')) {
@@ -14426,7 +14516,11 @@
         </div>
 
         <!-- 大输入框 -->
-        <div class="ai-sidebar__chat-input-box">
+        <div
+            class="ai-sidebar__chat-input-box"
+            class:ai-sidebar__chat-input-box--answer={chatMode === 'plan'}
+            class:ai-sidebar__chat-input-box--revision={chatMode === 'build'}
+        >
             {#if showCommandPalette}
                 <div class="command-palette">
                     {#each getFilteredCommands() as cmd, i}
@@ -14461,121 +14555,144 @@
 
             <!-- 输入框底部工具栏 -->
             <div class="ai-sidebar__chat-input-toolbar">
-                <div class="ai-sidebar__chat-input-left">
-                    <div class="ai-sidebar__chat-input-tools">
-                        <button
-                            class="ai-sidebar__chat-input-tool"
-                            on:click={triggerFileUpload}
-                            disabled={isUploadingFile || isLoading}
-                            title={t('aiSidebar.actions.upload')}
-                        >
-                            {#if isUploadingFile}
-                                <svg class="b3-button__icon ai-sidebar__loading-icon"><use xlink:href="#iconRefresh"></use></svg>
-                            {:else}
-                                <svg class="b3-button__icon"><use xlink:href="#iconAdd"></use></svg>
-                            {/if}
-                        </button>
-                        <button
-                            class="ai-sidebar__chat-input-tool"
-                            on:click={openWebLinkDialog}
-                            disabled={isFetchingWebContent || isLoading}
-                            title={t('aiSidebar.actions.addWebLink')}
-                        >
-                            {#if isFetchingWebContent}
-                                <svg class="b3-button__icon ai-sidebar__loading-icon"><use xlink:href="#iconRefresh"></use></svg>
-                            {:else}
-                                <svg class="b3-button__icon"><use xlink:href="#iconLink"></use></svg>
-                            {/if}
-                        </button>
-                        <button
-                            class="ai-sidebar__chat-input-tool"
-                            on:click={addCurrentDocToContext}
-                            title={t('aiSidebar.actions.addCurrentDoc')}
-                        >
-                            <svg class="b3-button__icon"><use xlink:href="#iconFile"></use></svg>
-                        </button>
-                        <button
-                            class="ai-sidebar__chat-input-tool"
-                            on:click={() => {
-                                isSearchDialogOpen = !isSearchDialogOpen;
-                                if (isSearchDialogOpen && !searchKeyword.trim()) {
-                                    searchDocuments();
-                                }
-                            }}
-                            title={t('aiSidebar.actions.search')}
-                        >
-                            <svg class="b3-button__icon"><use xlink:href="#iconSearch"></use></svg>
-                        </button>
-                        <div class="ai-sidebar__chat-input-divider"></div>
-                        <button
-                            class="ai-sidebar__chat-input-tool ai-sidebar__prompt-tool"
-                            on:click={() => (isPromptSelectorOpen = !isPromptSelectorOpen)}
-                            title="常用提示词和指令"
-                        >
-                            <svg class="b3-button__icon"><use xlink:href="#iconEdit"></use></svg>
-                        </button>
-                    </div>
-                    <div class="ai-sidebar__token-widget">
-                        <button
-                            bind:this={tokenButtonElement}
-                            type="button"
-                            class="ai-sidebar__token-pill"
-                            class:ai-sidebar__token-pill--warn={displayedContextPercent >= 80}
-                            style={`--token-percent: ${displayedContextPercent};`}
-                            on:click={toggleTokenDetails}
-                            title="Token 使用详情"
-                        >
-                            <span class="ai-sidebar__token-ring" aria-hidden="true"></span>
-                            <span>{currentContextLimit ? `${displayedContextPercent}%` : formatTokenCount(displayedContextTokens)}</span>
-                        </button>
-                        {#if isTokenDetailsOpen}
-                            <div
-                                class="ai-sidebar__token-popover"
-                                style={tokenPopoverStyle}
-                                on:click|stopPropagation
-                            >
-                                <div class="ai-sidebar__token-popover-header">
-                                    <span>上下文长度</span>
-                                    <button
-                                        type="button"
-                                        class="ai-sidebar__token-close"
-                                        on:click={() => (isTokenDetailsOpen = false)}
-                                        title="关闭"
-                                    >
-                                        ×
+                <div class="ai-sidebar__composer-action">
+                    <button
+                        type="button"
+                        class="ai-sidebar__composer-icon-button ai-sidebar__add-trigger"
+                        class:ai-sidebar__composer-icon-button--active={isAddMenuOpen}
+                        aria-label="添加内容"
+                        aria-expanded={isAddMenuOpen}
+                        on:click|stopPropagation={toggleAddMenu}
+                    >
+                        {#if isUploadingFile}
+                            <svg class="b3-button__icon ai-sidebar__loading-icon"><use xlink:href="#iconRefresh"></use></svg>
+                        {:else}
+                            <svg class="b3-button__icon"><use xlink:href="#iconAdd"></use></svg>
+                        {/if}
+                    </button>
+
+                    {#if isAddMenuOpen}
+                        <div class="ai-sidebar__composer-menu ai-sidebar__add-menu" on:click|stopPropagation>
+                            <div class="ai-sidebar__composer-menu-label">添加内容</div>
+                            <button class="ai-sidebar__composer-menu-item" on:click={triggerFileUpload} disabled={isUploadingFile || isLoading}>
+                                <svg><use xlink:href="#iconFile"></use></svg><span>上传文件</span>
+                            </button>
+                            <button class="ai-sidebar__composer-menu-item" on:click={triggerImageUpload} disabled={isUploadingFile || isLoading}>
+                                <svg><use xlink:href="#iconImage"></use></svg><span>上传图片</span>
+                            </button>
+                            <button class="ai-sidebar__composer-menu-item" on:click={() => { isAddMenuOpen = false; openWebLinkDialog(); }} disabled={isFetchingWebContent || isLoading}>
+                                <svg><use xlink:href="#iconLink"></use></svg><span>添加链接</span>
+                            </button>
+                            <div class="ai-sidebar__composer-menu-divider"></div>
+                            <button class="ai-sidebar__composer-menu-item" on:click={() => { isAddMenuOpen = false; addCurrentDocToContext(); }}>
+                                <svg><use xlink:href="#iconFile"></use></svg><span>添加当前文档到上下文</span>
+                            </button>
+                            <button class="ai-sidebar__composer-menu-item" on:click={() => { isAddMenuOpen = false; isSearchDialogOpen = true; if (!searchKeyword.trim()) searchDocuments(); }}>
+                                <svg><use xlink:href="#iconSearch"></use></svg><span>搜索文档或块</span>
+                            </button>
+                            <button class="ai-sidebar__composer-menu-item" on:click={addClipboardText}>
+                                <svg><use xlink:href="#iconCopy"></use></svg><span>从剪贴板粘贴</span>
+                            </button>
+                            <div class="ai-sidebar__composer-menu-divider"></div>
+                            <button class="ai-sidebar__composer-menu-item" on:click={() => { isAddMenuOpen = false; isPromptSelectorOpen = true; }}>
+                                <svg><use xlink:href="#iconEdit"></use></svg><span>常用提示词</span>
+                            </button>
+                        </div>
+                    {/if}
+                </div>
+
+                <div class="ai-sidebar__composer-spacer"></div>
+
+                <div class="ai-sidebar__composer-action ai-sidebar__composer-action--status">
+                    <button
+                        type="button"
+                        class="ai-sidebar__status-trigger"
+                        aria-label={`配置${composerStatusSummary}`}
+                        aria-expanded={isStatusMenuOpen}
+                        on:click|stopPropagation={toggleStatusMenu}
+                    >
+                        <span class="ai-sidebar__status-dot" aria-hidden="true"></span>
+                        <span class="ai-sidebar__status-summary">{composerStatusSummary}</span>
+                        <svg class="ai-sidebar__composer-chevron"><use xlink:href="#iconDown"></use></svg>
+                    </button>
+
+                    {#if isStatusMenuOpen}
+                        <div class="ai-sidebar__composer-menu ai-sidebar__status-menu" on:click|stopPropagation>
+                            <section class="ai-sidebar__status-section">
+                                <div class="ai-sidebar__composer-menu-label">模式</div>
+                                <button class="ai-sidebar__composer-menu-item" class:ai-sidebar__composer-menu-item--selected={chatMode === 'plan'} on:click={() => selectComposerMode('plan')}>
+                                    <span>问答</span>{#if chatMode === 'plan'}<svg class="ai-sidebar__menu-check"><use xlink:href="#iconCheck"></use></svg>{/if}
+                                </button>
+                                <button class="ai-sidebar__composer-menu-item" class:ai-sidebar__composer-menu-item--selected={chatMode === 'build'} on:click={() => selectComposerMode('build')}>
+                                    <span>修订</span>{#if chatMode === 'build'}<svg class="ai-sidebar__menu-check"><use xlink:href="#iconCheck"></use></svg>{/if}
+                                </button>
+                            </section>
+                            <div class="ai-sidebar__composer-menu-divider"></div>
+                            <section class="ai-sidebar__status-section">
+                                <div class="ai-sidebar__composer-menu-label">模型</div>
+                                <div class="ai-sidebar__status-model-picker">
+                                    <MultiModelSelector
+                                        {providers}
+                                        bind:isOpen={isModelSelectorOpen}
+                                        selectedModels={chatMode === 'plan' ? selectedMultiModels : []}
+                                        enableMultiModel={chatMode === 'plan' ? enableMultiModel : false}
+                                        currentProvider={currentProvider}
+                                        currentModelId={currentModelId}
+                                        {chatMode}
+                                        on:select={handleModelSelect}
+                                        on:change={handleMultiModelChange}
+                                        on:toggleEnable={handleToggleMultiModel}
+                                    />
+                                </div>
+                            </section>
+                            <div class="ai-sidebar__composer-menu-divider"></div>
+                            <section class="ai-sidebar__status-section" class:ai-sidebar__status-section--disabled={!showThinkingToggle}>
+                                <div class="ai-sidebar__composer-menu-label">思考深度</div>
+                                <button class="ai-sidebar__composer-menu-item" class:ai-sidebar__composer-menu-item--selected={currentThinkingSelectValue === 'off'} on:click={() => selectThinkingValue('off')} disabled={!showThinkingToggle}>
+                                    <span>关闭</span>{#if currentThinkingSelectValue === 'off'}<svg class="ai-sidebar__menu-check"><use xlink:href="#iconCheck"></use></svg>{/if}
+                                </button>
+                                {#each THINKING_EFFORT_OPTIONS as option}
+                                    <button class="ai-sidebar__composer-menu-item" class:ai-sidebar__composer-menu-item--selected={currentThinkingSelectValue === option.value} on:click={() => selectThinkingValue(option.value)} disabled={!showThinkingToggle}>
+                                        <span>{option.label}</span>{#if currentThinkingSelectValue === option.value}<svg class="ai-sidebar__menu-check"><use xlink:href="#iconCheck"></use></svg>{/if}
                                     </button>
-                                </div>
-                                <div class="ai-sidebar__token-meter">
-                                    <div
-                                        class="ai-sidebar__token-meter-fill"
-                                        style={`width: ${currentContextLimit ? displayedContextPercent : 0}%`}
-                                    ></div>
-                                </div>
-                                {#if isContextCompactionLikely}
-                                    <div class="ai-sidebar__token-status">
-                                        正在接近上下文上限，OpenCode 可能会自动压缩上下文。
+                                {/each}
+                            </section>
+                            <div class="ai-sidebar__composer-menu-divider"></div>
+                            <div class="ai-sidebar__token-widget">
+                                <button
+                                    bind:this={tokenButtonElement}
+                                    type="button"
+                                    class="ai-sidebar__token-pill"
+                                    class:ai-sidebar__token-pill--warn={displayedContextPercent >= 80}
+                                    style={`--token-percent: ${displayedContextPercent};`}
+                                    on:click={toggleTokenDetails}
+                                    title="Token 使用详情"
+                                >
+                                    <span class="ai-sidebar__token-ring" aria-hidden="true"></span>
+                                    <span>上下文 {currentContextLimit ? `${displayedContextPercent}%` : formatTokenCount(displayedContextTokens)}</span>
+                                </button>
+                                {#if isTokenDetailsOpen}
+                                    <div class="ai-sidebar__token-popover" style={tokenPopoverStyle} on:click|stopPropagation>
+                                        <div class="ai-sidebar__token-popover-header">
+                                            <span>上下文长度</span>
+                                            <button type="button" class="ai-sidebar__token-close" on:click={() => (isTokenDetailsOpen = false)} title="关闭">×</button>
+                                        </div>
+                                        <div class="ai-sidebar__token-meter">
+                                            <div class="ai-sidebar__token-meter-fill" style={`width: ${currentContextLimit ? displayedContextPercent : 0}%`}></div>
+                                        </div>
+                                        {#if isContextCompactionLikely}
+                                            <div class="ai-sidebar__token-status">正在接近上下文上限，OpenCode 可能会自动压缩上下文。</div>
+                                        {/if}
+                                        <div class="ai-sidebar__token-row"><span>上下文上限</span><strong>{currentContextLimit ? formatTokenCount(currentContextLimit) : '未设置'}</strong></div>
+                                        <div class="ai-sidebar__token-row"><span>当前使用百分比</span><strong>{currentContextLimit ? `${displayedContextPercent}%` : '无法计算'}</strong></div>
+                                        <div class="ai-sidebar__token-row"><span>当前使用的上下文</span><strong>{formatTokenCount(displayedContextTokens)}</strong></div>
                                     </div>
                                 {/if}
-                                <div class="ai-sidebar__token-row">
-                                    <span>上下文上限</span>
-                                    <strong>
-                                        {currentContextLimit
-                                            ? formatTokenCount(currentContextLimit)
-                                            : '未设置'}
-                                    </strong>
-                                </div>
-                                <div class="ai-sidebar__token-row">
-                                    <span>当前使用百分比</span>
-                                    <strong>{currentContextLimit ? `${displayedContextPercent}%` : '无法计算'}</strong>
-                                </div>
-                                <div class="ai-sidebar__token-row">
-                                    <span>当前使用的上下文</span>
-                                    <strong>{formatTokenCount(displayedContextTokens)}</strong>
-                                </div>
                             </div>
-                        {/if}
-                    </div>
+                        </div>
+                    {/if}
                 </div>
+
                 <button
                     class="ai-sidebar__chat-send-btn"
                     class:ai-sidebar__chat-send-btn--abort={isLoading && !currentInput.trim()}
@@ -14593,84 +14710,20 @@
             </div>
         </div>
 
-        <!-- OpenCode 风格选择器栏 -->
-        <div class="ai-sidebar__composer-controls">
-            <button
-                type="button"
-                class="ai-sidebar__mode-toggle"
-                class:ai-sidebar__mode-toggle--build={chatMode === 'build'}
-                role="switch"
-                aria-checked={chatMode === 'build'}
-                aria-label={`${t('aiSidebar.mode.label')}：${getLocalizedChatModeLabel(chatMode)}`}
-                on:click={toggleChatMode}
-                title={`${getLocalizedChatModeDescription(chatMode)} / Tab`}
-            >
-                <span class="ai-sidebar__mode-toggle-label">
-                    {getLocalizedChatModeLabel(chatMode)}
-                </span>
-                <svg class="ai-sidebar__composer-chevron">
-                    <use xlink:href="#iconDown"></use>
-                </svg>
-            </button>
-            <div class="ai-sidebar__model-control">
-                {#if chatMode === 'plan'}
-                    <MultiModelSelector
-                        {providers}
-                        selectedModels={selectedMultiModels}
-                        enableMultiModel={enableMultiModel}
-                        currentProvider={currentProvider}
-                        currentModelId={currentModelId}
-                        {chatMode}
-                        on:select={handleModelSelect}
-                        on:change={handleMultiModelChange}
-                        on:toggleEnable={handleToggleMultiModel}
-                    />
-                {:else}
-                    <MultiModelSelector
-                        {providers}
-                        selectedModels={[]}
-                        enableMultiModel={false}
-                        currentProvider={currentProvider}
-                        currentModelId={currentModelId}
-                        {chatMode}
-                        on:select={handleModelSelect}
-                    />
-                {/if}
-            </div>
-            <div
-                class="ai-sidebar__thinking-control"
-                class:ai-sidebar__thinking-control--disabled={!showThinkingToggle}
-                title={showThinkingToggle ? '思考强度' : '当前模型不支持思考'}
-            >
-                <button
-                    type="button"
-                    class="ai-sidebar__thinking-chip"
-                    class:ai-sidebar__thinking-chip--active={isThinkingModeEnabled}
-                    disabled={!showThinkingToggle}
-                    on:click={toggleThinkingMode}
-                >
-                    思考
-                </button>
-                <select
-                    class="ai-sidebar__thinking-select"
-                    value={currentThinkingSelectValue}
-                    on:change={handleThinkingSelectChange}
-                    disabled={!showThinkingToggle}
-                >
-                    <option value="off">关闭</option>
-                    {#each THINKING_EFFORT_OPTIONS as option}
-                        <option value={option.value}>{option.label}</option>
-                    {/each}
-                </select>
-            </div>
-        </div>
-
         <!-- 隐藏的文件上传 input -->
         <input
             type="file"
             bind:this={fileInputElement}
             on:change={handleFileSelect}
             accept="image/*,.txt,.md,.json,.xml,.csv,text/*"
+            multiple
+            style="display: none;"
+        />
+        <input
+            type="file"
+            bind:this={imageInputElement}
+            on:change={handleFileSelect}
+            accept="image/*"
             multiple
             style="display: none;"
         />
@@ -20440,6 +20493,330 @@
 
         .ai-sidebar__chat-send-btn {
             justify-self: end;
+        }
+    }
+
+    // ── Unified composer redesign ────────────────────────────────
+    .ai-sidebar__chat-input-box {
+        --composer-accent: var(--b3-theme-primary);
+        --composer-accent-soft: color-mix(in srgb, var(--composer-accent) 10%, transparent);
+        position: relative;
+        border-width: 1px;
+        border-color: color-mix(in srgb, var(--composer-accent) 58%, var(--b3-border-color));
+        background: var(--b3-theme-background);
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.055);
+
+        &--answer {
+            --composer-accent: var(--b3-card-success-color, #4f8f6b);
+        }
+
+        &--revision {
+            --composer-accent: var(--b3-theme-error, #c35f66);
+        }
+
+        &:focus-within {
+            border-color: color-mix(in srgb, var(--composer-accent) 76%, var(--b3-border-color));
+            box-shadow:
+                0 2px 10px rgba(0, 0, 0, 0.055),
+                0 0 0 3px var(--composer-accent-soft);
+        }
+    }
+
+    .ai-sidebar__chat-input-toolbar {
+        grid-template-columns: 44px minmax(0, 1fr) minmax(120px, auto) 44px;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px 12px;
+        overflow: visible;
+    }
+
+    .ai-sidebar__composer-action {
+        position: relative;
+        display: flex;
+        align-items: center;
+        min-width: 0;
+    }
+
+    .ai-sidebar__composer-action--status {
+        justify-content: flex-end;
+    }
+
+    .ai-sidebar__composer-spacer {
+        min-width: 0;
+    }
+
+    .ai-sidebar__composer-icon-button,
+    .ai-sidebar__chat-send-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 44px;
+        min-width: 44px;
+        height: 44px;
+        border-radius: 12px;
+    }
+
+    .ai-sidebar__composer-icon-button {
+        border: 1px solid var(--b3-border-color);
+        background: var(--b3-theme-background);
+        color: var(--b3-theme-on-surface);
+        cursor: pointer;
+        transition:
+            background 0.16s ease,
+            border-color 0.16s ease,
+            color 0.16s ease,
+            transform 0.16s ease;
+
+        .b3-button__icon {
+            width: 18px;
+            height: 18px;
+        }
+
+        &:hover,
+        &--active {
+            border-color: color-mix(in srgb, var(--composer-accent) 42%, var(--b3-border-color));
+            background: var(--composer-accent-soft);
+            color: var(--composer-accent);
+        }
+
+        &:active {
+            transform: scale(0.96);
+        }
+
+        &:focus-visible {
+            outline: 2px solid color-mix(in srgb, var(--composer-accent) 72%, transparent);
+            outline-offset: 2px;
+        }
+    }
+
+    .ai-sidebar__status-trigger {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        max-width: min(320px, 42vw);
+        height: 44px;
+        padding: 0 12px;
+        border: 1px solid color-mix(in srgb, var(--composer-accent) 32%, var(--b3-border-color));
+        border-radius: 12px;
+        background: var(--b3-theme-background);
+        color: var(--b3-theme-on-surface);
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition:
+            background 0.16s ease,
+            border-color 0.16s ease;
+
+        &:hover,
+        &[aria-expanded='true'] {
+            border-color: color-mix(in srgb, var(--composer-accent) 58%, var(--b3-border-color));
+            background: var(--composer-accent-soft);
+        }
+
+        &:focus-visible {
+            outline: 2px solid color-mix(in srgb, var(--composer-accent) 72%, transparent);
+            outline-offset: 2px;
+        }
+    }
+
+    .ai-sidebar__status-dot {
+        width: 7px;
+        height: 7px;
+        flex: 0 0 7px;
+        border-radius: 50%;
+        background: var(--composer-accent);
+        box-shadow: 0 0 0 3px var(--composer-accent-soft);
+    }
+
+    .ai-sidebar__status-summary {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .ai-sidebar__composer-menu {
+        position: absolute;
+        z-index: 12;
+        bottom: calc(100% + 8px);
+        display: flex;
+        flex-direction: column;
+        max-height: min(520px, 70vh);
+        padding: 8px;
+        overflow-y: auto;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 12px;
+        background: var(--b3-theme-background);
+        color: var(--b3-theme-on-background);
+        box-shadow: 0 12px 28px rgba(0, 0, 0, 0.14);
+    }
+
+    .ai-sidebar__add-menu {
+        left: 0;
+        width: 248px;
+    }
+
+    .ai-sidebar__status-menu {
+        right: 0;
+        width: min(288px, calc(100vw - 32px));
+    }
+
+    .ai-sidebar__composer-menu-label {
+        padding: 6px 10px;
+        color: var(--b3-theme-on-surface-light);
+        font-size: 12px;
+        font-weight: 600;
+        line-height: 1.3;
+    }
+
+    .ai-sidebar__composer-menu-item {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 10px;
+        width: 100%;
+        min-height: 40px;
+        padding: 8px 10px;
+        border: none;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--b3-theme-on-background);
+        font: inherit;
+        font-size: 14px;
+        text-align: left;
+        cursor: pointer;
+
+        > svg {
+            width: 18px;
+            height: 18px;
+            flex: 0 0 18px;
+            color: var(--b3-theme-on-surface-light);
+        }
+
+        > span:first-child {
+            flex: 1;
+        }
+
+        &:hover,
+        &:focus-visible,
+        &--selected {
+            outline: none;
+            background: var(--composer-accent-soft);
+            color: var(--composer-accent);
+        }
+
+        &:disabled {
+            opacity: 0.42;
+            cursor: not-allowed;
+        }
+    }
+
+    .ai-sidebar__composer-menu-divider {
+        height: 1px;
+        margin: 6px -8px;
+        background: var(--b3-border-color);
+    }
+
+    .ai-sidebar__menu-check {
+        width: 16px !important;
+        height: 16px !important;
+        margin-left: auto;
+        color: var(--composer-accent) !important;
+    }
+
+    .ai-sidebar__status-section {
+        display: flex;
+        flex-direction: column;
+
+        &--disabled {
+            opacity: 0.58;
+        }
+    }
+
+    .ai-sidebar__status-model-picker {
+        min-width: 0;
+
+        :global(.multi-model-selector__button) {
+            width: 100%;
+            min-height: 40px;
+            justify-content: flex-start;
+            padding: 8px 10px;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            box-shadow: none;
+            color: var(--b3-theme-on-background);
+        }
+
+        :global(.multi-model-selector__button:hover) {
+            background: var(--composer-accent-soft);
+            color: var(--composer-accent);
+        }
+    }
+
+    .ai-sidebar__status-menu .ai-sidebar__token-widget {
+        width: 100%;
+    }
+
+    .ai-sidebar__status-menu .ai-sidebar__token-pill {
+        width: 100%;
+        justify-content: flex-start;
+        min-height: 40px;
+        padding: 8px 10px;
+    }
+
+    .ai-sidebar__chat-send-btn:not(.ai-sidebar__chat-send-btn--abort) {
+        background: color-mix(in srgb, var(--composer-accent) 88%, var(--b3-theme-on-background));
+        box-shadow: 0 4px 12px color-mix(in srgb, var(--composer-accent) 22%, transparent);
+    }
+
+    @container (max-width: 430px) {
+        .ai-sidebar__chat-input-toolbar {
+            grid-template-columns: 44px minmax(0, 1fr) minmax(104px, auto) 44px;
+            padding: 8px 10px 10px;
+        }
+
+        .ai-sidebar__status-trigger {
+            max-width: 38vw;
+            padding: 0 10px;
+        }
+
+        .ai-sidebar__status-menu {
+            right: -52px;
+        }
+    }
+
+    @container (max-width: 320px) {
+        .ai-sidebar__chat-input-toolbar {
+            grid-template-columns: 40px minmax(0, 1fr) minmax(92px, auto) 40px;
+            gap: 6px;
+            padding: 8px;
+        }
+
+        .ai-sidebar__composer-icon-button,
+        .ai-sidebar__chat-send-btn {
+            width: 40px;
+            min-width: 40px;
+            height: 40px;
+        }
+
+        .ai-sidebar__status-trigger {
+            max-width: 36vw;
+            height: 40px;
+            gap: 6px;
+        }
+
+        .ai-sidebar__status-dot {
+            display: none;
+        }
+
+        .ai-sidebar__add-menu {
+            width: min(248px, calc(100vw - 24px));
+        }
+
+        .ai-sidebar__status-menu {
+            right: -46px;
         }
     }
 </style>
