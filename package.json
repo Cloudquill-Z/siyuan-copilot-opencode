@@ -1,6 +1,6 @@
 {
   "name": "siyuan-copilot-opencode",
-  "version": "3.0.10",
+  "version": "3.0.11",
   "type": "module",
   "description": "Independent SiYuan OpenCode plugin for note-aware chat, tools, and local OpenCode workflows",
   "repository": "https://github.com/Cloudquill-Z/siyuan-copilot-opencode",
