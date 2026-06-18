@@ -38,3 +38,11 @@ export function formatComposerStatusSummary(options: {
     );
     return `${modeLabel} · ${modelLabel} · ${thinkingLabel}`;
 }
+
+export function getPromptMenuToggleState(promptListOpen: boolean) {
+    return {
+        addMenuOpen: true,
+        promptListOpen: !promptListOpen,
+        statusMenuOpen: false,
+    };
+}

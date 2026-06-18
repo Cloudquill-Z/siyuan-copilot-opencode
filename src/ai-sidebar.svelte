@@ -87,7 +87,10 @@
         createTokenUsageRecord,
         formatTokenCount,
     } from './utils/tokenUsage';
-    import { formatComposerStatusSummary } from './utils/composerControls';
+    import {
+        formatComposerStatusSummary,
+        getPromptMenuToggleState,
+    } from './utils/composerControls';
     import {
         buildMemoryDreamPrompt,
         buildMemoryInitPrompt,
@@ -3147,6 +3150,15 @@
         isPromptSelectorOpen = false;
         isTokenDetailsOpen = false;
         isStatusMenuOpen = nextOpen;
+    }
+
+    function togglePromptList() {
+        const nextState = getPromptMenuToggleState(isPromptSelectorOpen);
+        isAddMenuOpen = nextState.addMenuOpen;
+        isPromptSelectorOpen = nextState.promptListOpen;
+        isStatusMenuOpen = nextState.statusMenuOpen;
+        isModelSelectorOpen = false;
+        isTokenDetailsOpen = false;
     }
 
     function selectComposerMode(mode: ChatMode) {
@@ -9333,6 +9345,7 @@
         editingPrompt = prompt;
         newPromptTitle = prompt.title;
         newPromptContent = prompt.content;
+        isAddMenuOpen = false;
         isPromptSelectorOpen = false;
         isPromptManagerOpen = true;
     }
@@ -9403,6 +9416,7 @@
             !target.closest('.ai-sidebar__add-trigger')
         ) {
             isAddMenuOpen = false;
+            isPromptSelectorOpen = false;
         }
 
         if (
@@ -9431,17 +9445,6 @@
             !target.closest('.ai-sidebar__token-popover')
         ) {
             isTokenDetailsOpen = false;
-        }
-
-        if (isPromptSelectorOpen) {
-            const selector = document.querySelector('.ai-sidebar__prompt-selector');
-            const promptTrigger = document.querySelector('.ai-sidebar__prompt-tool');
-
-            const clickedButton = !!promptTrigger && promptTrigger.contains(target);
-
-            if (selector && !selector.contains(target) && !clickedButton) {
-                isPromptSelectorOpen = false;
-            }
         }
 
         // 关闭图片查看器
@@ -14594,9 +14597,40 @@
                                 <svg><use xlink:href="#iconCopy"></use></svg><span>从剪贴板粘贴</span>
                             </button>
                             <div class="ai-sidebar__composer-menu-divider"></div>
-                            <button class="ai-sidebar__composer-menu-item" on:click={() => { isAddMenuOpen = false; isPromptSelectorOpen = true; }}>
+                            <button
+                                class="ai-sidebar__composer-menu-item"
+                                class:ai-sidebar__composer-menu-item--selected={isPromptSelectorOpen}
+                                aria-expanded={isPromptSelectorOpen}
+                                on:click={togglePromptList}
+                            >
                                 <svg><use xlink:href="#iconEdit"></use></svg><span>常用提示词</span>
+                                <svg class="ai-sidebar__composer-menu-chevron" class:ai-sidebar__composer-menu-chevron--expanded={isPromptSelectorOpen}>
+                                    <use xlink:href="#iconRight"></use>
+                                </svg>
                             </button>
+                            {#if isPromptSelectorOpen}
+                                <div class="ai-sidebar__composer-prompt-list">
+                                    <button class="ai-sidebar__prompt-item ai-sidebar__prompt-item--new" on:click={openPromptManager}>
+                                        <svg class="ai-sidebar__prompt-item-icon"><use xlink:href="#iconAdd"></use></svg>
+                                        <span class="ai-sidebar__prompt-item-title">{t('aiSidebar.prompt.new')}</span>
+                                    </button>
+                                    {#if prompts.length > 0}
+                                        {#each prompts as prompt (prompt.id)}
+                                            <button class="ai-sidebar__prompt-item" on:click={() => usePrompt(prompt)} title={prompt.content}>
+                                                <span class="ai-sidebar__prompt-item-title">{prompt.title}</span>
+                                                <div class="ai-sidebar__prompt-item-actions">
+                                                    <button class="ai-sidebar__prompt-item-edit" on:click|stopPropagation={() => editPrompt(prompt)} title={t('aiSidebar.prompt.edit')}>
+                                                        <svg class="b3-button__icon"><use xlink:href="#iconEdit"></use></svg>
+                                                    </button>
+                                                    <button class="ai-sidebar__prompt-item-delete" on:click|stopPropagation={() => deletePrompt(prompt.id)} title={t('aiSidebar.prompt.delete')}>
+                                                        <svg class="b3-button__icon"><use xlink:href="#iconTrashcan"></use></svg>
+                                                    </button>
+                                                </div>
+                                            </button>
+                                        {/each}
+                                    {/if}
+                                </div>
+                            {/if}
                         </div>
                     {/if}
                 </div>
@@ -14728,36 +14762,6 @@
             style="display: none;"
         />
 
-        <!-- 提示词选择器下拉菜单 -->
-        {#if isPromptSelectorOpen}
-            <div class="ai-sidebar__prompt-selector">
-                <div class="ai-sidebar__prompt-list">
-                    <button
-                        class="ai-sidebar__prompt-item ai-sidebar__prompt-item--new"
-                        on:click={openPromptManager}
-                    >
-                        <svg class="ai-sidebar__prompt-item-icon"><use xlink:href="#iconAdd"></use></svg>
-                        <span class="ai-sidebar__prompt-item-title">{t('aiSidebar.prompt.new')}</span>
-                    </button>
-                    {#if prompts.length > 0}
-                        <div class="ai-sidebar__prompt-divider-small"></div>
-                        {#each prompts as prompt (prompt.id)}
-                            <button class="ai-sidebar__prompt-item" on:click={() => usePrompt(prompt)} title={prompt.content}>
-                                <span class="ai-sidebar__prompt-item-title">{prompt.title}</span>
-                                <div class="ai-sidebar__prompt-item-actions">
-                                    <button class="ai-sidebar__prompt-item-edit" on:click|stopPropagation={() => editPrompt(prompt)} title={t('aiSidebar.prompt.edit')}>
-                                        <svg class="b3-button__icon"><use xlink:href="#iconEdit"></use></svg>
-                                    </button>
-                                    <button class="ai-sidebar__prompt-item-delete" on:click|stopPropagation={() => deletePrompt(prompt.id)} title={t('aiSidebar.prompt.delete')}>
-                                        <svg class="b3-button__icon"><use xlink:href="#iconTrashcan"></use></svg>
-                                    </button>
-                                </div>
-                            </button>
-                        {/each}
-                    {/if}
-                </div>
-            </div>
-        {/if}
     </div>
 
     <!-- 提示词管理对话框 -->
@@ -20716,6 +20720,32 @@
         height: 1px;
         margin: 6px -8px;
         background: var(--b3-border-color);
+    }
+
+    .ai-sidebar__composer-menu-chevron {
+        width: 14px !important;
+        height: 14px !important;
+        margin-left: auto;
+        transition: transform 0.16s ease;
+
+        &--expanded {
+            transform: rotate(90deg);
+        }
+    }
+
+    .ai-sidebar__composer-prompt-list {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        margin: 2px 0 4px 28px;
+        padding: 4px;
+        border-left: 1px solid color-mix(in srgb, var(--composer-accent) 28%, var(--b3-border-color));
+    }
+
+    .ai-sidebar__composer-prompt-list .ai-sidebar__prompt-item {
+        min-height: 36px;
+        padding: 6px 8px;
+        border-radius: 7px;
     }
 
     .ai-sidebar__menu-check {

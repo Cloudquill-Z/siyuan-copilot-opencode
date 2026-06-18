@@ -5,6 +5,7 @@ import {
     formatComposerStatusSummary,
     getComposerModeMeta,
     getThinkingDisplayLabel,
+    getPromptMenuToggleState,
 } from '../src/utils/composerControls.ts';
 import { ComponentMountRegistry } from '../src/utils/componentMountRegistry.ts';
 
@@ -64,6 +65,16 @@ assert.equal(
     }),
     '修订 · Claude Sonnet 4 · Middle'
 );
+assert.deepEqual(getPromptMenuToggleState(false), {
+    addMenuOpen: true,
+    promptListOpen: true,
+    statusMenuOpen: false,
+});
+assert.deepEqual(getPromptMenuToggleState(true), {
+    addMenuOpen: true,
+    promptListOpen: false,
+    statusMenuOpen: false,
+});
 
 const destroyedMounts: string[] = [];
 const mountRegistry = new ComponentMountRegistry<{ $destroy(): void }>();
