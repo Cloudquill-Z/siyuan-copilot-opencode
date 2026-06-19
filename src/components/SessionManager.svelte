@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { createEventDispatcher, tick } from 'svelte';
+    import { createEventDispatcher, tick, onDestroy } from 'svelte';
     import { pushMsg } from '../api';
     import { t } from '../utils/i18n';
 
@@ -30,6 +30,8 @@
     let contextMenuX = 0;
     let contextMenuY = 0;
     let contextMenuSession: ChatSession | null = null;
+    let outsideClickTimer: ReturnType<typeof setTimeout> | null = null;
+    let globalClickTimer: ReturnType<typeof setTimeout> | null = null;
 
     // 批量删除相关状态
     let isMultiSelectMode = false; // 是否处于多选模式
@@ -184,10 +186,13 @@
         // 打开时触发刷新事件，重新加载最新的会话列表
         dispatch('refresh');
         updateDropdownPosition();
-        setTimeout(() => {
+        if (outsideClickTimer) clearTimeout(outsideClickTimer);
+        outsideClickTimer = setTimeout(() => {
             document.addEventListener('click', closeOnOutsideClick);
         }, 0);
     } else {
+        if (outsideClickTimer) clearTimeout(outsideClickTimer);
+        outsideClickTimer = null;
         document.removeEventListener('click', closeOnOutsideClick);
     }
 
@@ -250,61 +255,28 @@
     // 导出会话到文件
     function exportSessionToFile() {
         if (!contextMenuSession) return;
-
-        const session = contextMenuSession;
-        const markdown = generateSessionMarkdown(session);
-
-        // 创建下载链接
-        const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${session.title.replace(/[\\/:*?"<>|]/g, '_')}.md`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        pushMsg(t('aiSidebar.session.exportSuccess'));
+        dispatch('exportFile', { sessionId: contextMenuSession.id });
         closeContextMenu();
-    }
-
-    // 生成会话的Markdown内容
-    function generateSessionMarkdown(session: ChatSession): string {
-        const header = `# ${session.title}\n\n`;
-        const date = `> 创建时间：${new Date(session.createdAt).toLocaleString('zh-CN')}\n`;
-        const updateDate = `> 更新时间：${new Date(session.updatedAt).toLocaleString('zh-CN')}\n\n`;
-
-        const messages = (session.messages || [])
-            .filter(msg => msg.role !== 'system')
-            .map(msg => {
-                const role = msg.role === 'user' ? '👤 **用户**' : '🤖 **助手**';
-                let content = '';
-
-                if (typeof msg.content === 'string') {
-                    content = msg.content;
-                } else if (Array.isArray(msg.content)) {
-                    content = msg.content
-                        .filter(part => part.type === 'text')
-                        .map(part => part.text)
-                        .join('\n');
-                }
-
-                return `${role}\n\n${content}\n`;
-            })
-            .join('\n---\n\n');
-
-        return header + date + updateDate + messages;
     }
 
     // 监听全局点击事件
     $: if (contextMenuVisible) {
-        setTimeout(() => {
+        if (globalClickTimer) clearTimeout(globalClickTimer);
+        globalClickTimer = setTimeout(() => {
             document.addEventListener('click', handleGlobalClick);
         }, 0);
     } else {
+        if (globalClickTimer) clearTimeout(globalClickTimer);
+        globalClickTimer = null;
         document.removeEventListener('click', handleGlobalClick);
     }
+
+    onDestroy(() => {
+        if (outsideClickTimer) clearTimeout(outsideClickTimer);
+        if (globalClickTimer) clearTimeout(globalClickTimer);
+        document.removeEventListener('click', closeOnOutsideClick);
+        document.removeEventListener('click', handleGlobalClick);
+    });
 
     // 打开重命名对话框
     function openRenameDialog() {

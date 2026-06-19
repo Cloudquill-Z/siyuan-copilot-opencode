@@ -92,6 +92,14 @@
         getPromptMenuToggleState,
     } from './utils/composerControls';
     import {
+        buildSessionMarkdown,
+        cleanModelName,
+        createSessionExportSnapshot,
+        sanitizeDocumentName,
+        type SessionExportSnapshot,
+    } from './utils/sessionExport';
+    import { mutateSessionMetadata } from './session-metadata';
+    import {
         buildMemoryDreamPrompt,
         buildMemoryInitPrompt,
         buildMemoryPrompt,
@@ -1995,7 +2003,7 @@
     let currentDocNotebookId = ''; // 当前文档所在笔记本ID
     let hasDefaultPath = false; // 是否有全局默认路径
     let saveDialogNotebooks: any[] = []; // 保存对话框中的笔记本列表
-    let saveMessageIndex: number | null = null; // 要保存的单个消息索引（null表示保存整个会话）
+    let pendingSessionExport: SessionExportSnapshot | null = null;
     let openAfterSave = true; // 保存后是否打开笔记
 
     // 订阅设置变化
@@ -2097,11 +2105,11 @@
                 }
 
                 // 更新当前选择（如果设置中有保存）
-                if (newSettings.currentProvider) {
-                    currentProvider = newSettings.currentProvider;
+                if (Object.prototype.hasOwnProperty.call(newSettings, 'currentProvider')) {
+                    currentProvider = newSettings.currentProvider || '';
                 }
-                if (newSettings.currentModelId) {
-                    currentModelId = newSettings.currentModelId;
+                if (Object.prototype.hasOwnProperty.call(newSettings, 'currentModelId')) {
+                    currentModelId = newSettings.currentModelId || '';
                 }
 
                 // 更新多模型选择，过滤掉无效的模型
@@ -2236,6 +2244,10 @@
         window.removeEventListener('resize', updateTokenPopoverPosition);
         // 移除文档总结事件监听器
         window.removeEventListener(SUMMARY_EVENT, handleSummarizeDoc as EventListener);
+        if (savePathSearchTimeout) {
+            clearTimeout(savePathSearchTimeout);
+            savePathSearchTimeout = null;
+        }
         revokeLoadedAssetUrls();
 
         // 如果有未保存的更改，自动保存当前会话
@@ -3431,6 +3443,17 @@
     function getUserDisplayName() {
         const configuredName = `${settings.userName || ''}`.trim();
         return configuredName || t('aiSidebar.messages.user') || 'User';
+    }
+
+    function getSessionExportContext() {
+        return {
+            userName: settings.userName,
+            providers,
+            currentProvider,
+            currentModelId,
+            userFallback: t('aiSidebar.messages.user') || 'User',
+            assistantFallback: t('aiSidebar.messages.assistant') || 'AI',
+        };
     }
 
     function getPlatformAndModelLabel(provider: string, modelId?: string, modelName?: string) {
@@ -4646,7 +4669,7 @@
                 (response, i) => ({
                     ...response,
                     isSelected: i === index, // 标记哪个被选择
-                    modelName: i === index ? ' ✅' + response.modelName : response.modelName, // 选择的模型名添加✅
+                    modelName: cleanModelName(response.modelName),
                 })
             );
         } else {
@@ -4658,7 +4681,7 @@
                 multiModelResponses: multiModelResponses.map((response, i) => ({
                     ...response,
                     isSelected: i === index,
-                    modelName: i === index ? ' ✅' + response.modelName : response.modelName,
+                    modelName: cleanModelName(response.modelName),
                 })),
             };
             messages = [...messages, assistantMessage];
@@ -5888,10 +5911,7 @@
                     const updatedMultiModelResponses = multiModelResponses.map((response, i) => ({
                         ...response,
                         isSelected: i === firstSuccessIndex,
-                        modelName:
-                            i === firstSuccessIndex
-                                ? ' ✅' + response.modelName
-                                : response.modelName, // 选择的模型名添加✅
+                        modelName: cleanModelName(response.modelName),
                     }));
 
                     // 【修复】检查是否已经存在该 turns 的助手消息，避免重复添加
@@ -5974,18 +5994,7 @@
 
     // 复制对话为Markdown
     function copyAsMarkdown() {
-        const markdown = messages
-            .filter(msg => msg.role !== 'system')
-            .map(msg => {
-                const role =
-                    msg.role === 'user'
-                        ? `👤 **${getUserDisplayName()}**`
-                        : `🤖 **${getAssistantDisplayName(msg)}**`;
-                // 获取实际内容（包括多模型响应）
-                const content = getActualMessageContent(msg);
-                return `${role}\n\n${content}\n`;
-            })
-            .join('\n---\n\n');
+        const markdown = buildSessionMarkdown(messages, getSessionExportContext());
 
         navigator.clipboard
             .writeText(markdown)
@@ -6014,8 +6023,7 @@
                 const updatedMultiModelResponses = multiModelResponses.map((response, i) => ({
                     ...response,
                     isSelected: i === firstSuccessIndex,
-                    modelName:
-                        i === firstSuccessIndex ? ' ✅' + response.modelName : response.modelName, // 选择的模型名添加✅
+                    modelName: cleanModelName(response.modelName),
                 }));
 
                 const lastMessage = messages[messages.length - 1];
@@ -8055,7 +8063,7 @@
         }
     }
 
-    async function saveSessions() {
+    async function saveSessions(removedIds: string[] = []) {
         try {
             // 只保存 metadata 到 chat-sessions.json
             const metadata = sessions.map(s => {
@@ -8069,7 +8077,26 @@
                         (s.messages ? s.messages.filter(m => m.role !== 'system').length : 0),
                 };
             });
-            await saveJsonFile(CHAT_SESSIONS_PATH, { sessions: metadata });
+            await mutateSessionMetadata<ChatSession>(
+                async () => {
+                    const latest = await loadJsonFile<{ sessions?: ChatSession[] }>(
+                        CHAT_SESSIONS_PATH,
+                        { sessions: [] }
+                    );
+                    return latest.sessions || [];
+                },
+                async next => saveJsonFile(CHAT_SESSIONS_PATH, { sessions: next }),
+                latest => {
+                    const removed = new Set(removedIds);
+                    const localIds = new Set(metadata.map(item => item.id));
+                    return [
+                        ...metadata.filter(item => !removed.has(item.id)),
+                        ...latest.filter(
+                            item => !removed.has(item.id) && !localIds.has(item.id)
+                        ),
+                    ];
+                }
+            );
         } catch (error) {
             console.error('Save sessions error:', error);
             pushErrMsg(t('aiSidebar.errors.saveSessionFailed'));
@@ -8323,8 +8350,7 @@
                 const updatedMultiModelResponses = multiModelResponses.map((response, i) => ({
                     ...response,
                     isSelected: i === firstSuccessIndex,
-                    modelName:
-                        i === firstSuccessIndex ? ' ✅' + response.modelName : response.modelName,
+                    modelName: cleanModelName(response.modelName),
                 }));
 
                 const lastMessage = messages[messages.length - 1];
@@ -8554,6 +8580,13 @@
                         msg.multiModelResponses &&
                         msg.multiModelResponses.length > 0
                     ) {
+                        for (const response of msg.multiModelResponses) {
+                            const normalizedName = cleanModelName(response.modelName);
+                            if (normalizedName !== response.modelName) {
+                                response.modelName = normalizedName;
+                                sessionModified = true;
+                            }
+                        }
                         const hasSelected = msg.multiModelResponses.some(r => r.isSelected);
                         if (!hasSelected) {
                             // 找到第一个没有错误的响应
@@ -8568,10 +8601,7 @@
                                         // 更新主 content 为选中的内容
                                         msg.content = response.content || '';
                                         msg.thinking = response.thinking || '';
-                                        // 添加 ✅ 标记（如果还没有）
-                                        if (!response.modelName.startsWith('✅')) {
-                                            response.modelName = '✅' + response.modelName;
-                                        }
+                                        response.modelName = cleanModelName(response.modelName);
                                     }
                                 });
                                 sessionModified = true;
@@ -8633,8 +8663,7 @@
                 const updatedMultiModelResponses = multiModelResponses.map((response, i) => ({
                     ...response,
                     isSelected: i === firstSuccessIndex, // 标记第一个成功的为默认选择
-                    modelName:
-                        i === firstSuccessIndex ? ' ✅' + response.modelName : response.modelName,
+                    modelName: cleanModelName(response.modelName),
                 }));
 
                 const lastMessage = messages[messages.length - 1];
@@ -8741,7 +8770,7 @@
                 // 【修复】删除前重新加载最新的会话列表，避免多页签覆盖问题
                 await loadSessions();
                 sessions = sessions.filter(s => s.id !== sessionId);
-                await saveSessions();
+                await saveSessions([sessionId]);
 
                 // 删除独立会话文件 (SiYuan removeFile 路径相对于 workspace root)
                 try {
@@ -8776,7 +8805,7 @@
 
                 // 过滤掉要删除的会话
                 sessions = sessions.filter(s => !sessionIds.includes(s.id));
-                await saveSessions();
+                await saveSessions(sessionIds);
 
                 // 批量删除独立会话文件
                 for (const id of sessionIds) {
@@ -8823,23 +8852,53 @@
                 return;
             }
 
-            // 临时保存当前消息
-            const originalMessages = messages;
-            const originalSessionId = currentSessionId;
-
-            // 临时设置会话消息
-            messages = sessionMessages;
-            currentSessionId = sessionId;
-
-            // 打开保存对话框（传入 null 表示保存整个会话）
-            await openSaveToNoteDialog(null);
-
-            // 恢复原来的消息和会话ID
-            messages = originalMessages;
-            currentSessionId = originalSessionId;
+            const session = sessions.find(item => item.id === sessionId);
+            const snapshot = createSessionExportSnapshot(
+                sessionId,
+                session?.title || generateSessionTitle(),
+                sessionMessages
+            );
+            await openSaveToNoteDialog(null, snapshot);
         } catch (error) {
             console.error('Save session to note error:', error);
             pushErrMsg('加载会话失败: ' + error.message);
+        }
+    }
+
+    async function handleExportSessionFile(sessionId: string) {
+        try {
+            const session = sessions.find(item => item.id === sessionId);
+            if (!session) throw new Error('会话不存在');
+            const blob =
+                (await getPluginFileBlob(getSessionPath(sessionId))) ||
+                (await getPluginFileBlob(getLegacySessionPath(sessionId)));
+            if (!blob) throw new Error('会话文件不存在');
+            const sessionData = JSON.parse(await blob.text());
+            const markdownBody = buildSessionMarkdown(
+                sessionData?.messages || [],
+                getSessionExportContext()
+            );
+            if (!markdownBody.trim()) throw new Error('会话没有可导出的消息');
+
+            const markdown = [
+                `# ${session.title}`,
+                `> 创建时间：${new Date(session.createdAt).toLocaleString('zh-CN')}`,
+                `> 更新时间：${new Date(session.updatedAt).toLocaleString('zh-CN')}`,
+                markdownBody,
+            ].join('\n\n');
+            const downloadBlob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+            const url = URL.createObjectURL(downloadBlob);
+            const anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.download = `${sanitizeDocumentName(session.title)}.md`;
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+            URL.revokeObjectURL(url);
+            pushMsg(t('aiSidebar.session.exportSuccess'));
+        } catch (error) {
+            console.error('Export session file error:', error);
+            pushErrMsg(`导出失败: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
 
@@ -8864,14 +8923,27 @@
     }
 
     // 保存到笔记相关函数
-    async function openSaveToNoteDialog(messageIndex: number | null = null) {
-        if (messages.length === 0) {
+    async function openSaveToNoteDialog(
+        messageIndex: number | null = null,
+        snapshot?: SessionExportSnapshot
+    ) {
+        const currentSession = sessions.find(s => s.id === currentSessionId);
+        const sourceMessages = snapshot?.messages || messages;
+        const messagesToExport =
+            messageIndex !== null
+                ? [sourceMessages[messageIndex]].filter(Boolean)
+                : sourceMessages.filter(
+                      message => message?.role === 'user' || message?.role === 'assistant'
+                  );
+        if (messagesToExport.length === 0) {
             pushErrMsg(t('aiSidebar.errors.emptySession'));
             return;
         }
-
-        // 保存消息索引
-        saveMessageIndex = messageIndex;
+        pendingSessionExport = createSessionExportSnapshot(
+            snapshot?.sessionId || currentSessionId,
+            snapshot?.title || currentSession?.title || generateSessionTitle(),
+            messagesToExport
+        );
 
         // 初始化对话框数据
         saveDocumentName = '';
@@ -8970,6 +9042,11 @@
 
     function closeSaveToNoteDialog() {
         isSaveToNoteDialogOpen = false;
+        pendingSessionExport = null;
+        if (savePathSearchTimeout) {
+            clearTimeout(savePathSearchTimeout);
+            savePathSearchTimeout = null;
+        }
     }
 
     // 切换到当前文档路径
@@ -9126,98 +9203,27 @@
 
         try {
             // 生成文档名称
+            const exportSnapshot = pendingSessionExport;
+            if (!exportSnapshot) {
+                pushErrMsg(t('aiSidebar.errors.emptySession'));
+                return;
+            }
+
             let docName = saveDocumentName.trim();
             if (!docName) {
-                // 优先使用当前会话的标题
-                const currentSession = sessions.find(s => s.id === currentSessionId);
-                if (currentSession) {
-                    docName = currentSession.title;
-                } else {
-                    // 如果没有会话，才使用默认生成方法
-                    docName = generateSessionTitle();
-                }
+                docName = exportSnapshot.title || generateSessionTitle();
             }
+            docName = sanitizeDocumentName(docName, generateSessionTitle());
 
             // 生成 Markdown 内容（不需要一级标题，思源会自动使用文档名作为标题）
-            let markdown = '';
-
-            // 确定要保存的消息
-            const messagesToSave =
-                saveMessageIndex !== null
-                    ? [messages[saveMessageIndex]].filter(m => m !== undefined && m !== null)
-                    : messages.filter(
-                          m =>
-                              m &&
-                              m !== null &&
-                              m !== undefined &&
-                              (m.role === 'user' || m.role === 'assistant')
-                      );
-
-            for (const message of messagesToSave) {
-                if (!message || !message.role) {
-                    continue;
-                }
-                if (message.role === 'user') {
-                    markdown += `## User\n\n`;
-                } else if (message.role === 'assistant') {
-                    markdown += `## AI\n\n`;
-                } else {
-                    // 跳过其他类型的消息（如 system, tool）
-                    continue;
-                }
-
-                // 处理消息内容（包括多模型响应）
-                const content = getActualMessageContent(message);
-                markdown += content + '\n\n';
-
-                // 如果有多模型响应，添加所有模型的回答
-                if (message.multiModelResponses && message.multiModelResponses.length > 0) {
-                    markdown += `### 多模型对比\n\n`;
-                    for (const response of message.multiModelResponses) {
-                        const selectedMark = response.isSelected ? ' ✅' : '';
-                        markdown += `#### ${response.modelName}${selectedMark}\n\n`;
-                        if (response.thinking) {
-                            markdown += `**思考过程：**\n\n${response.thinking}\n\n`;
-                        }
-                        if (response.content) {
-                            markdown += `${getMessageText(response.content)}\n\n`;
-                        }
-                        if (response.error) {
-                            markdown += `**错误：** ${response.error}\n\n`;
-                        }
-                    }
-                }
-
-                // 如果有附件，添加附件信息
-                if (message.attachments && message.attachments.length > 0) {
-                    markdown += `### 附件\n\n`;
-                    for (const attachment of message.attachments) {
-                        if (attachment.type === 'image') {
-                            markdown += `![${attachment.name}](${attachment.url || attachment.data})\n\n`;
-                        } else {
-                            markdown += `- ${attachment.name}\n`;
-                        }
-                    }
-                    markdown += '\n';
-                }
-
-                // 如果有上下文文档
-                if (message.contextDocuments && message.contextDocuments.length > 0) {
-                    markdown += `### 相关上下文\n\n`;
-                    for (const doc of message.contextDocuments) {
-                        markdown += `- [${doc.title}](siyuan://blocks/${doc.id})\n`;
-                    }
-                    markdown += '\n';
-                }
-            }
+            const markdown = buildSessionMarkdown(
+                exportSnapshot.messages,
+                getSessionExportContext()
+            );
 
             // 检查是否有内容需要保存
             if (!markdown.trim()) {
-                const errorMsg =
-                    messagesToSave.length === 0
-                        ? '当前会话没有可保存的消息（user/assistant）'
-                        : '消息内容为空，无法保存';
-                pushErrMsg(errorMsg);
+                pushErrMsg('消息内容为空，无法保存');
                 return;
             }
 
@@ -9225,6 +9231,9 @@
             const sanitizedPath = toRelativePath(savePath);
             const fullPath = `${sanitizedPath}/${docName}`.replace(/\/+/g, '/');
             const docId = await createDocWithMd(saveNotebookId, fullPath, markdown);
+            if (!docId) {
+                throw new Error('思源未返回新建文档 ID');
+            }
 
             // 记住上次选择
             settings.exportLastPath = savePath;
@@ -9911,11 +9920,10 @@
 
         // 更新选中标记并优化名称显示
         msg.multiModelResponses = msg.multiModelResponses.map((r, i) => {
-            const cleanName = (r.modelName || '').toString().replace(/^ ✅/, '');
             return {
                 ...r,
                 isSelected: i === responseIndex,
-                modelName: i === responseIndex ? ' ✅' + cleanName : cleanName,
+                modelName: cleanModelName(r.modelName),
             };
         });
 
@@ -11262,6 +11270,7 @@
             on:new={newSession}
             on:update={e => handleSessionUpdate(e.detail.sessions)}
             on:saveToNote={e => handleSaveSessionToNote(e.detail.sessionId)}
+            on:exportFile={e => handleExportSessionFile(e.detail.sessionId)}
         />
         <button class="ai-sidebar__toolbar-btn" title={t('aiSidebar.actions.copyAllChat')} on:click={copyAsMarkdown}>
             <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>

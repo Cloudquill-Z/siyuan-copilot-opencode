@@ -7,8 +7,11 @@ import { fetchPost, fetchSyncPost, IWebSocketData, openTab, Constants, platformU
 
 
 export async function request(url: string, data: any, returnType: 'data' | 'response' = 'data') {
-    let response: IWebSocketData = await fetchSyncPost(url, data);
-    let res = response.code === 0 ? response.data : null;
+    const response: IWebSocketData = await fetchSyncPost(url, data);
+    if (response.code !== 0) {
+        throw new Error(response.msg || `SiYuan API request failed (${response.code}): ${url}`);
+    }
+    const res = response.data;
     return returnType === 'data' ? res : response;
 }
 

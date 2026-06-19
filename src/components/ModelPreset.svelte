@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { createEventDispatcher, tick, onMount } from 'svelte';
+    import { createEventDispatcher, tick, onMount, onDestroy } from 'svelte';
     import { t } from '../utils/i18n';
     import { pushMsg } from '@/api';
     import { confirm } from 'siyuan';
@@ -30,6 +30,18 @@
 
     // 预设列表弹窗
     let isPresetListOpen = false;
+    let isDestroyed = false;
+    const outsideClickTimers = new Set<ReturnType<typeof setTimeout>>();
+
+    function scheduleOutsideClickListener() {
+        const timer = setTimeout(() => {
+            outsideClickTimers.delete(timer);
+            if (!isDestroyed && isPresetListOpen) {
+                document.addEventListener('click', closeOnOutsideClick);
+            }
+        }, 0);
+        outsideClickTimers.add(timer);
+    }
     let presetListTop = 0;
     let presetListLeft = 0;
     let buttonElement: HTMLButtonElement;
@@ -376,19 +388,11 @@
                 pushMsg(t('aiSidebar.modelSettings.presetDeleted'));
 
                 // 重新添加外部点击监听器
-                setTimeout(() => {
-                    if (isPresetListOpen) {
-                        document.addEventListener('click', closeOnOutsideClick);
-                    }
-                }, 0);
+                scheduleOutsideClickListener();
             },
             () => {
                 // 用户取消删除，重新添加外部点击监听器
-                setTimeout(() => {
-                    if (isPresetListOpen) {
-                        document.addEventListener('click', closeOnOutsideClick);
-                    }
-                }, 0);
+                scheduleOutsideClickListener();
             }
         );
     }
@@ -589,9 +593,7 @@
         await resetToAppliedSettings();
         isPresetListOpen = true;
         updatePresetListPosition();
-        setTimeout(() => {
-            document.addEventListener('click', closeOnOutsideClick);
-        }, 0);
+        scheduleOutsideClickListener();
     }
 
     // 打开设置面板
@@ -651,22 +653,14 @@
                     await saveAsPreset();
                 }
                 // 重新添加外部点击监听器
-                setTimeout(() => {
-                    if (isPresetListOpen) {
-                        document.addEventListener('click', closeOnOutsideClick);
-                    }
-                }, 0);
+                scheduleOutsideClickListener();
             },
             () => {
                 // 用户选择不保存，直接关闭
                 isSettingsOpen = false;
                 openPresetList();
                 // 重新添加外部点击监听器
-                setTimeout(() => {
-                    if (isPresetListOpen) {
-                        document.addEventListener('click', closeOnOutsideClick);
-                    }
-                }, 0);
+                scheduleOutsideClickListener();
             }
         );
     }
@@ -829,6 +823,13 @@
                 }
             }
         })();
+    });
+
+    onDestroy(() => {
+        isDestroyed = true;
+        for (const timer of outsideClickTimers) clearTimeout(timer);
+        outsideClickTimers.clear();
+        document.removeEventListener('click', closeOnOutsideClick);
     });
 
     // 计算当前按钮上要显示的预设名称
