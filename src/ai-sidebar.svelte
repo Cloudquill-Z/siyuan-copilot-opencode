@@ -23,6 +23,8 @@
         getMessageText,
     } from './chat/message-content';
     import { renderMessageHtml } from './chat/message-renderer';
+    import { TaskStateController } from './chat/task-state-controller';
+    import { SessionRepository } from './chat/session-repository';
     import { getActiveEditor, openTab } from 'siyuan';
     import {
         pushMsg,
@@ -160,6 +162,7 @@
     }
 
     type ChatSession = TaskSession;
+    const sessionRepository = new SessionRepository<ChatSession>();
 
     interface SidebarSessionState {
         messages: Message[];
@@ -449,27 +452,33 @@
     const isDraftTaskId = (id: string) => id.startsWith(DRAFT_TASK_PREFIX);
     const initialDraftTaskId = createDraftTaskId();
     let activeDraftTaskId = initialDraftTaskId;
-    let activeTaskIds: string[] = [initialDraftTaskId];
-    let unreadTaskIds = new Set<string>();
-    let sessionStates: Record<string, SidebarSessionState> = {};
-    const backgroundTaskStates = new Map<string, SidebarSessionState>();
     const MAX_ACTIVE_TASK_TABS = 4;
+    const taskStateController = new TaskStateController<SidebarSessionState>(
+        () => blankTaskState(),
+        [initialDraftTaskId],
+        MAX_ACTIVE_TASK_TABS
+    );
+    let activeTaskIds: string[] = taskStateController.activeTaskIds;
+    let unreadTaskIds = taskStateController.unreadIds;
     $: currentActiveTaskId = currentSessionId || activeDraftTaskId;
+
+    function syncTaskControllerState() {
+        activeTaskIds = taskStateController.activeTaskIds;
+        unreadTaskIds = taskStateController.unreadIds;
+    }
 
     function activeTaskKey(): string {
         return currentSessionId || activeDraftTaskId;
     }
 
     function markTaskUnread(taskId: string) {
-        if (!taskId || isActiveTask(taskId) || unreadTaskIds.has(taskId)) return;
-        unreadTaskIds = new Set([...unreadTaskIds, taskId]);
+        taskStateController.markUnread(taskId, activeTaskKey());
+        syncTaskControllerState();
     }
 
     function clearTaskUnread(taskId: string) {
-        if (!taskId || !unreadTaskIds.has(taskId)) return;
-        const next = new Set(unreadTaskIds);
-        next.delete(taskId);
-        unreadTaskIds = next;
+        taskStateController.clearUnread(taskId);
+        syncTaskControllerState();
     }
 
     function captureActiveTaskState(): SidebarSessionState {
@@ -492,10 +501,7 @@
     function saveActiveTaskState() {
         const key = activeTaskKey();
         if (!key) return;
-        sessionStates = {
-            ...sessionStates,
-            [key]: captureActiveTaskState(),
-        };
+        taskStateController.saveForeground(key, captureActiveTaskState());
     }
 
     function applyTaskState(state: SidebarSessionState) {
@@ -533,13 +539,8 @@
     }
 
     function ensureActiveTaskTab(taskId: string) {
-        if (!taskId || activeTaskIds.includes(taskId)) return;
-        let next = [...activeTaskIds, taskId];
-        if (next.length > MAX_ACTIVE_TASK_TABS) {
-            const removableIndex = next.findIndex(id => id !== activeTaskKey() && !activeSessions.has(id));
-            next = next.filter((_, index) => index !== (removableIndex >= 0 ? removableIndex : 0));
-        }
-        activeTaskIds = next;
+        taskStateController.ensureTab(taskId, activeTaskKey(), activeSessions);
+        syncTaskControllerState();
     }
 
     function replaceActiveDraftWithTask(taskId: string) {
@@ -548,12 +549,8 @@
             ensureActiveTaskTab(taskId);
             return;
         }
-        if (sessionStates[draftId]) {
-            const nextStates = { ...sessionStates, [taskId]: sessionStates[draftId] };
-            delete nextStates[draftId];
-            sessionStates = nextStates;
-        }
-        activeTaskIds = Array.from(new Set(activeTaskIds.map(id => id === draftId ? taskId : id)));
+        taskStateController.replaceDraft(draftId, taskId);
+        syncTaskControllerState();
         activeDraftTaskId = '';
         clearTaskUnread(draftId);
     }
@@ -569,30 +566,15 @@
     }
 
     function getStoredTaskState(taskId: string): SidebarSessionState {
-        return backgroundTaskStates.get(taskId) || sessionStates[taskId] || blankTaskState();
+        return taskStateController.getState(taskId);
     }
 
     function updateStoredTaskState(taskId: string, updater: (state: SidebarSessionState) => SidebarSessionState) {
-        const nextState = updater(getStoredTaskState(taskId));
-        if (isActiveTask(taskId)) {
-            sessionStates = {
-                ...sessionStates,
-                [taskId]: nextState,
-            };
-            return;
-        }
-        backgroundTaskStates.set(taskId, nextState);
+        taskStateController.updateState(taskId, isActiveTask(taskId), updater);
     }
 
     function flushBackgroundTaskState(taskId: string): SidebarSessionState | null {
-        const state = backgroundTaskStates.get(taskId);
-        if (!state) return null;
-        backgroundTaskStates.delete(taskId);
-        sessionStates = {
-            ...sessionStates,
-            [taskId]: state,
-        };
-        return state;
+        return taskStateController.flushBackground(taskId);
     }
 
     function appendStreamingTextForTask(taskId: string, chunk: string) {
@@ -5100,10 +5082,7 @@
         setController(currentSessionId, new AbortController());
         const runTaskId = currentSessionId;
         const runController = sessionControllers.get(runTaskId);
-        sessionStates = {
-            ...sessionStates,
-            [runTaskId]: captureActiveTaskState(),
-        };
+        taskStateController.saveForeground(runTaskId, captureActiveTaskState());
         const diagnosticLogger = await startDiagnosticLog(effectiveUserContent, modelConfig);
 
         try {
@@ -7918,14 +7897,10 @@
     // 会话管理函数
     async function loadSessions() {
         try {
-            let data = await loadJsonFile<{ sessions?: ChatSession[] } | null>(CHAT_SESSIONS_PATH, null);
-            if (!data) {
-                data = await plugin.loadData('chat-sessions.json');
-                if (data?.sessions) {
-                    await saveJsonFile(CHAT_SESSIONS_PATH, data);
-                }
-            }
-            sessions = (data?.sessions || []).map(session => ({
+            const loadedSessions = await sessionRepository.loadMetadataWithLegacy(
+                () => plugin.loadData('chat-sessions.json')
+            );
+            sessions = loadedSessions.map(session => ({
                 ...session,
                 status: session.status || 'completed',
             }));
@@ -7938,38 +7913,7 @@
 
     async function saveSessions(removedIds: string[] = []) {
         try {
-            // 只保存 metadata 到 chat-sessions.json
-            const metadata = sessions.map(s => {
-                // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                const { messages, ...rest } = s;
-                return {
-                    ...rest,
-                    status: activeSessions.has(s.id) ? 'running' : (s.status || 'completed'),
-                    messageCount:
-                        s.messageCount ||
-                        (s.messages ? s.messages.filter(m => m.role !== 'system').length : 0),
-                };
-            });
-            await mutateSessionMetadata<ChatSession>(
-                async () => {
-                    const latest = await loadJsonFile<{ sessions?: ChatSession[] }>(
-                        CHAT_SESSIONS_PATH,
-                        { sessions: [] }
-                    );
-                    return latest.sessions || [];
-                },
-                async next => saveJsonFile(CHAT_SESSIONS_PATH, { sessions: next }),
-                latest => {
-                    const removed = new Set(removedIds);
-                    const localIds = new Set(metadata.map(item => item.id));
-                    return [
-                        ...metadata.filter(item => !removed.has(item.id)),
-                        ...latest.filter(
-                            item => !removed.has(item.id) && !localIds.has(item.id)
-                        ),
-                    ];
-                }
-            );
+            await sessionRepository.saveMetadata(sessions, activeSessions, removedIds);
         } catch (error) {
             console.error('Save sessions error:', error);
             pushErrMsg(t('aiSidebar.errors.saveSessionFailed'));
@@ -8052,24 +7996,7 @@
                     // 1. 保存 metadata 列表
                     await saveSessions();
 
-                    // 2. 将消息中的 Blob URL 转换为 path 以便永久存储
-                    const messagesToSave = messages.map(msg => ({
-                        ...msg,
-                        attachments: msg.attachments?.map(att => ({
-                            ...att,
-                            data: att.path ? '' : att.data, // 如果有 path，清空 data
-                        })),
-                        generatedImages: msg.generatedImages?.map(img => ({
-                            ...img,
-                            data: '', // 不再这里存 base64
-                        })),
-                    }));
-
-                    // 3. 保存完整内容到独立文件
-                    const sessionPath = getSessionPath(currentSessionId);
-                    const sessionContent = JSON.stringify({ messages: messagesToSave }, null, 2);
-                    const sessionBlob = new Blob([sessionContent], { type: 'application/json' });
-                    await putFile(sessionPath, false, sessionBlob);
+                    await sessionRepository.saveMessages(currentSessionId, messages);
                 } else {
                     // 如果会话不存在，创建为新会话
                     const userContent = messages.find(m => m.role === 'user')?.content || '';
@@ -8088,22 +8015,7 @@
                     replaceActiveDraftWithTask(newSession.id);
                     await saveSessions();
 
-                    // 保存完整内容
-                    const messagesToSave = messages.map(msg => ({
-                        ...msg,
-                        attachments: msg.attachments?.map(att => ({
-                            ...att,
-                            data: att.path ? '' : att.data,
-                        })),
-                        generatedImages: msg.generatedImages?.map(img => ({
-                            ...img,
-                            data: '',
-                        })),
-                    }));
-                    const sessionPath = getSessionPath(currentSessionId);
-                    const sessionContent = JSON.stringify({ messages: messagesToSave }, null, 2);
-                    const sessionBlob = new Blob([sessionContent], { type: 'application/json' });
-                    await putFile(sessionPath, false, sessionBlob);
+                    await sessionRepository.saveMessages(currentSessionId, messages);
                 }
             } else {
                 // 创建新会话
@@ -8124,22 +8036,7 @@
                 replaceActiveDraftWithTask(newSession.id);
                 await saveSessions();
 
-                // 保存完整内容
-                const messagesToSave = messages.map(msg => ({
-                    ...msg,
-                    attachments: msg.attachments?.map(att => ({
-                        ...att,
-                        data: att.path ? '' : att.data,
-                    })),
-                    generatedImages: msg.generatedImages?.map(img => ({
-                        ...img,
-                        data: '',
-                    })),
-                }));
-                const sessionPath = getSessionPath(newSession.id);
-                const sessionContent = JSON.stringify({ messages: messagesToSave }, null, 2);
-                const sessionBlob = new Blob([sessionContent], { type: 'application/json' });
-                await putFile(sessionPath, false, sessionBlob);
+                await sessionRepository.saveMessages(newSession.id, messages);
             }
             hasUnsavedChanges = false;
             void triggerEpisodicMemoryExtraction();
@@ -8197,22 +8094,7 @@
 
         await saveSessions();
 
-        const messagesToSave = state.messages.map(msg => ({
-            ...msg,
-            attachments: msg.attachments?.map(att => ({
-                ...att,
-                data: att.path ? '' : att.data,
-            })),
-            generatedImages: msg.generatedImages?.map(img => ({
-                ...img,
-                data: '',
-            })),
-        }));
-        const sessionBlob = new Blob(
-            [JSON.stringify({ messages: messagesToSave }, null, 2)],
-            { type: 'application/json' }
-        );
-        await putFile(getSessionPath(taskId), false, sessionBlob);
+        await sessionRepository.saveMessages(taskId, state.messages);
     }
 
     async function loadSession(sessionId: string) {
@@ -8257,10 +8139,11 @@
         }
 
         const flushedState = flushBackgroundTaskState(sessionId);
-        if (flushedState || sessionStates[sessionId]) {
+        const storedState = taskStateController.getForeground(sessionId);
+        if (flushedState || storedState) {
             currentSessionId = sessionId;
             activeDraftTaskId = '';
-            applyTaskState(flushedState || sessionStates[sessionId]);
+            applyTaskState(flushedState || storedState);
             await scrollToTop();
             return;
         }
@@ -8275,14 +8158,7 @@
                 // 加载完整内容 (使用 getFileBlob 因为 saveData 路径不一致，或者由于前缀问题)
                 // 或者继续使用 loadData 但它是相对的。
                 // 如果我们用 putFile 存了，我们也应该用对应的 read 方式。
-                const path = getSessionPath(sessionId);
-                const blob =
-                    await getPluginFileBlob(path) ||
-                    await getPluginFileBlob(getLegacySessionPath(sessionId));
-                if (!blob) throw new Error('File not found');
-                const text = await blob.text();
-                const sessionData = JSON.parse(text);
-                const loadedMessages = sessionData?.messages || [];
+                const loadedMessages = await sessionRepository.loadMessages(sessionId);
                 let sessionModified = false; // 标记会话是否被修改（需要重新保存）
 
                 // 还原图片数据 (从 path 还原为 blob url) 和文本附件数据
@@ -8582,12 +8458,8 @@
         activeDraftTaskId = draftId;
         currentSessionId = '';
         clearTaskUnread(draftId);
-        sessionStates = { ...sessionStates, [draftId]: state };
-        activeTaskIds = [...activeTaskIds, draftId];
-        if (activeTaskIds.length > MAX_ACTIVE_TASK_TABS) {
-            const removableIndex = activeTaskIds.findIndex(id => id !== draftId && !activeSessions.has(id));
-            activeTaskIds = activeTaskIds.filter((_, index) => index !== (removableIndex >= 0 ? removableIndex : 0));
-        }
+        taskStateController.addDraft(draftId, state, activeTaskKey(), activeSessions);
+        syncTaskControllerState();
         applyTaskState(state);
         contextDocuments = state.contextDocuments;
         currentSessionId = '';
@@ -8608,8 +8480,8 @@
         if (isDraftTaskId(taskId)) {
             currentSessionId = '';
             activeDraftTaskId = taskId;
-            const state = sessionStates[taskId] || blankTaskState();
-            sessionStates = { ...sessionStates, [taskId]: state };
+            const state = taskStateController.getForeground(taskId) || blankTaskState();
+            taskStateController.saveForeground(taskId, state);
             applyTaskState(state);
             return;
         }
@@ -8627,12 +8499,8 @@
         }
         const isCurrent = taskId === activeTaskKey();
         const currentIndex = activeTaskIds.indexOf(taskId);
-        activeTaskIds = activeTaskIds.filter(id => id !== taskId);
-        const nextStates = { ...sessionStates };
-        delete nextStates[taskId];
-        sessionStates = nextStates;
-        backgroundTaskStates.delete(taskId);
-        clearTaskUnread(taskId);
+        taskStateController.removeTask(taskId);
+        syncTaskControllerState();
 
         if (isCurrent) {
             const nextIndex = Math.min(Math.max(currentIndex, 0), activeTaskIds.length - 1);
@@ -8654,7 +8522,7 @@
 
                 // 删除独立会话文件 (SiYuan removeFile 路径相对于 workspace root)
                 try {
-                    await removeFile(getSessionPath(sessionId));
+                    await sessionRepository.delete(sessionId);
                 } catch (e) {
                     // 忽略错误
                 }
@@ -8662,9 +8530,8 @@
                 if (currentSessionId === sessionId) {
                     doNewSession();
                 }
-                activeTaskIds = activeTaskIds.filter(id => id !== sessionId);
-                backgroundTaskStates.delete(sessionId);
-                clearTaskUnread(sessionId);
+                taskStateController.removeTask(sessionId);
+                syncTaskControllerState();
             }
         );
     }
@@ -8690,7 +8557,7 @@
                 // 批量删除独立会话文件
                 for (const id of sessionIds) {
                     try {
-                        await removeFile(getSessionPath(id));
+                        await sessionRepository.delete(id);
                     } catch (e) {
                         // 忽略错误
                     }
@@ -8701,10 +8568,9 @@
                     doNewSession();
                 }
                 for (const id of sessionIds) {
-                    activeTaskIds = activeTaskIds.filter(taskId => taskId !== id);
-                    backgroundTaskStates.delete(id);
-                    clearTaskUnread(id);
+                    taskStateController.removeTask(id);
                 }
+                syncTaskControllerState();
 
                 pushMsg(`成功删除 ${count} 个会话`);
             }
