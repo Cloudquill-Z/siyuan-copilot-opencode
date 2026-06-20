@@ -48,6 +48,9 @@ const PROXY_SCRIPT = `
 const http = require('http');
 const https = require('https');
 const net = require('net');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { URL } = require('url');
 
 const server = http.createServer((clientReq, clientRes) => {
@@ -128,6 +131,10 @@ server.on('connect', (req, clientSocket, head) => {
 server.listen(0, '127.0.0.1', () => {
     const addr = server.address();
     const port = (addr && addr.port) || 0;
+    // Write port to a temp file so the parent can read it synchronously
+    const portFile = path.join(os.tmpdir(), 'opencode-tls-proxy-' + process.ppid + '.port');
+    try { fs.writeFileSync(portFile, String(port)); } catch {}
+    // Also signal via stdout
     process.stdout.write('PROXY_PORT=' + port + '\\n');
 });
 
@@ -137,8 +144,11 @@ process.on('SIGINT', () => { server.close(); process.exit(0); });
 
 export function startTlsProxy(): { success: boolean; port?: number; error?: string } {
     const childProcess = getNodeModule('child_process');
-    if (!childProcess) {
-        return { success: false, error: 'child_process unavailable — cannot start TLS proxy' };
+    const fs = getNodeModule('fs');
+    const os = getNodeModule('os');
+    const path = getNodeModule('path');
+    if (!childProcess || !fs || !os || !path) {
+        return { success: false, error: 'Node modules unavailable — cannot start TLS proxy' };
     }
 
     stopTlsProxy();
@@ -151,55 +161,49 @@ export function startTlsProxy(): { success: boolean; port?: number; error?: stri
         isWindowsRuntime()
     );
 
+    // Temp file for the proxy to write its port to
+    const portFile = path.join(os.tmpdir(), `opencode-tls-proxy-${process.pid}.port`);
+    try { fs.unlinkSync(portFile); } catch {}
+
     try {
         const child = childProcess.spawn('node', ['-e', PROXY_SCRIPT], {
             env: expandedEnv,
             stdio: ['ignore', 'pipe', 'pipe'],
+            detached: true,
         });
 
-        return new Promise((resolve) => {
-            let resolved = false;
-            let stdoutBuffer = '';
-            const finish = (result: { success: boolean; port?: number; error?: string }) => {
-                if (resolved) return;
-                resolved = true;
-                resolve(result);
-            };
-
-            const timer = setTimeout(() => {
-                if (!resolved) {
-                    finish({ success: false, error: 'TLS proxy did not start within 5s' });
+        // Block synchronously for up to 3 seconds waiting for the port file
+        const deadline = Date.now() + 3000;
+        let proxyPort = 0;
+        while (Date.now() < deadline) {
+            try {
+                if (fs.existsSync(portFile)) {
+                    const content = fs.readFileSync(portFile, 'utf8').trim();
+                    const parsed = parseInt(content, 10);
+                    if (parsed > 0) {
+                        proxyPort = parsed;
+                        break;
+                    }
                 }
-            }, 5000);
+            } catch {}
+            // Small sleep to avoid 100% CPU
+            const start = Date.now();
+            while (Date.now() - start < 30) { /* busy wait */ }
+        }
 
-            child.stdout?.on('data', (data: Buffer) => {
-                stdoutBuffer += data.toString();
-                const match = stdoutBuffer.match(/PROXY_PORT=(\d+)/);
-                if (match && !resolved) {
-                    clearTimeout(timer);
-                    detectedProxyPort = parseInt(match[1], 10);
-                    proxyProcess = child;
-                    finish({ success: true, port: detectedProxyPort });
-                }
-            });
+        // Clean up the port file
+        try { fs.unlinkSync(portFile); } catch {}
 
-            child.stderr?.on('data', (data: Buffer) => {
-                const text = data.toString().trim();
-                if (text) console.warn('[TLS Proxy]', text);
-            });
+        if (proxyPort > 0) {
+            detectedProxyPort = proxyPort;
+            proxyProcess = child;
+            try { child.unref(); } catch {}
+            return { success: true, port: proxyPort };
+        }
 
-            child.on('error', (err: Error) => {
-                clearTimeout(timer);
-                finish({ success: false, error: err.message });
-            });
-
-            child.on('exit', (code: number) => {
-                clearTimeout(timer);
-                if (!resolved) {
-                    finish({ success: false, error: `TLS proxy exited with code ${code}` });
-                }
-            });
-        }) as any;
+        // Check if process already exited
+        const stderrText = '';
+        return { success: false, error: 'TLS proxy did not start within 3s' };
     } catch (err: any) {
         return { success: false, error: err.message || String(err) };
     }
