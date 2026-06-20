@@ -44,6 +44,14 @@ export function toSessionMetadata<T extends TaskSession>(
     });
 }
 
+export function deriveSessionTitle(messages: Message[], fallback: string): string {
+    const content = messages.find(message => message.role === 'user')?.content;
+    const text = typeof content === 'string'
+        ? content
+        : content?.filter(part => part.type === 'text').map(part => part.text || '').join('\n') || '';
+    return text ? `${text.slice(0, 30)}${text.length > 30 ? '...' : ''}` : fallback;
+}
+
 export class SessionRepository<T extends TaskSession = TaskSession> {
     async loadMetadataWithLegacy(
         loadLegacy?: () => Promise<{ sessions?: T[] } | null>
@@ -89,6 +97,43 @@ export class SessionRepository<T extends TaskSession = TaskSession> {
             false,
             new Blob([content], { type: 'application/json' })
         );
+    }
+
+    async upsertConversation(options: {
+        sessions: T[];
+        sessionId: string;
+        messages: Message[];
+        activeSessionIds: Set<string>;
+        fallbackTitle: string;
+    }): Promise<{ sessions: T[]; created: boolean }> {
+        const latest = await this.loadMetadata();
+        const merged = [...latest];
+        const latestIds = new Set(latest.map(session => session.id));
+        for (const session of options.sessions) {
+            if (!latestIds.has(session.id)) merged.push(session);
+        }
+
+        const now = Date.now();
+        const messageCount = options.messages.filter(message => message.role !== 'system').length;
+        const existing = merged.find(session => session.id === options.sessionId);
+        const created = !existing;
+        if (existing) {
+            existing.updatedAt = now;
+            existing.messageCount = messageCount;
+        } else {
+            merged.unshift({
+                id: options.sessionId,
+                title: deriveSessionTitle(options.messages, options.fallbackTitle),
+                messageCount,
+                createdAt: now,
+                updatedAt: now,
+                status: 'completed',
+            } as T);
+        }
+
+        await this.saveMetadata(merged, options.activeSessionIds);
+        await this.saveMessages(options.sessionId, options.messages);
+        return { sessions: merged, created };
     }
 
     async loadMessages(sessionId: string): Promise<Message[]> {

@@ -5557,63 +5557,17 @@
         isSavingSession = true;
 
         try {
-            const now = Date.now();
-
-            // 【修复】在保存前重新加载最新的会话列表，避免多页签覆盖问题
-            await loadSessions();
-
-            if (currentSessionId) {
-                // 更新现有会话
-                const session = sessions.find(s => s.id === currentSessionId);
-                if (session) {
-                    session.updatedAt = now;
-                    session.messageCount = messages.filter(m => m.role !== 'system').length;
-
-                    // 1. 保存 metadata 列表
-                    await saveSessions();
-
-                    await sessionRepository.saveMessages(currentSessionId, messages);
-                } else {
-                    // 如果会话不存在，创建为新会话
-                    const userContent = messages.find(m => m.role === 'user')?.content || '';
-                    const newSession: ChatSession = {
-                        id: currentSessionId,
-                        title:
-                            typeof userContent === 'string'
-                                ? userContent.substring(0, 30)
-                                : generateSessionTitle(),
-                        messageCount: messages.filter(m => m.role !== 'system').length,
-                        createdAt: now,
-                        updatedAt: now,
-                        status: 'completed',
-                    };
-                    sessions = [newSession, ...sessions];
-                    replaceActiveDraftWithTask(newSession.id);
-                    await saveSessions();
-
-                    await sessionRepository.saveMessages(currentSessionId, messages);
-                }
-            } else {
-                // 创建新会话
-                const userContent = messages.find(m => m.role === 'user')?.content || '';
-                const newSession: ChatSession = {
-                    id: createSessionId(),
-                    title:
-                        typeof userContent === 'string'
-                            ? userContent.substring(0, 30)
-                            : generateSessionTitle(),
-                    messageCount: messages.filter(m => m.role !== 'system').length,
-                    createdAt: now,
-                    updatedAt: now,
-                    status: 'completed',
-                };
-                sessions = [newSession, ...sessions];
-                currentSessionId = newSession.id;
-                replaceActiveDraftWithTask(newSession.id);
-                await saveSessions();
-
-                await sessionRepository.saveMessages(newSession.id, messages);
-            }
+            const sessionId = currentSessionId || createSessionId();
+            const result = await sessionRepository.upsertConversation({
+                sessions,
+                sessionId,
+                messages,
+                activeSessionIds: activeSessions,
+                fallbackTitle: generateSessionTitle(),
+            });
+            sessions = result.sessions;
+            if (result.created) replaceActiveDraftWithTask(sessionId);
+            currentSessionId = sessionId;
             hasUnsavedChanges = false;
             void triggerEpisodicMemoryExtraction();
 
@@ -5646,31 +5600,14 @@
             return;
         }
 
-        const now = Date.now();
-        await loadSessions();
-        let session = sessions.find(s => s.id === taskId);
-        if (session) {
-            session.updatedAt = now;
-            session.messageCount = state.messages.filter(m => m.role !== 'system').length;
-        } else {
-            const userContent = state.messages.find(m => m.role === 'user')?.content || '';
-            session = {
-                id: taskId,
-                title:
-                    typeof userContent === 'string'
-                        ? userContent.substring(0, 30)
-                        : taskId.slice(0, 8),
-                messageCount: state.messages.filter(m => m.role !== 'system').length,
-                createdAt: now,
-                updatedAt: now,
-                status: 'completed',
-            };
-            sessions = [session, ...sessions];
-        }
-
-        await saveSessions();
-
-        await sessionRepository.saveMessages(taskId, state.messages);
+        const result = await sessionRepository.upsertConversation({
+            sessions,
+            sessionId: taskId,
+            messages: state.messages,
+            activeSessionIds: activeSessions,
+            fallbackTitle: taskId.slice(0, 8),
+        });
+        sessions = result.sessions;
     }
 
     async function loadSession(sessionId: string) {
