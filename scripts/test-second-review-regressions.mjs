@@ -40,6 +40,11 @@ const putFileBlock = apiSource.slice(apiSource.indexOf('export async function pu
 assert.match(putFileBlock, /throw new Error\(/, 'putFile must throw when the kernel rejects a write');
 
 const sidebarSource = await readFile(new URL('../src/ai-sidebar.svelte', import.meta.url), 'utf8');
+assert.match(
+    sidebarSource,
+    /\$:\s*currentReactiveModelConfig\s*=\s*getLatestCurrentModelConfig\(\s*settings,\s*providers,\s*currentProvider,\s*currentModelId\s*\)/,
+    'Svelte must see every model-state dependency or thinking controls stay disabled after async settings load'
+);
 const saveSessionsBlock = sidebarSource.slice(sidebarSource.indexOf('async function saveSessions'), sidebarSource.indexOf('function generateSessionTitle'));
 assert.match(saveSessionsBlock, /throw error/, 'metadata write failures must propagate to saveCurrentSession');
 const saveCurrentBlock = sidebarSource.slice(sidebarSource.indexOf('async function saveCurrentSession'), sidebarSource.indexOf('async function saveTaskStateSession'));

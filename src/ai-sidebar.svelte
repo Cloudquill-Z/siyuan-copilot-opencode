@@ -1894,19 +1894,32 @@
         return findModelById(providerConfig.models || [], currentModelId);
     }
 
-    function getLatestCurrentModelConfig(): any {
-        if (!currentProvider || !currentModelId) return null;
-        const configuredProviders = settings.aiProviders || {};
+    function getLatestCurrentModelConfig(
+        currentSettings: any,
+        currentProviders: Record<string, any>,
+        providerId: string,
+        modelId: string
+    ): any {
+        if (!providerId || !modelId) return null;
+        const configuredProviders = currentSettings.aiProviders || {};
         const providerConfig =
             configuredProviders.customProviders?.find(
-                (provider: any) => provider.id === currentProvider
+                (provider: any) => provider.id === providerId
             ) ||
-            configuredProviders[currentProvider] ||
-            getCurrentProviderConfig();
-        return findModelById(providerConfig?.models || [], currentModelId);
+            configuredProviders[providerId] ||
+            currentProviders[providerId] ||
+            currentProviders.customProviders?.find(
+                (provider: any) => provider.id === providerId
+            );
+        return findModelById(providerConfig?.models || [], modelId);
     }
 
-    $: currentReactiveModelConfig = getLatestCurrentModelConfig();
+    $: currentReactiveModelConfig = getLatestCurrentModelConfig(
+        settings,
+        providers,
+        currentProvider,
+        currentModelId
+    );
     $: showThinkingToggle = Boolean(currentReactiveModelConfig?.capabilities?.thinking);
     $: isThinkingModeEnabled =
         showThinkingToggle && Boolean(currentReactiveModelConfig?.thinkingEnabled);
