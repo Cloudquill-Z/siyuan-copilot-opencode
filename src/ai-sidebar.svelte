@@ -2639,218 +2639,32 @@
         return findModelById(providerConfig.models || [], currentModelId);
     }
 
-    // 思考模式状态（响应式）
-    // 确保追踪 currentProvider、currentModelId 和 providers 的变化
-    $: isThinkingModeEnabled = (() => {
-        // 确保读取最新的 providers 数据
-        if (!currentProvider || !currentModelId) {
-            return false;
-        }
+    function getLatestCurrentModelConfig(): any {
+        if (!currentProvider || !currentModelId) return null;
+        const configuredProviders = settings.aiProviders || {};
+        const providerConfig =
+            configuredProviders.customProviders?.find(
+                (provider: any) => provider.id === currentProvider
+            ) ||
+            configuredProviders[currentProvider] ||
+            getCurrentProviderConfig();
+        return findModelById(providerConfig?.models || [], currentModelId);
+    }
 
-        // 从 settings 中读取最新的配置，确保数据是最新的
-        const providerConfig = (() => {
-            // 检查是否是自定义平台
-            const customProvider = settings.aiProviders?.customProviders?.find(
-                (p: any) => p.id === currentProvider
-            );
-            if (customProvider) {
-                return customProvider;
-            }
-
-            // 检查是否是内置平台
-            if (settings.aiProviders?.[currentProvider]) {
-                return settings.aiProviders[currentProvider];
-            }
-
-            // 回退到 providers 对象
-            if (providers[currentProvider] && !Array.isArray(providers[currentProvider])) {
-                return providers[currentProvider];
-            }
-
-            if (providers.customProviders && Array.isArray(providers.customProviders)) {
-                return providers.customProviders.find((p: any) => p.id === currentProvider);
-            }
-
-            return null;
-        })();
-
-        if (!providerConfig) {
-            return false;
-        }
-
-        const modelConfig = providerConfig.models?.find((m: any) => m.id === currentModelId);
-        // 只有当模型支持思考能力时，才返回 thinkingEnabled 的值
-        return modelConfig?.capabilities?.thinking ? modelConfig.thinkingEnabled || false : false;
-    })();
-
-    // 联网模式状态（响应式）
-    $: isWebSearchModeEnabled = (() => {
-        if (!currentProvider || !currentModelId) {
-            return false;
-        }
-
-        const providerConfig = (() => {
-            const customProvider = settings.aiProviders?.customProviders?.find(
-                (p: any) => p.id === currentProvider
-            );
-            if (customProvider) {
-                return customProvider;
-            }
-
-            if (settings.aiProviders?.[currentProvider]) {
-                return settings.aiProviders[currentProvider];
-            }
-
-            if (providers[currentProvider] && !Array.isArray(providers[currentProvider])) {
-                return providers[currentProvider];
-            }
-
-            if (providers.customProviders && Array.isArray(providers.customProviders)) {
-                return providers.customProviders.find((p: any) => p.id === currentProvider);
-            }
-
-            return null;
-        })();
-
-        if (!providerConfig) {
-            return false;
-        }
-
-        const modelConfig = providerConfig.models?.find((m: any) => m.id === currentModelId);
-        return modelConfig?.capabilities?.webSearch ? modelConfig.webSearchEnabled || false : false;
-    })();
-
-    // 是否显示思考模式按钮（只有支持思考的模型才显示）
-    $: showThinkingToggle = (() => {
-        if (!currentProvider || !currentModelId) {
-            return false;
-        }
-
-        const providerConfig = (() => {
-            const customProvider = settings.aiProviders?.customProviders?.find(
-                (p: any) => p.id === currentProvider
-            );
-            if (customProvider) {
-                return customProvider;
-            }
-
-            if (settings.aiProviders?.[currentProvider]) {
-                return settings.aiProviders[currentProvider];
-            }
-
-            if (providers[currentProvider] && !Array.isArray(providers[currentProvider])) {
-                return providers[currentProvider];
-            }
-
-            if (providers.customProviders && Array.isArray(providers.customProviders)) {
-                return providers.customProviders.find((p: any) => p.id === currentProvider);
-            }
-
-            return null;
-        })();
-
-        if (!providerConfig) {
-            return false;
-        }
-
-        const modelConfig = providerConfig.models?.find((m: any) => m.id === currentModelId);
-        return modelConfig?.capabilities?.thinking || false;
-    })();
-
-    // 是否显示联网模式按钮（只有 Gemini 模型支持联网）
-    $: showWebSearchToggle = (() => {
-        if (!currentProvider || !currentModelId) {
-            return false;
-        }
-
-        // 只有模型名称以 gemini 开头的模型显示联网搜索按钮
-        if (!currentModelId.toLowerCase().startsWith('gemini')) {
-            return false;
-        }
-
-        const providerConfig = (() => {
-            const customProvider = settings.aiProviders?.customProviders?.find(
-                (p: any) => p.id === currentProvider
-            );
-            if (customProvider) {
-                return customProvider;
-            }
-
-            if (settings.aiProviders?.[currentProvider]) {
-                return settings.aiProviders[currentProvider];
-            }
-
-            if (providers[currentProvider] && !Array.isArray(providers[currentProvider])) {
-                return providers[currentProvider];
-            }
-
-            if (providers.customProviders && Array.isArray(providers.customProviders)) {
-                return providers.customProviders.find((p: any) => p.id === currentProvider);
-            }
-
-            return null;
-        })();
-
-        if (!providerConfig) {
-            return false;
-        }
-
-        const modelConfig = providerConfig.models?.find((m: any) => m.id === currentModelId);
-        return modelConfig?.capabilities?.webSearch || false;
-    })();
-
-    // 是否显示思考程度选择器（OpenCode 原生支持所有思考模型的 reasoningEffort）
-    $: showThinkingEffortSelector = (() => {
-        if (!isThinkingModeEnabled || !currentModelId) {
-            return false;
-        }
-        return true;
-    })();
-
-    // 当前模型是否是 Gemini 模型（用于决定是否显示"默认"选项）
-    $: isCurrentModelGemini = currentModelId
-        ? isSupportedThinkingGeminiModel(currentModelId)
-        : false;
-
-    // 当前模型是否是 Gemini 3 系列（用于限制思考程度选项）
-    $: isCurrentModelGemini3 = currentModelId ? isGemini3Model(currentModelId) : false;
-
-    // 当前思考程度设置
-    $: currentThinkingEffort = (() => {
-        if (!currentProvider || !currentModelId) {
-            return 'low' as ThinkingEffort;
-        }
-
-        const providerConfig = (() => {
-            const customProvider = settings.aiProviders?.customProviders?.find(
-                (p: any) => p.id === currentProvider
-            );
-            if (customProvider) {
-                return customProvider;
-            }
-
-            if (settings.aiProviders?.[currentProvider]) {
-                return settings.aiProviders[currentProvider];
-            }
-
-            if (providers[currentProvider] && !Array.isArray(providers[currentProvider])) {
-                return providers[currentProvider];
-            }
-
-            if (providers.customProviders && Array.isArray(providers.customProviders)) {
-                return providers.customProviders.find((p: any) => p.id === currentProvider);
-            }
-
-            return null;
-        })();
-
-        if (!providerConfig) {
-            return 'low' as ThinkingEffort;
-        }
-
-        const modelConfig = providerConfig.models?.find((m: any) => m.id === currentModelId);
-        return (modelConfig?.thinkingEffort || 'low') as ThinkingEffort;
-    })();
+    $: currentReactiveModelConfig = getLatestCurrentModelConfig();
+    $: showThinkingToggle = Boolean(currentReactiveModelConfig?.capabilities?.thinking);
+    $: isThinkingModeEnabled =
+        showThinkingToggle && Boolean(currentReactiveModelConfig?.thinkingEnabled);
+    $: showWebSearchToggle =
+        currentModelId.toLowerCase().startsWith('gemini') &&
+        Boolean(currentReactiveModelConfig?.capabilities?.webSearch);
+    $: isWebSearchModeEnabled =
+        showWebSearchToggle && Boolean(currentReactiveModelConfig?.webSearchEnabled);
+    $: showThinkingEffortSelector = isThinkingModeEnabled;
+    $: isCurrentModelGemini = isSupportedThinkingGeminiModel(currentModelId);
+    $: isCurrentModelGemini3 = isGemini3Model(currentModelId);
+    $: currentThinkingEffort =
+        (currentReactiveModelConfig?.thinkingEffort || 'low') as ThinkingEffort;
     $: currentThinkingSelectValue = (
         showThinkingToggle && isThinkingModeEnabled ? currentThinkingEffort : 'off'
     ) as ThinkingSelectValue;
