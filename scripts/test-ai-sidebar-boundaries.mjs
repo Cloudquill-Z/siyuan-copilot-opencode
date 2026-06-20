@@ -15,7 +15,7 @@ const metrics = {
 
 // Tighten these ceilings after every extraction so the shell cannot silently
 // regain responsibilities that have moved into dedicated modules.
-assert.ok(metrics.totalLines <= 15_200, `unexpected sidebar growth: ${metrics.totalLines}`);
+assert.ok(metrics.totalLines <= 15_050, `unexpected sidebar growth: ${metrics.totalLines}`);
 assert.ok(metrics.scriptLines <= 10_900, `unexpected script growth: ${metrics.scriptLines}`);
 assert.ok(metrics.styleLines <= 2, `sidebar styles must remain external: ${metrics.styleLines}`);
 

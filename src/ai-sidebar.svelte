@@ -78,6 +78,8 @@
     import SessionManager from './components/SessionManager.svelte';
     import ModelPresetButton from './components/ModelPreset.svelte';
     import MultiModelSelector from './components/MultiModelSelector.svelte';
+    import SaveToNoteDialog from './components/chat/dialogs/SaveToNoteDialog.svelte';
+    import ImageViewer from './components/chat/dialogs/ImageViewer.svelte';
     import openCodeIconUrl from '../assets/opencode-icon.svg';
     import type { ProviderConfig } from './defaultSettings';
     import { settingsStore, updateSettings } from './stores/settings';
@@ -14982,177 +14984,37 @@
     {/if}
 
 
-    <!-- 保存到笔记对话框 -->
-    {#if isSaveToNoteDialogOpen}
-        <div class="save-to-note-dialog__overlay" on:click={closeSaveToNoteDialog}></div>
-        <div class="save-to-note-dialog">
-            <div class="save-to-note-dialog__header">
-                <h3>{t('aiSidebar.session.saveToNote.title')}</h3>
-                <button
-                    class="b3-button b3-button--text"
-                    on:click={closeSaveToNoteDialog}
-                    title={t('common.close')}
-                >
-                    <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
-                </button>
-            </div>
-
-            <!-- 如果有全局默认路径，显示切换到当前文档的按钮 -->
-            {#if hasDefaultPath && currentDocPath && currentDocNotebookId}
-                <div class="save-to-note-dialog__switch-bar">
-                    <button
-                        class="b3-button b3-button--outline"
-                        on:click={useCurrentDocPath}
-                        title={t('aiSidebar.session.saveToNote.useCurrentDoc')}
-                    >
-                        <svg class="b3-button__icon"><use xlink:href="#iconFile"></use></svg>
-                        <span>{t('aiSidebar.session.saveToNote.useCurrentDoc')}</span>
-                    </button>
-                </div>
-            {/if}
-
-            <div class="save-to-note-dialog__content">
-                <div class="save-to-note-dialog__field">
-                    <label>{t('aiSidebar.session.saveToNote.documentName')}</label>
-                    <input
-                        type="text"
-                        class="b3-text-field"
-                        bind:value={saveDocumentName}
-                        placeholder={t('aiSidebar.session.saveToNote.documentNamePlaceholder')}
-                    />
-                </div>
-
-                <div class="save-to-note-dialog__field">
-                    <label>{t('aiSidebar.session.saveToNote.notebook')}</label>
-                    <select
-                        class="b3-select"
-                        bind:value={saveNotebookId}
-                        on:change={searchSavePath}
-                    >
-                        {#if saveDialogNotebooks.length > 0}
-                            {#each saveDialogNotebooks as notebook}
-                                <option value={notebook.id}>{notebook.name}</option>
-                            {/each}
-                        {:else}
-                            <option value="">{t('common.loading')}</option>
-                        {/if}
-                    </select>
-                </div>
-
-                <div class="save-to-note-dialog__field">
-                    <label>{t('aiSidebar.session.saveToNote.path')}</label>
-                    <div class="save-to-note-dialog__path-input-wrapper">
-                        <input
-                            type="text"
-                            class="b3-text-field"
-                            bind:value={savePathSearchKeyword}
-                            on:focus={() => (showSavePathDropdown = true)}
-                            on:blur={() => {
-                                setTimeout(() => (showSavePathDropdown = false), 200);
-                            }}
-                            placeholder={t('aiSidebar.session.saveToNote.pathPlaceholder')}
-                        />
-                        <!-- 路径搜索结果下拉框 -->
-                        {#if showSavePathDropdown && (savePathSearchResults.length > 0 || isSavePathSearching)}
-                            <div class="save-to-note-dialog__path-dropdown">
-                                {#if isSavePathSearching}
-                                    <div class="save-to-note-dialog__path-loading">
-                                        {t('aiSidebar.session.saveToNote.searching')}
-                                    </div>
-                                {:else if savePathSearchResults.length > 0}
-                                    {#each savePathSearchResults as doc}
-                                        <div
-                                            class="save-to-note-dialog__path-item"
-                                            on:click={() => selectSavePath(doc.hPath)}
-                                            on:keydown={e => {
-                                                if (e.key === 'Enter') selectSavePath(doc.hPath);
-                                            }}
-                                            role="button"
-                                            tabindex="0"
-                                            title={doc.hPath}
-                                        >
-                                            <svg class="b3-button__icon">
-                                                <use xlink:href="#iconFile"></use>
-                                            </svg>
-                                            <span>{doc.hPath}</span>
-                                        </div>
-                                    {/each}
-                                {/if}
-                            </div>
-                        {/if}
-                    </div>
-                </div>
-            </div>
-
-            <div class="save-to-note-dialog__footer">
-                <label class="save-to-note-dialog__footer-option">
-                    <input type="checkbox" class="b3-switch" bind:checked={openAfterSave} />
-                    <span>{t('aiSidebar.session.saveToNote.openAfterSave')}</span>
-                </label>
-                <div class="save-to-note-dialog__footer-buttons">
-                    <button class="b3-button b3-button--cancel" on:click={closeSaveToNoteDialog}>
-                        {t('aiSidebar.session.saveToNote.cancel')}
-                    </button>
-                    <button class="b3-button b3-button--primary" on:click={confirmSaveToNote}>
-                        {t('aiSidebar.session.saveToNote.confirm')}
-                    </button>
-                </div>
-            </div>
-        </div>
-    {/if}
+    <SaveToNoteDialog
+        open={isSaveToNoteDialogOpen}
+        bind:documentName={saveDocumentName}
+        bind:notebookId={saveNotebookId}
+        bind:pathKeyword={savePathSearchKeyword}
+        bind:openAfterSave
+        notebooks={saveDialogNotebooks}
+        pathResults={savePathSearchResults}
+        pathSearching={isSavePathSearching}
+        bind:showPathDropdown={showSavePathDropdown}
+        {hasDefaultPath}
+        {currentDocPath}
+        {currentDocNotebookId}
+        onClose={closeSaveToNoteDialog}
+        onUseCurrentDoc={useCurrentDocPath}
+        onSearchPath={searchSavePath}
+        onSelectPath={selectSavePath}
+        onConfirm={confirmSaveToNote}
+    />
 
     <!-- 工具批准对话框 -->
 
-    <!-- 图片查看器 -->
-    {#if isImageViewerOpen}
-        <div class="image-viewer" class:image-viewer--fullscreen={isImageViewerFullscreen}>
-            <div class="image-viewer__header">
-                <h3 class="image-viewer__title">{currentImageName || '图片预览'}</h3>
-                <div class="image-viewer__actions">
-                    <button
-                        class="b3-button b3-button--text"
-                        on:click={() => copyImageAsPng(currentImageSrc)}
-                        title="复制图片"
-                    >
-                        <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
-                        <span>复制</span>
-                    </button>
-                    <button
-                        class="b3-button b3-button--text"
-                        on:click={() =>
-                            downloadImage(currentImageSrc, currentImageName || 'image.png')}
-                        title="下载图片"
-                    >
-                        <svg class="b3-button__icon"><use xlink:href="#iconDownload"></use></svg>
-                        <span>下载</span>
-                    </button>
-                    <button
-                        class="b3-button b3-button--text"
-                        on:click={toggleImageViewerFullscreen}
-                        title={isImageViewerFullscreen ? '退出全屏' : '全屏查看'}
-                    >
-                        <svg class="b3-button__icon">
-                            <use
-                                xlink:href={isImageViewerFullscreen
-                                    ? '#iconFullscreenExit'
-                                    : '#iconFullscreen'}
-                            ></use>
-                        </svg>
-                        <span>{isImageViewerFullscreen ? '退出全屏' : '全屏'}</span>
-                    </button>
-                    <button
-                        class="b3-button b3-button--text"
-                        on:click={closeImageViewer}
-                        title="关闭"
-                    >
-                        <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
-                    </button>
-                </div>
-            </div>
-            <div class="image-viewer__content">
-                <img src={currentImageSrc} alt={currentImageName} class="image-viewer__image" />
-            </div>
-        </div>
-    {/if}
+    <ImageViewer
+        open={isImageViewerOpen}
+        fullscreen={isImageViewerFullscreen}
+        src={currentImageSrc}
+        name={currentImageName}
+        onCopy={copyImageAsPng}
+        onDownload={downloadImage}
+        onToggleFullscreen={toggleImageViewerFullscreen}
+        onClose={closeImageViewer}
+    />
 
 </div>
