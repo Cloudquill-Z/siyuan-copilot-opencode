@@ -489,10 +489,18 @@ function formatErrorMessage(error: any): string {
     if (!error) return 'Unknown error';
     if (typeof error === 'string') return error;
     if (Array.isArray(error) && error.length > 0) {
-        return error[0]?.message || JSON.stringify(error);
+        return formatErrorMessage(error[0]) || JSON.stringify(error);
     }
     if (typeof error === 'object') {
-        return error?.message || error?.error || JSON.stringify(error);
+        return (
+            error?.message ||
+            error?.error ||
+            error?.data?.message ||
+            error?.data?.error ||
+            error?.cause?.message ||
+            error?.cause?.code ||
+            JSON.stringify(error)
+        );
     }
     return JSON.stringify(error);
 }
@@ -508,6 +516,31 @@ function isConnectionError(err: Error): boolean {
         msg.includes('econnrefused') ||
         msg.includes('econnreset') ||
         msg.includes('fetch error')
+    );
+}
+
+function isTlsCertificateError(err: Error): boolean {
+    const msg = err.message?.toLowerCase() || '';
+    return (
+        msg.includes('certificate verification error') ||
+        msg.includes('certificate') && (msg.includes('verif') || msg.includes('invalid') || msg.includes('self-signed')) ||
+        msg.includes('unable_to_verify_leaf_signature') ||
+        msg.includes('self signed certificate') ||
+        msg.includes('err_cert_authority_invalid') ||
+        msg.includes('err_cert_common_name_invalid') ||
+        msg.includes('cert_authority_invalid') ||
+        msg.includes('x509') ||
+        msg.includes('tls') && msg.includes('cert')
+    );
+}
+
+function tlsCertificateErrorMessage(serverUrl: string): string {
+    return (
+        `TLS 证书验证失败 — OpenCode 服务器无法验证上游 AI 提供商的 SSL 证书。\n` +
+        `可能原因：公司代理拦截 HTTPS、自签名证书、系统 CA 证书包过期。\n` +
+        `解决方法：在设置 → OpenCode 提供商中开启「跳过 TLS 证书验证」选项，` +
+        `然后重启 OpenCode 服务器（${serverUrl}）。` +
+        `如果你是手动启动 opencode serve，请先设置环境变量：export NODE_TLS_REJECT_UNAUTHORIZED=0`
     );
 }
 
@@ -653,6 +686,9 @@ async function openCodeFetch(
                 `Please ensure opencode is installed and running. ` +
                 `Run 'opencode serve' in your terminal, or the plugin can auto-start it.`
             );
+        }
+        if (isTlsCertificateError(err)) {
+            throw new Error(tlsCertificateErrorMessage(normalizeServerUrl(serverUrl)));
         }
         throw err;
     } finally {
@@ -1423,7 +1459,12 @@ export async function chatOpenCode(
                             source: 'event-stream',
                             error,
                         });
-                        const err = new Error(formatErrorMessage(error));
+                        const rawMessage = formatErrorMessage(error);
+                        const err = new Error(
+                            isTlsCertificateError(new Error(rawMessage))
+                                ? tlsCertificateErrorMessage(serverUrl)
+                                : rawMessage
+                        );
                         options.onError?.(err);
                         completionWatcher?.reject(err);
                     },
@@ -1740,6 +1781,8 @@ export async function chatOpenCode(
                 `Cannot connect to OpenCode. Please ensure opencode is installed and running. ` +
                 `Run 'opencode serve' or let the plugin auto-start it.`
             ));
+        } else if (isTlsCertificateError(err)) {
+            options.onError?.(new Error(tlsCertificateErrorMessage(serverUrl)));
         } else {
             options.onError?.(err);
         }

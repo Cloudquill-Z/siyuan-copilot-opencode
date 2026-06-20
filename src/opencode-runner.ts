@@ -25,6 +25,7 @@ export interface OpenCodeRunnerOptions {
     hostname?: string;
     workingDir?: string;
     env?: Record<string, string>;
+    skipTlsVerify?: boolean;
 }
 
 export interface OpenCodeRunnerResult {
@@ -44,13 +45,17 @@ export function isServeRunning(): boolean {
     return serveRunning;
 }
 
-function getExpandedEnv(options?: Pick<OpenCodeRunnerOptions, 'env'>): Record<string, string> {
+function getExpandedEnv(options?: Pick<OpenCodeRunnerOptions, 'env' | 'skipTlsVerify'>): Record<string, string> {
     const env: Record<string, string> = {
         ...(typeof process !== 'undefined' && process.env ? Object.fromEntries(
             Object.entries(process.env).filter(([, v]) => v !== undefined && v !== null) as [string, string][]
         ) : {}),
         ...(options?.env || {}),
     };
+
+    if (options?.skipTlsVerify) {
+        env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+    }
 
     return expandOpenCodeCliPath(env, isWindowsRuntime());
 }

@@ -2034,6 +2034,7 @@ export default class PluginSample extends Plugin {
             const url = new URL(serverUrl);
             const port = parseInt(url.port) || 4096;
             const hostname = url.hostname || '127.0.0.1';
+            const skipTlsVerify = settings?.aiProviders?.opencode?.skipTlsVerify !== false;
 
             try {
                 await ensureManagedOpenCodeWorkspace();
@@ -2046,6 +2047,7 @@ export default class PluginSample extends Plugin {
                 port,
                 hostname,
                 workingDir: this.getOpenCodeWorkingDir(),
+                skipTlsVerify,
             });
             if (!this.isOpenCodeInitCurrent(runId)) return { success: false, error: 'OpenCode initialization was superseded.' };
 
@@ -2087,11 +2089,13 @@ export default class PluginSample extends Plugin {
             const url = new URL(serverUrl);
             const port = parseInt(url.port) || 4096;
             const hostname = url.hostname || '127.0.0.1';
+            const skipTlsVerify = settings?.aiProviders?.opencode?.skipTlsVerify !== false;
 
             const restarted = await restartServe({
                 port,
                 hostname,
                 workingDir: this.getOpenCodeWorkingDir(),
+                skipTlsVerify,
             });
             if (!this.isOpenCodeInitCurrent(runId)) return { success: false, error: 'OpenCode initialization was superseded.' };
 

@@ -28,6 +28,7 @@ export interface ProviderConfig {
     models: ModelConfig[];
     customApiUrl?: string;
     apiKey?: string;
+    skipTlsVerify?: boolean;
     advancedConfig?: {
         customModelsUrl?: string;
         customChatUrl?: string;
@@ -51,9 +52,11 @@ export const getDefaultSettings = () => ({
         opencode: {
             serverUrl: 'http://localhost:4096',
             models: [],
+            skipTlsVerify: true,
         } as {
             serverUrl: string;
             models: ModelConfig[];
+            skipTlsVerify: boolean;
         },
         providerOrder: ['opencode'] as string[]
     } as Record<string, any>,

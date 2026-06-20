@@ -122,6 +122,7 @@ export function normalizeSettings(rawSettings: any) {
     if (!merged.aiProviders.opencode.serverUrl) {
         merged.aiProviders.opencode.serverUrl = defaults.aiProviders.opencode.serverUrl;
     }
+    merged.aiProviders.opencode.skipTlsVerify = merged.aiProviders.opencode.skipTlsVerify !== false;
     if (!Array.isArray(merged.aiProviders.opencode.models)) {
         merged.aiProviders.opencode.models = [];
     }
