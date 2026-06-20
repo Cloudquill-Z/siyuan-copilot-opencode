@@ -68,10 +68,6 @@
         openBlock,
         getBlockByID,
         getFileBlob,
-        renderSprig,
-        createDocWithMd,
-        lsNotebooks,
-        searchDocs,
         getHPathByID,
         putFile,
         removeFile,
@@ -1800,22 +1796,7 @@
     let multiModelLayout: 'card' | 'tab' = 'tab'; // 多模型布局模式：card 或 tab（会在初始化时从设置读取）
     let selectedTabIndex: number = 0; // 当前选中的页签索引
 
-    // 保存到笔记相关
-    let isSaveToNoteDialogOpen = false; // 保存到笔记对话框是否打开
-    let saveDocumentName = ''; // 保存的文档名称
-    let saveNotebookId = ''; // 保存的笔记本ID
-    let savePath = ''; // 保存的路径
-    let savePathSearchKeyword = ''; // 路径搜索关键词
-    let savePathSearchResults: any[] = []; // 路径搜索结果
-    let isSavePathSearching = false; // 是否正在搜索路径
-    let savePathSearchTimeout: number | null = null; // 路径搜索防抖
-    let showSavePathDropdown = false; // 是否显示路径下拉框
-    let currentDocPath = ''; // 当前文档路径
-    let currentDocNotebookId = ''; // 当前文档所在笔记本ID
-    let hasDefaultPath = false; // 是否有全局默认路径
-    let saveDialogNotebooks: any[] = []; // 保存对话框中的笔记本列表
-    let pendingSessionExport: SessionExportSnapshot | null = null;
-    let openAfterSave = true; // 保存后是否打开笔记
+    let saveToNoteDialog: SaveToNoteDialog;
 
     // 订阅设置变化
     let unsubscribe: () => void;
@@ -5975,342 +5956,46 @@
         await saveSessions();
     }
 
-    // 保存到笔记相关函数
+    async function resolveCurrentDocumentForExport(): Promise<{ path: string; notebookId: string }> {
+        const focusedBlockId = getFocusedBlockId();
+        if (!focusedBlockId) return { path: '/', notebookId: '' };
+        try {
+            const block = await getBlockByID(focusedBlockId);
+            if (!block) return { path: '/', notebookId: '' };
+            return {
+                path: (await getHPathByID(block.root_id)) || '/',
+                notebookId: block.box || '',
+            };
+        } catch (error) {
+            console.error('Get current document info error:', error);
+            return { path: '/', notebookId: '' };
+        }
+    }
+
     async function openSaveToNoteDialog(
         messageIndex: number | null = null,
         snapshot?: SessionExportSnapshot
     ) {
-        const currentSession = sessions.find(s => s.id === currentSessionId);
+        const currentSession = sessions.find(session => session.id === currentSessionId);
         const sourceMessages = snapshot?.messages || messages;
         const messagesToExport =
-            messageIndex !== null
-                ? [sourceMessages[messageIndex]].filter(Boolean)
-                : sourceMessages.filter(
+            messageIndex === null
+                ? sourceMessages.filter(
                       message => message?.role === 'user' || message?.role === 'assistant'
-                  );
+                  )
+                : [sourceMessages[messageIndex]].filter(Boolean);
         if (messagesToExport.length === 0) {
             pushErrMsg(t('aiSidebar.errors.emptySession'));
             return;
         }
-        pendingSessionExport = createSessionExportSnapshot(
-            snapshot?.sessionId || currentSessionId,
-            snapshot?.title || currentSession?.title || generateSessionTitle(),
-            messagesToExport
+        await saveToNoteDialog.show(
+            createSessionExportSnapshot(
+                snapshot?.sessionId || currentSessionId,
+                snapshot?.title || currentSession?.title || generateSessionTitle(),
+                messagesToExport
+            )
         );
-
-        // 初始化对话框数据
-        saveDocumentName = '';
-
-        // 解析默认路径
-        let defaultPath = settings.exportDefaultPath || '';
-        if (defaultPath) {
-            try {
-                // 使用 renderSprig 解析 sprig 语法
-                defaultPath = await renderSprig(defaultPath);
-            } catch (error) {
-                console.error('Parse default path error:', error);
-            }
-        }
-
-        // 记录是否有全局默认路径
-        hasDefaultPath = !!defaultPath;
-
-        // 获取当前文档信息
-        currentDocPath = '/';
-        currentDocNotebookId = '';
-        const focusedBlockId = getFocusedBlockId();
-        if (focusedBlockId) {
-            try {
-                const block = await getBlockByID(focusedBlockId);
-                if (block) {
-                    const hpath = await getHPathByID(block.root_id);
-                    currentDocPath = hpath;
-                    currentDocNotebookId = block.box;
-                }
-            } catch (error) {
-                console.error('Get current document info error:', error);
-            }
-        }
-
-        // 预先加载笔记本列表（在打开对话框前）
-        try {
-            const notebooks = await lsNotebooks();
-            if (notebooks?.notebooks && notebooks.notebooks.length > 0) {
-                // 过滤掉已关闭的笔记本
-                saveDialogNotebooks = notebooks.notebooks.filter(n => !n.closed);
-            } else {
-                saveDialogNotebooks = [];
-            }
-        } catch (error) {
-            console.error('Get notebooks error:', error);
-            saveDialogNotebooks = [];
-        }
-
-        // 如果全局保存文档位置为空，使用当前文档路径和笔记本（优先使用当前文档的笔记本）
-        if (!defaultPath) {
-            savePath = toRelativePath(currentDocPath);
-            // 优先使用当前文档所在笔记本（如果能取得），并验证该笔记本存在于系统中；若不存在或未取得则回退到第一个笔记本
-            // 只有当 currentDocNotebookId 有值时才赋值，否则保持为空，让后续逻辑处理
-            if (currentDocNotebookId) {
-                saveNotebookId = currentDocNotebookId;
-            }
-
-            if (saveDialogNotebooks.length > 0) {
-                if (saveNotebookId) {
-                    const found = saveDialogNotebooks.find(
-                        n => String(n.id) === String(saveNotebookId)
-                    );
-                    if (!found) {
-                        // 当前文档的笔记本ID没有在笔记本列表中找到，使用第一个作为回退
-                        saveNotebookId = saveDialogNotebooks[0].id;
-                    }
-                } else {
-                    // 没有获取到当前文档的笔记本ID，回退到第一个笔记本
-                    saveNotebookId = saveDialogNotebooks[0].id;
-                }
-            }
-        } else {
-            // 如果有全局默认路径，使用全局配置
-            savePath = defaultPath;
-            // 笔记本优先使用设置中的默认笔记本
-            if (settings.exportNotebook) {
-                saveNotebookId = settings.exportNotebook;
-            } else if (settings.exportLastNotebook) {
-                saveNotebookId = settings.exportLastNotebook;
-            } else {
-                // 使用已加载的笔记本列表
-                if (saveDialogNotebooks.length > 0) {
-                    saveNotebookId = saveDialogNotebooks[0].id;
-                }
-            }
-        }
-
-        // 重置搜索状态
-        savePathSearchKeyword = savePath;
-        savePathSearchResults = [];
-        showSavePathDropdown = false;
-
-        isSaveToNoteDialogOpen = true;
     }
-
-    function closeSaveToNoteDialog() {
-        isSaveToNoteDialogOpen = false;
-        pendingSessionExport = null;
-        if (savePathSearchTimeout) {
-            clearTimeout(savePathSearchTimeout);
-            savePathSearchTimeout = null;
-        }
-    }
-
-    // 切换到当前文档路径
-    function useCurrentDocPath() {
-        if (currentDocPath && currentDocNotebookId) {
-            savePath = toRelativePath(currentDocPath);
-            saveNotebookId = currentDocNotebookId;
-            savePathSearchKeyword = savePath;
-            savePathSearchResults = [];
-            showSavePathDropdown = false;
-        }
-    }
-
-    // 搜索保存路径
-    // 说明：默认使用 searchDocs() 进行服务器端全文搜索（匹配标题等），
-    // 但在某些情况下（例如输入像 `2025` 的年份/目录片段）searchDocs 可能不会匹配到 hPath。
-    // 因此我们在 searchDocs 没有返回结果时，针对仅包含数字或路径片段的关键字，
-    // 退回到使用 SQL 查询 blocks.hpath 字段做模糊匹配，合并到搜索结果中以提升匹配率。
-    async function searchSavePath() {
-        if (!savePathSearchKeyword.trim()) {
-            savePathSearchResults = [];
-            return;
-        }
-
-        isSavePathSearching = true;
-        try {
-            const results = await searchDocs(savePathSearchKeyword);
-
-            // 过滤：只显示选中笔记本中的文档
-            if (results && saveNotebookId) {
-                savePathSearchResults = (
-                    results.filter(doc => doc.box === saveNotebookId) || []
-                ).map((doc: any) => ({
-                    ...doc,
-                    // 将 hPath 规范化为相对于所选笔记本的路径（如果 hPath 包含笔记本名则去掉它）
-                    hPath: toRelativePath(doc.hPath || ''),
-                }));
-            } else {
-                savePathSearchResults = (results || []).map((doc: any) => ({
-                    ...doc,
-                    hPath: toRelativePath(doc.hPath || ''),
-                }));
-            }
-
-            // 如果 searchDocs 没有返回结果，针对数值或仅路径片段的情况，退回到使用 SQL 的 hpath 模糊匹配
-            // 例如：当用户输入 "2025"（年份）时，hPath 里通常会是 /.../2025/...，searchDocs 可能不会匹配到
-            // 我们在这里尝试 SQL 查询 blocks.hpath 字段进行模糊匹配以丰富搜索结果
-            const isLikelyPathFragment = /^[0-9\-\/]+$/.test(savePathSearchKeyword.trim());
-
-            if (
-                (savePathSearchResults.length === 0 ||
-                    (savePathSearchResults && savePathSearchResults.length === 0)) &&
-                isLikelyPathFragment
-            ) {
-                try {
-                    const kw = savePathSearchKeyword.trim().replace(/'/g, "''");
-                    const boxFilter = saveNotebookId
-                        ? ` AND box = '${String(saveNotebookId).replace(/'/g, "''")}'`
-                        : '';
-                    const sqlQuery = `SELECT id, path, hpath, box FROM blocks WHERE type='d' AND hpath LIKE '%${kw}%' ${boxFilter} ORDER BY updated DESC LIMIT 200`;
-                    const sqlResults = await sql(sqlQuery);
-                    if (sqlResults && sqlResults.length > 0) {
-                        // 将 SQL 的结果映射为 searchDocs 的返回格式（hPath 和 path）
-                        const mapped = sqlResults.map((r: any) => ({
-                            hPath: toRelativePath(r.hpath || r.hPath || ''),
-                            path: r.path,
-                            box: r.box,
-                        }));
-                        // 合并并去重
-                        const existingHPaths = new Set(
-                            savePathSearchResults.map((d: any) => String(d.hPath))
-                        );
-                        for (const doc of mapped) {
-                            if (!existingHPaths.has(String(doc.hPath))) {
-                                savePathSearchResults.push(doc);
-                            }
-                        }
-                    }
-                } catch (sqlError) {
-                    console.error('Fallback SQL search save path error:', sqlError);
-                }
-            }
-        } catch (error) {
-            console.error('Search save path error:', error);
-            savePathSearchResults = [];
-        } finally {
-            isSavePathSearching = false;
-        }
-    }
-
-    // 自动搜索保存路径（带防抖）
-    function autoSearchSavePath() {
-        if (savePathSearchTimeout) {
-            clearTimeout(savePathSearchTimeout);
-        }
-        savePathSearchTimeout = window.setTimeout(() => {
-            searchSavePath();
-        }, 300);
-    }
-
-    // 监听路径搜索关键词变化
-    $: {
-        if (isSaveToNoteDialogOpen && savePathSearchKeyword !== savePath) {
-            autoSearchSavePath();
-        }
-    }
-
-    // 选择路径
-    function selectSavePath(path: string) {
-        // `path` may come from `doc.path` (relative path) or be an hPath.
-        // Normalize to a relative path (without notebook prefix) so it won't duplicate the notebook name
-        // when used as the document path for createDocWithMd(notebook, path, ...)
-        savePath = toRelativePath(path);
-        savePathSearchKeyword = savePath;
-        showSavePathDropdown = false;
-        savePathSearchResults = [];
-    }
-
-    // 将 hPath（例如 "收集箱Inbox/2025/202510" 或 "/收集箱Inbox/2025/202510"）转换为相对于笔记本的路径
-    function toRelativePath(hpath: string): string {
-        if (!hpath) return '';
-        let p = String(hpath).trim();
-        // 移除开头的斜杠
-        p = p.replace(/^\/+/, '');
-        const parts = p.split('/');
-
-        // If the path is already a relative path (e.g., '2025/202510'), it shouldn't
-        // remove the first segment. Only strip the notebook name if it matches the
-        // currently selected notebook's name.
-        const currentNotebook = saveDialogNotebooks?.find(
-            n => String(n.id) === String(saveNotebookId)
-        );
-        const currentNotebookName = currentNotebook?.name;
-        if (currentNotebookName && parts[0] === currentNotebookName) {
-            parts.shift();
-            return parts.join('/');
-        }
-
-        // Otherwise return the path unchanged
-        return p;
-    }
-
-    // 确认保存到笔记
-    async function confirmSaveToNote() {
-        if (!saveNotebookId) {
-            pushErrMsg('请选择笔记本');
-            return;
-        }
-
-        if (!savePath) {
-            pushErrMsg('请输入保存路径');
-            return;
-        }
-
-        try {
-            // 生成文档名称
-            const exportSnapshot = pendingSessionExport;
-            if (!exportSnapshot) {
-                pushErrMsg(t('aiSidebar.errors.emptySession'));
-                return;
-            }
-
-            let docName = saveDocumentName.trim();
-            if (!docName) {
-                docName = exportSnapshot.title || generateSessionTitle();
-            }
-            docName = sanitizeDocumentName(docName, generateSessionTitle());
-
-            // 生成 Markdown 内容（不需要一级标题，思源会自动使用文档名作为标题）
-            const markdown = buildSessionMarkdown(
-                exportSnapshot.messages,
-                getSessionExportContext()
-            );
-
-            // 检查是否有内容需要保存
-            if (!markdown.trim()) {
-                pushErrMsg('消息内容为空，无法保存');
-                return;
-            }
-
-            // 创建文档 - sanitize savePath to ensure it is relative (no notebook prefix)
-            const sanitizedPath = toRelativePath(savePath);
-            const fullPath = `${sanitizedPath}/${docName}`.replace(/\/+/g, '/');
-            const docId = await createDocWithMd(saveNotebookId, fullPath, markdown);
-            if (!docId) {
-                throw new Error('思源未返回新建文档 ID');
-            }
-
-            // 记住上次选择
-            settings.exportLastPath = savePath;
-            settings.exportLastNotebook = saveNotebookId;
-            await plugin.saveSettings(settings);
-
-            pushMsg(t('aiSidebar.success.saveToNoteSuccess'));
-            closeSaveToNoteDialog();
-
-            // 如果选择了保存后打开笔记，则打开文档
-            if (openAfterSave && docId) {
-                try {
-                    await openBlock(docId);
-                } catch (error) {
-                    console.error('Open document error:', error);
-                    pushErrMsg(t('aiSidebar.errors.openDocumentFailed'));
-                }
-            }
-        } catch (error) {
-            console.error('Save to note error:', error);
-            pushErrMsg('保存失败: ' + error.message);
-        }
-    }
-
     // 打开插件设置
     function openSettings() {
         plugin.openSetting();
@@ -11444,23 +11129,12 @@
 
 
     <SaveToNoteDialog
-        open={isSaveToNoteDialogOpen}
-        bind:documentName={saveDocumentName}
-        bind:notebookId={saveNotebookId}
-        bind:pathKeyword={savePathSearchKeyword}
-        bind:openAfterSave
-        notebooks={saveDialogNotebooks}
-        pathResults={savePathSearchResults}
-        pathSearching={isSavePathSearching}
-        bind:showPathDropdown={showSavePathDropdown}
-        {hasDefaultPath}
-        {currentDocPath}
-        {currentDocNotebookId}
-        onClose={closeSaveToNoteDialog}
-        onUseCurrentDoc={useCurrentDocPath}
-        onSearchPath={searchSavePath}
-        onSelectPath={selectSavePath}
-        onConfirm={confirmSaveToNote}
+        bind:this={saveToNoteDialog}
+        {plugin}
+        {settings}
+        exportContext={getSessionExportContext()}
+        fallbackTitle={generateSessionTitle()}
+        resolveCurrentDocument={resolveCurrentDocumentForExport}
     />
 
     <!-- 工具批准对话框 -->

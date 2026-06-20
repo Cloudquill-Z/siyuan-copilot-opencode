@@ -2,7 +2,7 @@
   "name": "siyuan-copilot-opencode",
   "author": "Cloudquill-Z",
   "url": "https://github.com/Cloudquill-Z/siyuan-copilot-opencode",
-  "version": "3.1.18",
+  "version": "3.1.19",
   "minAppVersion": "3.6.0",
   "backends": [
     "all"
