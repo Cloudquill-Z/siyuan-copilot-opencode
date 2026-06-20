@@ -1,7 +1,6 @@
 <script lang="ts">
     import { onMount, tick, onDestroy } from 'svelte';
     import {
-        chat,
         type Message,
         type MessageAttachment,
         type EditOperation,
@@ -17,6 +16,7 @@
         invalidateModelCache,
     } from './ai-chat';
     import type { MessageContent } from './ai-chat';
+    import { runChat } from './chat/execution/run-controller';
     import {
         convertLatexToMarkdown,
         getActualMessageContent,
@@ -1172,7 +1172,7 @@
                 let lastAssistantContent = '';
                 let turnThinking = '';
 
-                await chat(
+                await runChat(
                     response.provider,
                     {
                         apiKey: providerConfig.apiKey,
@@ -1462,7 +1462,7 @@
             let fullText = '';
             let thinking = '';
 
-            await chat(
+            await runChat(
                 response.provider,
                 {
                     apiKey: providerConfig.apiKey,
@@ -3712,7 +3712,7 @@
                     let lastAssistantContent = '';
                     let turnThinking = '';
 
-                    await chat(
+                    await runChat(
                         model.provider,
                         {
                             apiKey: providerConfig.apiKey,
@@ -4673,7 +4673,7 @@
             let generatedTitle = '';
 
             // 调用AI生成标题
-            await chat(
+            await runChat(
                 renameProvider,
                 {
                     apiKey: providerConfig.apiKey,
@@ -5103,7 +5103,7 @@
                         toolExecutionComplete = resolve;
                     });
 
-                    await chat(
+                    await runChat(
                         currentProvider,
                         {
                             apiKey: providerConfig.apiKey,
@@ -5546,7 +5546,7 @@
                 // 用于保存生成的图片
                 let generatedImages: any[] = [];
 
-                await chat(
+                await runChat(
                     currentProvider,
                     {
                         apiKey: providerConfig.apiKey,
@@ -10240,7 +10240,7 @@
                         toolExecutionComplete = resolve;
                     });
 
-                    await chat(
+                    await runChat(
                         currentProvider,
                         {
                             apiKey: providerConfig.apiKey,
@@ -10669,7 +10669,7 @@
                 // 检查是否启用图片生成
                 const enableImageGeneration = modelConfig.capabilities?.imageGeneration || false;
 
-                await chat(
+                await runChat(
                     currentProvider,
                     {
                         apiKey: providerConfig.apiKey,
