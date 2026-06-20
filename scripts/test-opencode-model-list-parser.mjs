@@ -84,6 +84,12 @@ const providerModels = parseOpenCodeProviderModels({
                     name: 'DeepSeek V4 Pro',
                     limit: { context: 1000000, output: 384000 },
                 },
+                'glm-5.1': {
+                    name: 'GLM-5.1',
+                    capabilities: { reasoning: true },
+                    variants: {},
+                    limit: { context: 202752, output: 32768 },
+                },
             },
         },
         {
@@ -101,15 +107,25 @@ const providerModels = parseOpenCodeProviderModels({
 
 assert.deepEqual(
     providerModels.map(model => `${model.providerID}/${model.id}`),
-    ['opencode/big-pickle', 'opencode-go/deepseek-v4-pro', 'deepseek/deepseek-chat']
+    [
+        'opencode/big-pickle',
+        'opencode-go/deepseek-v4-pro',
+        'opencode-go/glm-5.1',
+        'deepseek/deepseek-chat',
+    ]
 );
 assert.deepEqual(
     providerModels.map(model => model.contextLimit),
-    [200000, 1000000, 1000000]
+    [200000, 1000000, 202752, 1000000]
 );
 assert.deepEqual(
     providerModels.map(model => model.outputLimit),
-    [32000, 384000, 384000]
+    [32000, 384000, 32768, 384000]
+);
+assert.equal(
+    providerModels.find(model => model.id === 'glm-5.1')?.enableThinking,
+    true,
+    'OpenCode capabilities.reasoning must be the source of truth for thinking support'
 );
 
 const existingModelConfigs = [

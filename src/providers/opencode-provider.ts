@@ -413,8 +413,12 @@ function buildPromptBody(options: OpenCodeChatOptions, model: any): any {
     if (tools) {
         customBody.tools = tools;
     }
-
     return {
+        ...(options.enableThinking === true &&
+        options.reasoningEffort &&
+        options.reasoningEffort !== 'auto'
+            ? { variant: options.reasoningEffort }
+            : {}),
         ...customBody,
         model,
         parts: [{ type: 'text', text: options.prompt }],
@@ -1347,13 +1351,7 @@ export async function chatOpenCode(
         const providerID = options.model?.providerID || 'opencode';
         const modelID = options.model?.modelID || 'big-pickle';
 
-        const model: any = { providerID, modelID };
-        if (options.enableThinking === true) {
-            model.enableThinking = true;
-            if (options.reasoningEffort) {
-                model.reasoningEffort = options.reasoningEffort;
-            }
-        }
+        const model = { providerID, modelID };
 
         // Prefer prompt_async + event stream for all chats. Newer OpenCode server
         // builds have regressed the synchronous /message path with seq write errors.

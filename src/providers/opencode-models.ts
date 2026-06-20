@@ -117,7 +117,9 @@ function normalizeModelInfo(modelId: string, modelInfo: any, providerID: string)
     };
     if (contextLimit) model.contextLimit = contextLimit;
     if (outputLimit) model.outputLimit = outputLimit;
-    if (typeof modelInfo?.enableThinking === 'boolean') {
+    if (typeof modelInfo?.capabilities?.reasoning === 'boolean') {
+        model.enableThinking = modelInfo.capabilities.reasoning;
+    } else if (typeof modelInfo?.enableThinking === 'boolean') {
         model.enableThinking = modelInfo.enableThinking;
     }
     if (
