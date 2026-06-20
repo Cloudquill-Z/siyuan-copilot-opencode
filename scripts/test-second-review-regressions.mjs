@@ -44,7 +44,8 @@ const saveSessionsBlock = sidebarSource.slice(sidebarSource.indexOf('async funct
 assert.match(saveSessionsBlock, /throw error/, 'metadata write failures must propagate to saveCurrentSession');
 const saveCurrentBlock = sidebarSource.slice(sidebarSource.indexOf('async function saveCurrentSession'), sidebarSource.indexOf('async function saveTaskStateSession'));
 assert.match(saveCurrentBlock, /catch \(error\)/, 'saveCurrentSession must retain dirty state while handling persistence failures');
-const highlightBlock = sidebarSource.slice(sidebarSource.indexOf('function highlightCodeBlocks'), sidebarSource.indexOf('// 初始化 KaTeX'));
+const domEnhancerSource = await readFile(new URL('../src/chat/dom-enhancers.ts', import.meta.url), 'utf8');
+const highlightBlock = domEnhancerSource.slice(domEnhancerSource.indexOf('function highlightCodeBlocks'), domEnhancerSource.indexOf('// 初始化 KaTeX'));
 assert.equal(
     (highlightBlock.match(/querySelectorAll\(\s*['"]pre > code:not\(\[data-highlighted\]\)['"]\s*\)/g) || []).length,
     1,
