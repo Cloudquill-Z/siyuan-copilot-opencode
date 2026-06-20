@@ -126,7 +126,6 @@ export interface ChatOptions {
     onThinkingComplete?: (thinking: string) => void;
     onToolPartUpdate?: (update: OpenCodeToolPartUpdate) => void;
     tools?: any;
-    onToolCallComplete?: (toolCalls: ToolCall[]) => void;
     onPermissionAsked?: (req: PermissionRequest) => void;
     onQuestionAsked?: (req: QuestionRequest) => void;
     customBody?: any;
