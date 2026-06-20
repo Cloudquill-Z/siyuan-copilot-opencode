@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const source = await readFile(new URL('../src/ai-sidebar.svelte', import.meta.url), 'utf8');
+const source = await readFile(
+    new URL('../src/components/chat/MessageList.svelte', import.meta.url),
+    'utf8'
+);
 const branchStart = source.indexOf("{#if message.role === 'assistant' && message.openCodeTimeline");
 assert.notEqual(branchStart, -1, 'OpenCode timeline history branch should exist');
 
