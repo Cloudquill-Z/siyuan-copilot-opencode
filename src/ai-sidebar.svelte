@@ -17,6 +17,14 @@
     } from './ai-chat';
     import type { MessageContent } from './ai-chat';
     import { runChat } from './chat/execution/run-controller';
+    import {
+        applyMultiModelSelection,
+        createMultiModelResponses,
+        finalizePendingMultiModel,
+        type MultiModelChoice,
+        type MultiModelResponse,
+    } from './chat/execution/multi-model-state';
+    import { runMultiModelTargets } from './chat/execution/multi-model-runner';
     import { prepareMessagesForAI as prepareMessagesForAIRequest } from './chat/execution/message-preparer';
     import {
         convertLatexToMarkdown,
@@ -58,6 +66,7 @@
         ContextController,
         buildDocumentSearchQuery,
         createContextTitle,
+        refreshContextDocuments,
     } from './chat/context-controller';
     import { getActiveEditor, openTab } from 'siyuan';
     import {
@@ -971,394 +980,111 @@
         contextController.replace(updatedDocs);
     }
 
-    // 重新生成单个多模型响应（在多模型选择阶段使用）
-    async function regenerateModelResponse(index: number) {
-        const response = multiModelResponses[index];
-        if (!response) {
-            pushErrMsg(t('aiSidebar.errors.noMessage'));
-            return;
-        }
-
-        // 如果目标模型正在加载中，则拒绝重复触发
-        if (response.isLoading) {
-            pushErrMsg(t('aiSidebar.errors.generating'));
-            return;
-        }
-
+    async function runResponseRegeneration(
+        response: MultiModelResponse,
+        history: Message[],
+        lastUserMessage: Message,
+        update: (patch: Partial<MultiModelResponse>) => void
+    ) {
+        if (response.isLoading) return pushErrMsg(t('aiSidebar.errors.generating'));
         const config = getProviderAndModelConfig(response.provider, response.modelId);
-        if (!config) {
-            pushErrMsg(t('aiSidebar.info.noValidModel') || '无效的模型');
-            return;
+        if (!config) return pushErrMsg(t('aiSidebar.info.noValidModel') || '无效的模型');
+        if (
+            !config.providerConfig ||
+            (providerRequiresApiKey(response.provider) && !config.providerConfig.apiKey)
+        ) {
+            return pushErrMsg(t('aiSidebar.errors.noApiKey'));
         }
 
-        const { providerConfig, modelConfig } = config;
-        if (!providerConfig || (providerRequiresApiKey(response.provider) && !providerConfig.apiKey)) {
-            pushErrMsg(t('aiSidebar.errors.noApiKey'));
-            return;
-        }
-
-        // 标记为加载中并清空内容/错误/工具调用历史
-        multiModelResponses[index] = {
-            ...multiModelResponses[index],
+        update({
             isLoading: true,
             error: undefined,
             content: '',
             thinking: '',
             thinkingCollapsed: false,
-            toolCalls: [], // 清空上次的工具调用记录
-        };
-        multiModelResponses = [...multiModelResponses];
-
-        // 获取最后一条用户消息并准备上下文
-        const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
-        if (!lastUserMessage) {
-            pushErrMsg(t('aiSidebar.errors.noUserMessage'));
-            multiModelResponses[index].isLoading = false;
-            multiModelResponses = [...multiModelResponses];
-            return;
-        }
-
-        const contextDocumentsWithLatestContent: ContextDocument[] = [];
-        const userContextDocs = lastUserMessage.contextDocuments || [];
-        for (const doc of userContextDocs) {
-            try {
-                let content: string;
-                const data = await exportMdContent(doc.id, false, false, 2, 0, false);
-                content = (data && data.content) || doc.content;
-                contextDocumentsWithLatestContent.push({
-                    id: doc.id,
-                    title: doc.title,
-                    content,
-                    type: doc.type,
-                });
-            } catch (error) {
-                console.error(`Failed to fetch latest content for block ${doc.id}:`, error);
-                contextDocumentsWithLatestContent.push(doc);
+            toolCalls: [],
+        });
+        const refreshedContext = await refreshContextDocuments(
+            lastUserMessage.contextDocuments || [],
+            async document => {
+                const data = await exportMdContent(document.id, false, false, 2, 0, false);
+                return data?.content;
             }
-        }
-
-        const userContent =
-            typeof lastUserMessage.content === 'string'
-                ? lastUserMessage.content
-                : getMessageText(lastUserMessage.content);
-        const userMessage: Message = {
-            role: 'user',
+        );
+        const userContent = getMessageText(lastUserMessage.content);
+        const preparedUserMessage: Message = {
+            ...lastUserMessage,
             content: userContent,
-            attachments: lastUserMessage.attachments,
-            contextDocuments:
-                contextDocumentsWithLatestContent.length > 0
-                    ? contextDocumentsWithLatestContent
-                    : undefined,
+            contextDocuments: refreshedContext.length ? refreshedContext : undefined,
         };
-
         const messagesToSend = await prepareMessagesForAI(
-            messages,
-            contextDocumentsWithLatestContent,
+            history,
+            refreshedContext,
             userContent,
-            userMessage,
-            // 传入当前模型的 thinking 状态，以便正确处理历史 assistant 消息中的 reasoning_content
-            !!(
-                modelConfig.capabilities?.thinking &&
-                (response.thinkingEnabled ?? modelConfig.thinkingEnabled ?? false)
+            preparedUserMessage,
+            Boolean(
+                config.modelConfig.capabilities?.thinking &&
+                (response.thinkingEnabled ?? config.modelConfig.thinkingEnabled)
             ),
-            modelConfig.id
+            config.modelConfig.id
         );
         lastPreparedContextTokens = estimateMessagesContextTokens(messagesToSend);
-
-        // 本次请求的 AbortController（用于单个模型的中断）
-        const localAbort = new AbortController();
-
-        // 解析自定义参数
-        let customBody = {};
-        if (modelConfig.customBody) {
-            try {
-                customBody = JSON.parse(modelConfig.customBody);
-            } catch (e) {
-                console.error('Failed to parse custom body:', e);
-                multiModelResponses[index].error = '自定义参数 JSON 格式错误';
-                multiModelResponses[index].isLoading = false;
-                multiModelResponses = [...multiModelResponses];
-                return;
-            }
-        }
-
-        try {
-            // 准备联网搜索工具（如果启用）
-            let webSearchTools: any[] | undefined = undefined;
-            if (modelConfig.capabilities?.webSearch && modelConfig.webSearchEnabled) {
-                const modelIdLower = modelConfig.id.toLowerCase();
-                if (modelIdLower.includes('gemini')) {
-                    webSearchTools = [
-                        {
-                            type: 'function',
-                            function: {
-                                name: 'googleSearch',
-                            },
-                        },
-                    ];
-                }
-            }
-
-            const toolsToPass = webSearchTools?.length ? webSearchTools : undefined;
-
-            let fullText = '';
-            let totalThinking = '';
-            await runChat(
-                response.provider,
-                {
-                    apiKey: providerConfig.apiKey,
-                    model: modelConfig.id,
-                    messages: messagesToSend,
-                    temperature: tempModelSettings.temperatureEnabled
-                        ? tempModelSettings.temperature
-                        : modelConfig.temperature,
-                    maxTokens: modelConfig.maxTokens > 0 ? modelConfig.maxTokens : undefined,
-                    stream: true,
-                    signal: localAbort.signal,
-                    customBody,
-                    enableThinking:
-                        modelConfig.capabilities?.thinking &&
-                        (response.thinkingEnabled ?? modelConfig.thinkingEnabled ?? false),
-                    reasoningEffort:
-                        response.thinkingEffort ?? modelConfig.thinkingEffort ?? 'low',
-                    mode: chatMode,
-                    tools: toolsToPass,
-                    onThinkingChunk: (chunk: string) => {
-                        totalThinking += chunk;
-                        if (multiModelResponses[index]) {
-                            multiModelResponses[index].thinking = totalThinking;
-                            multiModelResponses = [...multiModelResponses];
-                        }
-                    },
-                    onThinkingComplete: () => {
-                        if (multiModelResponses[index]?.thinking) {
-                            multiModelResponses[index].thinkingCollapsed = true;
-                            multiModelResponses = [...multiModelResponses];
-                        }
-                    },
-                    onChunk: (chunk: string) => {
-                        fullText += chunk;
-                        if (multiModelResponses[index]) {
-                            multiModelResponses[index].content = fullText;
-                            multiModelResponses = [...multiModelResponses];
-                        }
-                    },
-                    onComplete: async (text: string) => {
-                        if (!multiModelResponses[index]) return;
-                        const convertedText = convertLatexToMarkdown(text || fullText);
-                        multiModelResponses[index].content =
-                            await saveBase64ImagesInContent(convertedText);
-                        multiModelResponses[index].thinking = totalThinking;
-                        multiModelResponses[index].isLoading = false;
-                        if (totalThinking) multiModelResponses[index].thinkingCollapsed = true;
-                        multiModelResponses = [...multiModelResponses];
-                    },
-                    onError: (error: Error) => {
-                        if (error.message !== 'Request aborted' && multiModelResponses[index]) {
-                            multiModelResponses[index].error = error.message;
-                            multiModelResponses[index].isLoading = false;
-                            multiModelResponses = [...multiModelResponses];
-                        }
-                    },
-                },
-                providerConfig.customApiUrl,
-                providerConfig.advancedConfig
-            );
-        } catch (error) {
-            if ((error as Error).message !== 'Request aborted' && multiModelResponses[index]) {
-                multiModelResponses[index].error = (error as Error).message;
-                multiModelResponses[index].isLoading = false;
-                multiModelResponses = [...multiModelResponses];
-            }
-        }
+        await runMultiModelTargets({
+            targets: [{ choice: response, ...config }],
+            messages: messagesToSend,
+            signal: new AbortController().signal,
+            mode: chatMode,
+            temperature: tempModelSettings.temperatureEnabled
+                ? tempModelSettings.temperature
+                : undefined,
+            isActive: () => true,
+            processContent: async content =>
+                saveBase64ImagesInContent(convertLatexToMarkdown(content)),
+            update: (_index, patch) => update(patch),
+            settled: () => undefined,
+        });
     }
 
-    // 重新生成历史消息中的单个多模型响应（history message.multiModelResponses）
-    async function regenerateHistoryModelResponse(absMessageIndex: number, responseIndex: number) {
-        const msg = messages[absMessageIndex];
-        if (!msg || !msg.multiModelResponses) {
-            pushErrMsg(t('aiSidebar.errors.noMessage'));
-            return;
-        }
+    async function regenerateModelResponse(index: number) {
+        const response = multiModelResponses[index];
+        if (!response) return pushErrMsg(t('aiSidebar.errors.noMessage'));
+        const lastUserMessage = [...messages].reverse().find(message => message.role === 'user');
+        if (!lastUserMessage) return pushErrMsg(t('aiSidebar.errors.noUserMessage'));
+        await runResponseRegeneration(response, messages, lastUserMessage, patch => {
+            if (!multiModelResponses[index]) return;
+            multiModelResponses[index] = { ...multiModelResponses[index], ...patch };
+            multiModelResponses = [...multiModelResponses];
+        });
+    }
 
-        const response = msg.multiModelResponses[responseIndex];
-        if (!response) {
-            pushErrMsg(t('aiSidebar.errors.noMessage'));
-            return;
-        }
-
-        if (response.isLoading) {
-            pushErrMsg(t('aiSidebar.errors.generating'));
-            return;
-        }
-
-        const config = getProviderAndModelConfig(response.provider, response.modelId);
-        if (!config) {
-            pushErrMsg(t('aiSidebar.info.noValidModel') || '无效的模型');
-            return;
-        }
-
-        const { providerConfig, modelConfig } = config;
-        if (!providerConfig || (providerRequiresApiKey(response.provider) && !providerConfig.apiKey)) {
-            pushErrMsg(t('aiSidebar.errors.noApiKey'));
-            return;
-        }
-
-        // 标记为加载中并清空内容/错误
-        msg.multiModelResponses[responseIndex] = {
-            ...msg.multiModelResponses[responseIndex],
-            isLoading: true,
-            error: undefined,
-            content: '',
-            thinking: '',
-            thinkingCollapsed: false,
-        };
-        messages = [...messages];
-
-        // 找到该 assistant 消息之前最近的 user 消息作为上下文
-        let lastUserMessage: Message | undefined;
-        for (let i = absMessageIndex - 1; i >= 0; i--) {
-            if (messages[i].role === 'user') {
-                lastUserMessage = messages[i];
-                break;
+    async function regenerateHistoryModelResponse(
+        absMessageIndex: number,
+        responseIndex: number
+    ) {
+        const message = messages[absMessageIndex];
+        const response = message?.multiModelResponses?.[responseIndex] as
+            | MultiModelResponse
+            | undefined;
+        if (!response) return pushErrMsg(t('aiSidebar.errors.noMessage'));
+        const lastUserMessage = messages
+            .slice(0, absMessageIndex)
+            .reverse()
+            .find(item => item.role === 'user');
+        if (!lastUserMessage) return pushErrMsg(t('aiSidebar.errors.noUserMessage'));
+        await runResponseRegeneration(
+            response,
+            messages.slice(0, absMessageIndex),
+            lastUserMessage,
+            patch => {
+                const target = messages[absMessageIndex]?.multiModelResponses?.[responseIndex];
+                if (!target) return;
+                messages[absMessageIndex].multiModelResponses[responseIndex] = {
+                    ...target,
+                    ...patch,
+                };
+                messages = [...messages];
             }
-        }
-
-        if (!lastUserMessage) {
-            pushErrMsg(t('aiSidebar.errors.noUserMessage'));
-            msg.multiModelResponses[responseIndex].isLoading = false;
-            messages = [...messages];
-            return;
-        }
-
-        // 获取用户消息的上下文文档最新内容（如果有）
-        const contextDocumentsWithLatestContent: ContextDocument[] = [];
-        const userContextDocs = lastUserMessage.contextDocuments || [];
-        for (const doc of userContextDocs) {
-            try {
-                let content: string;
-                const data = await exportMdContent(doc.id, false, false, 2, 0, false);
-                content = (data && data.content) || doc.content;
-                contextDocumentsWithLatestContent.push({
-                    id: doc.id,
-                    title: doc.title,
-                    content,
-                    type: doc.type,
-                });
-            } catch (error) {
-                console.error(`Failed to fetch latest content for block ${doc.id}:`, error);
-                contextDocumentsWithLatestContent.push(doc);
-            }
-        }
-
-        const userContent =
-            typeof lastUserMessage.content === 'string'
-                ? lastUserMessage.content
-                : getMessageText(lastUserMessage.content);
-        const userMessage: Message = {
-            role: 'user',
-            content: userContent,
-            attachments: lastUserMessage.attachments,
-            contextDocuments:
-                contextDocumentsWithLatestContent.length > 0
-                    ? contextDocumentsWithLatestContent
-                    : undefined,
-        };
-
-        const messagesToSend = await prepareMessagesForAI(
-            messages,
-            contextDocumentsWithLatestContent,
-            userContent,
-            userMessage,
-            !!(modelConfig.capabilities?.thinking && (modelConfig.thinkingEnabled || false)),
-            modelConfig.id
         );
-        lastPreparedContextTokens = estimateMessagesContextTokens(messagesToSend);
-
-        const localAbort = new AbortController();
-
-        // 解析自定义参数
-        let customBody = {};
-        if (modelConfig.customBody) {
-            try {
-                customBody = JSON.parse(modelConfig.customBody);
-            } catch (e) {
-                console.error('Failed to parse custom body:', e);
-                msg.multiModelResponses[responseIndex].error = '自定义参数 JSON 格式错误';
-                msg.multiModelResponses[responseIndex].isLoading = false;
-                messages = [...messages];
-                return;
-            }
-        }
-
-        try {
-            let fullText = '';
-            let thinking = '';
-
-            await runChat(
-                response.provider,
-                {
-                    apiKey: providerConfig.apiKey,
-                    model: modelConfig.id,
-                    messages: messagesToSend,
-                    temperature: tempModelSettings.temperatureEnabled
-                        ? tempModelSettings.temperature
-                        : modelConfig.temperature,
-                    maxTokens: modelConfig.maxTokens > 0 ? modelConfig.maxTokens : undefined,
-                    stream: true,
-                    signal: localAbort.signal,
-                    customBody,
-                    enableThinking:
-                        modelConfig.capabilities?.thinking &&
-                        (modelConfig.thinkingEnabled || false),
-                    reasoningEffort: modelConfig.thinkingEffort || 'low',
-                    mode: chatMode,
-                    onThinkingChunk: async (chunk: string) => {
-                        thinking += chunk;
-                        msg.multiModelResponses[responseIndex].thinking = thinking;
-                        messages = [...messages];
-                    },
-                    onThinkingComplete: () => {
-                        if (msg.multiModelResponses[responseIndex].thinking) {
-                            msg.multiModelResponses[responseIndex].thinkingCollapsed = true;
-                            messages = [...messages];
-                        }
-                    },
-                    onChunk: async (chunk: string) => {
-                        fullText += chunk;
-                        msg.multiModelResponses[responseIndex].content = fullText;
-                        messages = [...messages];
-                    },
-                    onComplete: async (text: string) => {
-                        const convertedText = convertLatexToMarkdown(text);
-                        // 处理content中的base64图片，保存为assets文件
-                        const processedContent = await saveBase64ImagesInContent(convertedText);
-                        msg.multiModelResponses[responseIndex].content = processedContent;
-                        msg.multiModelResponses[responseIndex].thinking = thinking;
-                        msg.multiModelResponses[responseIndex].isLoading = false;
-                        if (thinking && !msg.multiModelResponses[responseIndex].thinkingCollapsed) {
-                            msg.multiModelResponses[responseIndex].thinkingCollapsed = true;
-                        }
-                        messages = [...messages];
-                    },
-                    onError: (error: Error) => {
-                        if (error.message !== 'Request aborted') {
-                            msg.multiModelResponses[responseIndex].error = error.message;
-                            msg.multiModelResponses[responseIndex].isLoading = false;
-                            messages = [...messages];
-                        }
-                    },
-                },
-                providerConfig.customApiUrl,
-                providerConfig.advancedConfig
-            );
-        } catch (error) {
-            if ((error as Error).message !== 'Request aborted') {
-                msg.multiModelResponses[responseIndex].error = (error as Error).message;
-                msg.multiModelResponses[responseIndex].isLoading = false;
-                messages = [...messages];
-            }
-        }
     }
 
     // Agent 模式
@@ -1760,37 +1486,8 @@
 
     // 多模型对话
     let enableMultiModel = false; // 多模型已禁用
-    let selectedMultiModels: Array<{
-        provider: string;
-        modelId: string;
-        thinkingEnabled?: boolean;
-        thinkingEffort?: ThinkingEffort;
-    }> = []; // 选中的多个模型
-
-    let multiModelResponses: Array<{
-        provider: string;
-        modelId: string;
-        modelName: string;
-        content: string;
-        thinking?: string;
-        isLoading: boolean;
-        error?: string;
-        thinkingCollapsed?: boolean;
-        thinkingEnabled?: boolean; // 用户是否开启思考模式（从 provider 配置获取）
-        thinkingEffort?: ThinkingEffort; // 思考努力程度
-        toolCalls?: Array<{
-            id: string;
-            type: string;
-            function: {
-                name: string;
-                arguments: string;
-            };
-            status?: 'calling' | 'completed';
-            result?: string;
-            thinkingBefore?: string; // 该工具调用前的思考内容
-        }>; // 工具调用历史
-        conversationMessages?: Message[]; // 该模型的完整对话消息历史（包含 tool_calls 和 tool 响应）
-    }> = []; // 多模型响应
+    let selectedMultiModels: MultiModelChoice[] = [];
+    let multiModelResponses: MultiModelResponse[] = [];
     let isWaitingForAnswerSelection = false; // 是否在等待用户选择答案
     let selectedAnswerIndex: number | null = null; // 用户选择的答案索引
     let multiModelLayout: 'card' | 'tab' = 'tab'; // 多模型布局模式：card 或 tab（会在初始化时从设置读取）
@@ -3196,25 +2893,10 @@
             return;
         }
 
-        multiModelResponses = validModels.map(model => {
-            const config = getProviderAndModelConfig(model.provider, model.modelId);
-            return {
-                provider: model.provider,
-                modelId: model.modelId,
-                modelName: config?.modelConfig?.name || model.modelId,
-                content: '',
-                thinking: '',
-                isLoading: true,
-                thinkingCollapsed: false,
-                toolCalls: [], // 存储工具调用历史
-                // 使用模型实例的 thinkingEnabled 值，如果没有则使用 modelConfig 中的默认值
-                thinkingEnabled:
-                    model.thinkingEnabled ?? config?.modelConfig?.thinkingEnabled ?? false,
-                // 使用模型实例的 thinkingEffort 值，如果没有则使用 modelConfig 中的默认值
-                thinkingEffort:
-                    model.thinkingEffort ?? config?.modelConfig?.thinkingEffort ?? 'low',
-            };
-        });
+        multiModelResponses = createMultiModelResponses(
+            validModels,
+            model => getProviderAndModelConfig(model.provider, model.modelId)?.modelConfig
+        );
 
         // 创建新的 AbortController
         setController(currentSessionId, new AbortController());
@@ -3247,129 +2929,37 @@
             await saveCurrentSession(true);
         }
 
-        // 并发请求所有有效模型
-        const promises = validModels.map(async (model, index) => {
-            const config = getProviderAndModelConfig(model.provider, model.modelId);
-            if (!config) return;
-
-            const { providerConfig, modelConfig } = config;
-            if (providerRequiresApiKey(model.provider) && !providerConfig.apiKey) return;
-
-            // 解析自定义参数
-            let customBody = {};
-            if (modelConfig.customBody) {
-                try {
-                    customBody = JSON.parse(modelConfig.customBody);
-                } catch (e) {
-                    console.error('Failed to parse custom body:', e);
-                    multiModelResponses[index].error = '自定义参数 JSON 格式错误';
-                    multiModelResponses[index].isLoading = false;
-                    multiModelResponses = [...multiModelResponses];
-                    return;
-                }
-            }
-
-            try {
-                let fullText = '';
-                let totalThinking = '';
-
-                // 准备联网搜索工具（如果启用）
-                let webSearchTools: any[] | undefined = undefined;
-                if (modelConfig.capabilities?.webSearch && modelConfig.webSearchEnabled) {
-                    const modelIdLower = modelConfig.id.toLowerCase();
-
-                    if (modelIdLower.includes('gemini')) {
-                        webSearchTools = [
-                            {
-                                type: 'function',
-                                function: {
-                                    name: 'googleSearch',
-                                },
-                            },
-                        ];
-                    }
-                }
-
-                const toolsToPass = webSearchTools?.length ? webSearchTools : undefined;
-
-                await runChat(
-                    model.provider,
-                    {
-                        apiKey: providerConfig.apiKey,
-                        model: modelConfig.id,
-                        messages: messagesToSend,
-                        temperature: tempModelSettings.temperatureEnabled
-                            ? tempModelSettings.temperature
-                            : modelConfig.temperature,
-                        maxTokens: modelConfig.maxTokens > 0 ? modelConfig.maxTokens : undefined,
-                        stream: true,
-                        signal: abortController.signal,
-                        enableThinking:
-                            modelConfig.capabilities?.thinking &&
-                            (model.thinkingEnabled ?? modelConfig.thinkingEnabled ?? false),
-                        reasoningEffort:
-                            model.thinkingEffort ?? modelConfig.thinkingEffort ?? 'low',
-                        mode: chatMode,
-                        tools: toolsToPass,
-                        customBody,
-                        onThinkingChunk: (chunk: string) => {
-                            totalThinking += chunk;
-                            if (multiModelResponses[index]) {
-                                multiModelResponses[index].thinking = totalThinking;
-                                multiModelResponses = [...multiModelResponses];
-                            }
-                        },
-                        onThinkingComplete: () => {
-                            if (multiModelResponses[index]?.thinking) {
-                                multiModelResponses[index].thinkingCollapsed = true;
-                                multiModelResponses = [...multiModelResponses];
-                            }
-                        },
-                        onChunk: (chunk: string) => {
-                            fullText += chunk;
-                            if (multiModelResponses[index]) {
-                                multiModelResponses[index].content = fullText;
-                                multiModelResponses = [...multiModelResponses];
-                            }
-                        },
-                        onComplete: async (text: string) => {
-                            if (isAborted || !isWaitingForAnswerSelection || !multiModelResponses[index]) return;
-                            const convertedText = convertLatexToMarkdown(text || fullText);
-                            multiModelResponses[index].content =
-                                await saveBase64ImagesInContent(convertedText);
-                            multiModelResponses[index].thinking = totalThinking;
-                            multiModelResponses[index].isLoading = false;
-                            multiModelResponses[index].conversationMessages = [...messagesToSend];
-                            if (totalThinking) multiModelResponses[index].thinkingCollapsed = true;
-                            multiModelResponses = [...multiModelResponses];
-                            await persistMultiModelAssistantSnapshot();
-                        },
-                        onError: (error: Error) => {
-                            if (error.message === 'Request aborted' ||
-                                !isWaitingForAnswerSelection ||
-                                !multiModelResponses[index]) return;
-                            multiModelResponses[index].error = error.message;
-                            multiModelResponses[index].isLoading = false;
-                            multiModelResponses = [...multiModelResponses];
-                            void persistMultiModelAssistantSnapshot();
-                        },
-                    },
-                    providerConfig.customApiUrl,
-                    providerConfig.advancedConfig
-                );
-            } catch (error) {
-                if ((error as Error).message !== 'Request aborted' && multiModelResponses[index]) {
-                    if (!isWaitingForAnswerSelection) return;
-                    multiModelResponses[index].error = (error as Error).message;
-                    multiModelResponses[index].isLoading = false;
-                    multiModelResponses = [...multiModelResponses];
-                    await persistMultiModelAssistantSnapshot();
-                }
-            }
+        const targets = validModels
+            .map(choice => {
+                const config = getProviderAndModelConfig(choice.provider, choice.modelId);
+                return config ? { choice, ...config } : null;
+            })
+            .filter(Boolean) as Array<{
+                choice: MultiModelChoice;
+                providerConfig: any;
+                modelConfig: any;
+            }>;
+        await runMultiModelTargets({
+            targets,
+            messages: messagesToSend,
+            signal: abortController.signal,
+            mode: chatMode,
+            temperature: tempModelSettings.temperatureEnabled
+                ? tempModelSettings.temperature
+                : undefined,
+            isActive: () => !isAborted && isWaitingForAnswerSelection,
+            processContent: async content =>
+                saveBase64ImagesInContent(convertLatexToMarkdown(content)),
+            update: (index, patch) => {
+                if (!multiModelResponses[index]) return;
+                multiModelResponses[index] = {
+                    ...multiModelResponses[index],
+                    ...patch,
+                };
+                multiModelResponses = [...multiModelResponses];
+            },
+            settled: persistMultiModelAssistantSnapshot,
         });
-
-        // 等待所有请求完成
-        await Promise.all(promises);
 
         isLoading = false;
         setController(currentSessionId, null);
@@ -3406,119 +2996,16 @@
         return { baseSystemPrompt, hasToolInstruction };
     }
 
-    // 选择多模型答案
     function selectMultiModelAnswer(index: number) {
-        const selectedResponse = multiModelResponses[index];
-        if (!selectedResponse || selectedResponse.isLoading) return;
-
-        // 不再强制重置布局，保持用户选择的布局样式
-        // multiModelLayout = 'tab';
-
-        // 【修复】从选中的模型对话历史中提取 tool 调用链消息
-        // 这些消息需要被添加到 messages 数组中，以便重新生成时能正确重建上下文
-        // 注意：多模型模式下工具调用已保存在 multiModelResponses 中，不需要再插入到主消息流
-        const toolMessages: Message[] = [];
-        if (
-            selectedResponse.conversationMessages &&
-            selectedResponse.conversationMessages.length > 0
-        ) {
-            for (const msg of selectedResponse.conversationMessages) {
-                // 只提取 tool 响应消息，不提取包含 tool_calls 的 assistant 消息
-                // 因为多模型模式下工具调用已经在每个模型卡片中显示了
-                if (msg.role === 'tool' && msg.tool_call_id) {
-                    toolMessages.push({
-                        role: 'tool',
-                        tool_call_id: msg.tool_call_id,
-                        name: msg.name,
-                        content: msg.content,
-                    });
-                }
-            }
-        }
-
-        // 【关键修复】将 tool 响应消息插入到 messages 中
-        // 注意：必须先插入 tool 消息，再更新/创建 assistant 消息
-        if (toolMessages.length > 0) {
-            let lastUserMessageIndex = -1;
-            for (let i = messages.length - 1; i >= 0; i--) {
-                if (messages[i].role === 'user') {
-                    lastUserMessageIndex = i;
-                    break;
-                }
-            }
-
-            if (lastUserMessageIndex >= 0) {
-                // 在用户消息之后插入 tool 消息
-                const insertIndex = lastUserMessageIndex + 1;
-                messages = [
-                    ...messages.slice(0, insertIndex),
-                    ...toolMessages,
-                    ...messages.slice(insertIndex),
-                ];
-            }
-        }
-
-        // 【修复】更新当前这轮待选择的助手消息，而不是错误覆盖历史轮次
-        // 注意：必须从后往前找，优先命中最新一条未完成选择的多模型消息
-        let assistantMsgIndex = -1;
-        for (let i = messages.length - 1; i >= 0; i--) {
-            const msg = messages[i];
-            if (msg.role !== 'assistant' || !msg.multiModelResponses) continue;
-
-            const hasSelectedAnswer = msg.multiModelResponses.some(r => r.isSelected);
-            const hasFinalContent =
-                typeof msg.content === 'string' && msg.content.trim().length > 0;
-
-            // 当前轮次通常是“未选择 + 空内容”，优先匹配它
-            if (!hasSelectedAnswer && !hasFinalContent) {
-                assistantMsgIndex = i;
-                break;
-            }
-
-            // 回退策略：至少保证命中最后一条多模型助手消息，而不是第一条
-            if (assistantMsgIndex === -1) {
-                assistantMsgIndex = i;
-            }
-        }
-        if (assistantMsgIndex >= 0) {
-            // 更新已有的助手消息
-            messages[assistantMsgIndex].content = selectedResponse.content; // 设置为选择的答案内容
-            messages[assistantMsgIndex].thinking = selectedResponse.thinking || ''; // 保存思考内容
-            messages[assistantMsgIndex].multiModelResponses = multiModelResponses.map(
-                (response, i) => ({
-                    ...response,
-                    isSelected: i === index, // 标记哪个被选择
-                    modelName: cleanModelName(response.modelName),
-                })
-            );
-        } else {
-            // 如果没有找到助手消息（不应该发生），在最后创建新消息
-            const assistantMessage: Message = {
-                role: 'assistant',
-                content: selectedResponse.content,
-                thinking: selectedResponse.thinking || '',
-                multiModelResponses: multiModelResponses.map((response, i) => ({
-                    ...response,
-                    isSelected: i === index,
-                    modelName: cleanModelName(response.modelName),
-                })),
-            };
-            messages = [...messages, assistantMessage];
-        }
-
-        // 触发响应式更新
-        messages = [...messages];
-
-        // 清除多模型状态（全局多模型响应清除），但记录已选索引用于UI
+        const selected = multiModelResponses[index];
+        if (!selected || selected.isLoading) return;
+        messages = applyMultiModelSelection(messages, multiModelResponses, index);
         multiModelResponses = [];
         isWaitingForAnswerSelection = false;
         selectedAnswerIndex = index;
         hasUnsavedChanges = true;
-
-        // 自动保存会话
-        saveCurrentSession(true);
+        void saveCurrentSession(true);
     }
-
     // 自动重命名会话
     async function autoRenameSession(content: string) {
         // 检查是否启用自动重命名
@@ -5405,47 +4892,21 @@
         sessions = result.sessions;
     }
 
+    function finalizePendingSelection() {
+        if (!isWaitingForAnswerSelection || multiModelResponses.length === 0) return;
+        const finalized = finalizePendingMultiModel(messages, multiModelResponses);
+        if (finalized !== messages) {
+            messages = finalized;
+            hasUnsavedChanges = true;
+        }
+    }
+
     async function loadSession(sessionId: string) {
         saveActiveTaskState();
         ensureActiveTaskTab(sessionId);
         clearTaskUnread(sessionId);
 
-        // 多任务模式：切换会话时不再中断上一个会话的后台任务
-        // 如果有未保存的更改，先提示保存
-        if (isWaitingForAnswerSelection && multiModelResponses.length > 0) {
-            const firstSuccessIndex = multiModelResponses.findIndex(r => !r.error && !r.isLoading);
-
-            if (firstSuccessIndex !== -1) {
-                const selectedResponse = multiModelResponses[firstSuccessIndex];
-                const updatedMultiModelResponses = multiModelResponses.map((response, i) => ({
-                    ...response,
-                    isSelected: i === firstSuccessIndex,
-                    modelName: cleanModelName(response.modelName),
-                }));
-
-                const lastMessage = messages[messages.length - 1];
-                if (
-                    lastMessage &&
-                    lastMessage.role === 'assistant' &&
-                    lastMessage.multiModelResponses
-                ) {
-                    lastMessage.content = selectedResponse.content || '';
-                    lastMessage.thinking = selectedResponse.thinking || '';
-                    lastMessage.multiModelResponses = updatedMultiModelResponses;
-                    messages = [...messages];
-                } else {
-                    const assistantMessage: Message = {
-                        role: 'assistant',
-                        content: selectedResponse.content || '',
-                        thinking: selectedResponse.thinking,
-                        multiModelResponses: updatedMultiModelResponses,
-                    };
-                    messages = [...messages, assistantMessage];
-                }
-                hasUnsavedChanges = true;
-            }
-        }
-
+        finalizePendingSelection();
         const flushedState = flushBackgroundTaskState(sessionId);
         const storedState = taskStateController.getForeground(sessionId);
         if (flushedState || storedState) {
@@ -5511,42 +4972,7 @@
 
     async function newSession() {
         saveActiveTaskState();
-        // 多任务模式：新建会话不再中断其他会话的后台任务
-        if (isWaitingForAnswerSelection && multiModelResponses.length > 0) {
-            // 找到第一个成功的响应作为默认选择（如果所有都失败则不保存）
-            const firstSuccessIndex = multiModelResponses.findIndex(r => !r.error && !r.isLoading);
-
-            if (firstSuccessIndex !== -1) {
-                const selectedResponse = multiModelResponses[firstSuccessIndex];
-                const updatedMultiModelResponses = multiModelResponses.map((response, i) => ({
-                    ...response,
-                    isSelected: i === firstSuccessIndex, // 标记第一个成功的为默认选择
-                    modelName: cleanModelName(response.modelName),
-                }));
-
-                const lastMessage = messages[messages.length - 1];
-                if (
-                    lastMessage &&
-                    lastMessage.role === 'assistant' &&
-                    lastMessage.multiModelResponses
-                ) {
-                    lastMessage.content = selectedResponse.content || '';
-                    lastMessage.thinking = selectedResponse.thinking || '';
-                    lastMessage.multiModelResponses = updatedMultiModelResponses;
-                    messages = [...messages];
-                } else {
-                    // 创建assistant消息，保存所有多模型响应
-                    const assistantMessage: Message = {
-                        role: 'assistant',
-                        content: '', // 不显示单独的内容
-                        multiModelResponses: updatedMultiModelResponses,
-                    };
-                    messages = [...messages, assistantMessage];
-                }
-                hasUnsavedChanges = true;
-            }
-        }
-
+        finalizePendingSelection();
         // 如果有未保存的更改，自动保存当前会话
         if (hasUnsavedChanges && messages.filter(m => m.role !== 'system').length > 0) {
             await saveCurrentSession();

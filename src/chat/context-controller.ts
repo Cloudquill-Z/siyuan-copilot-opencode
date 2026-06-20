@@ -23,6 +23,23 @@ export function createContextTitle(content: string, fallback: string): string {
         : preview || fallback;
 }
 
+export async function refreshContextDocuments<T extends ManagedContextDocument>(
+    documents: T[],
+    loadContent: (document: T) => Promise<string | undefined>
+): Promise<T[]> {
+    return Promise.all(
+        documents.map(async document => {
+            try {
+                const content = await loadContent(document);
+                return content ? { ...document, content } : document;
+            } catch (error) {
+                console.error(`Failed to refresh context ${document.id}:`, error);
+                return document;
+            }
+        })
+    );
+}
+
 export class ContextController {
     private items: ManagedContextDocument[] = [];
 
