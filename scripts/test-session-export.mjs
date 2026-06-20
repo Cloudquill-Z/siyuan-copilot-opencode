@@ -27,6 +27,12 @@ const providers = {
     },
 };
 
+const splitIdProviders = {
+    opencode: {
+        models: [{ id: 'claude-sonnet-4', providerID: 'anthropic', name: '当前短 ID Sonnet' }],
+    },
+};
+
 assert.equal(cleanModelName(' ✅✅ Claude'), 'Claude');
 assert.equal(cleanModelName('✅ GPT-5'), 'GPT-5');
 
@@ -36,6 +42,15 @@ assert.equal(
         { providers, currentProvider: 'opencode', currentModelId: 'openai/gpt-5' }
     ),
     'anthropic / 当前配置的 Sonnet'
+);
+
+assert.equal(
+    resolveAssistantDisplayName(
+        { role: 'assistant', content: 'answer', provider: 'opencode', modelId: 'anthropic/claude-sonnet-4' },
+        { providers: splitIdProviders, currentProvider: 'opencode', currentModelId: '' }
+    ),
+    'anthropic / 当前短 ID Sonnet',
+    'configured short IDs must not erase the provider encoded in the message model ID'
 );
 
 assert.equal(

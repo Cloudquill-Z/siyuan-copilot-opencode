@@ -40,7 +40,7 @@ function parseDraft(text: string): ExtractedMemoryDraft | null {
             followUps: Array.isArray(parsed.followUps) ? parsed.followUps.map(String) : [],
             topics: Array.isArray(parsed.topics) ? parsed.topics.map(String) : [],
             importance: Math.max(0, Math.min(1, Number(parsed.importance) || 0)),
-            shouldRemember: parsed.shouldRemember !== false,
+            shouldRemember: parsed.shouldRemember === true,
             reason: String(parsed.reason || ""),
         };
     } catch (error) {

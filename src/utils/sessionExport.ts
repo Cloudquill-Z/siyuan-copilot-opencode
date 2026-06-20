@@ -70,7 +70,7 @@ export function resolveAssistantDisplayName(message: any, context: SessionExport
     );
     return platformAndModel(
         provider,
-        configured?.id || modelId,
+        modelId || configured?.id || '',
         modelName,
         context.assistantFallback || 'AI'
     );

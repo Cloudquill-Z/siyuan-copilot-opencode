@@ -10,6 +10,12 @@ function isPlainObject(value: unknown): value is Record<string, any> {
     return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function finiteNumberOrDefault(value: unknown, fallback: number): number {
+    if (value === null || value === undefined || value === '') return fallback;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+}
+
 function deepMerge<T>(base: T, override: any): T {
     if (Array.isArray(base)) {
         return (Array.isArray(override) ? override : base) as T;
@@ -80,27 +86,27 @@ export function normalizeSettings(rawSettings: any) {
     merged.memory.saveFullConversation = !!merged.memory.saveFullConversation;
     merged.memory.maxOverviewChars = Math.min(
         12000,
-        Math.max(500, Math.floor(Number(merged.memory.maxOverviewChars) || defaults.memory.maxOverviewChars))
+        Math.max(500, Math.floor(finiteNumberOrDefault(merged.memory.maxOverviewChars, defaults.memory.maxOverviewChars)))
     );
     merged.memory.maxCoreChars = Math.min(
         16000,
-        Math.max(500, Math.floor(Number(merged.memory.maxCoreChars) || defaults.memory.maxCoreChars))
+        Math.max(500, Math.floor(finiteNumberOrDefault(merged.memory.maxCoreChars, defaults.memory.maxCoreChars)))
     );
     merged.memory.maxEpisodicItems = Math.min(
         20,
-        Math.max(0, Math.floor(Number(merged.memory.maxEpisodicItems) || defaults.memory.maxEpisodicItems))
+        Math.max(0, Math.floor(finiteNumberOrDefault(merged.memory.maxEpisodicItems, defaults.memory.maxEpisodicItems)))
     );
     merged.memory.maxTopicItems = Math.min(
         10,
-        Math.max(0, Math.floor(Number(merged.memory.maxTopicItems) || defaults.memory.maxTopicItems))
+        Math.max(0, Math.floor(finiteNumberOrDefault(merged.memory.maxTopicItems, defaults.memory.maxTopicItems)))
     );
     merged.memory.maxMemoryPromptChars = Math.min(
         32000,
-        Math.max(1000, Math.floor(Number(merged.memory.maxMemoryPromptChars) || defaults.memory.maxMemoryPromptChars))
+        Math.max(1000, Math.floor(finiteNumberOrDefault(merged.memory.maxMemoryPromptChars, defaults.memory.maxMemoryPromptChars)))
     );
     merged.memory.minImportance = Math.min(
         1,
-        Math.max(0, Number(merged.memory.minImportance) || defaults.memory.minImportance)
+        Math.max(0, finiteNumberOrDefault(merged.memory.minImportance, defaults.memory.minImportance))
     );
 
     if (typeof merged.userName !== "string") {

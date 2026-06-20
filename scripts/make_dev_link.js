@@ -32,6 +32,10 @@ if (targetDir === '') {
         }
     } else {
         targetDir = await chooseTarget(res);
+        if (!targetDir) {
+            error('\tMultiple workspaces detected. Set "SIYUAN_PLUGIN_DIR" and retry.');
+            process.exit(1);
+        }
     }
 
     log(`>>> Successfully got target directory: ${targetDir}`);

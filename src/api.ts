@@ -559,15 +559,18 @@ export async function putFile(path: string, isDir: boolean, file: any) {
             method: 'POST',
             body: form
         });
+        if (!response.ok) {
+            throw new Error(`SiYuan file write failed (HTTP ${response.status}): ${path}`);
+        }
         const res = await response.json();
         if (res.code === 0) {
             // 如果成功且 data 为 null，返回 true 以便调用者知道成功了
             return res.data ?? true;
         }
-        return null;
+        throw new Error(res.msg || `SiYuan file write failed (${res.code}): ${path}`);
     } catch (e) {
         console.error('putFile error:', e);
-        return null;
+        throw e;
     }
 }
 

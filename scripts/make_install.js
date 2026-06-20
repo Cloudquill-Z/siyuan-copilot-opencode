@@ -27,6 +27,10 @@ if (targetDir) {
         process.exit(0);
     } else {
         targetDir = await chooseTarget(res);
+        if (!targetDir) {
+            log('>>> Multiple workspaces detected but no active workspace could be selected. Auto-install skipped.');
+            process.exit(0);
+        }
     }
 
     log(`>>> Successfully got target directory: ${targetDir}`);

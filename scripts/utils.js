@@ -31,7 +31,7 @@ export async function myfetch(url, options) {
             });
             res.on('end', () => {
                 resolve({
-                    ok: true,
+                    ok: !!res.statusCode && res.statusCode >= 200 && res.statusCode < 300,
                     status: res.statusCode,
                     json: () => JSON.parse(data)
                 });
@@ -70,6 +70,28 @@ export async function getSiYuanDir() {
     return conf?.data; // 保持原始返回值
 }
 
+export async function getCurrentSiYuanWorkspace() {
+    try {
+        const response = await myfetch('http://127.0.0.1:6806/api/system/getConf', {
+            method: 'POST',
+            headers: POST_HEADER,
+        });
+        if (!response.ok) return '';
+        const conf = await response.json();
+        return String(conf?.data?.conf?.system?.workspaceDir || '');
+    } catch {
+        return '';
+    }
+}
+
+export function resolveWorkspaceTarget(workspaces, currentWorkspace = '') {
+    if (!Array.isArray(workspaces) || workspaces.length === 0) return null;
+    if (workspaces.length === 1) return `${workspaces[0].path}/data/plugins`;
+    if (!currentWorkspace) return null;
+    const active = workspaces.find(workspace => cmpPath(workspace.path, currentWorkspace));
+    return active ? `${active.path}/data/plugins` : null;
+}
+
 /**
  * Choose target workspace
  * @param {{path: string}[]} workspaces
@@ -82,8 +104,14 @@ export async function chooseTarget(workspaces) {
         log(`\t[${i}] ${workspace.path}`);
     });
 
-    if (count === 1) {
-        return `${workspaces[0].path}/data/plugins`;
+    const automaticTarget = resolveWorkspaceTarget(workspaces, await getCurrentSiYuanWorkspace());
+    if (automaticTarget) {
+        log(`\tUsing active workspace: ${automaticTarget}`);
+        return automaticTarget;
+    }
+
+    if (!process.stdin.isTTY) {
+        return null;
     } else {
         const rl = readline.createInterface({
             input: process.stdin,
@@ -95,7 +123,11 @@ export async function chooseTarget(workspaces) {
             });
         });
         rl.close();
-        return `${workspaces[index].path}/data/plugins`;
+        const selectedIndex = Number(index);
+        if (!Number.isInteger(selectedIndex) || selectedIndex < 0 || selectedIndex >= count) {
+            return null;
+        }
+        return `${workspaces[selectedIndex].path}/data/plugins`;
     }
 }
 

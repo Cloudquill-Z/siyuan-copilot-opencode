@@ -22,6 +22,9 @@ export const connectionStatusStore = writable<ConnectionStatus>(initialState);
 
 let healthTimer: ReturnType<typeof setInterval> | null = null;
 let currentServerUrl = '';
+let healthController: AbortController | null = null;
+let healthPollGeneration = 0;
+let healthCheckRunning = false;
 
 export function getConnectionStatus(): ConnectionStatus {
     return get(connectionStatusStore);
@@ -30,13 +33,17 @@ export function getConnectionStatus(): ConnectionStatus {
 export function startHealthPoll(serverUrl: string, intervalMs: number = 5000): void {
     stopHealthPoll(false);
     currentServerUrl = serverUrl;
+    const generation = healthPollGeneration;
 
     connectionStatusStore.update(s => ({ ...s, state: 'connecting', serverUrl, error: '' }));
 
     const check = async () => {
+        if (healthCheckRunning || generation !== healthPollGeneration) return;
+        healthCheckRunning = true;
         try {
             const url = `${serverUrl.replace(/\/$/, '')}/global/health`;
             const controller = new AbortController();
+            healthController = controller;
             const timer = setTimeout(() => controller.abort(), 5000);
 
             let response: Response;
@@ -46,6 +53,7 @@ export function startHealthPoll(serverUrl: string, intervalMs: number = 5000): v
                 clearTimeout(timer);
             }
 
+            if (generation !== healthPollGeneration || controller.signal.aborted) return;
             if (response.ok) {
                 let data: any = {};
                 try { data = await response.json(); } catch {}
@@ -65,12 +73,18 @@ export function startHealthPoll(serverUrl: string, intervalMs: number = 5000): v
                 }));
             }
         } catch (err: any) {
+            if (generation !== healthPollGeneration || err?.name === 'AbortError') return;
             connectionStatusStore.update(s => ({
                 ...s,
                 state: 'disconnected',
                 lastChecked: Date.now(),
                 error: err.message || 'Connection failed',
             }));
+        } finally {
+            if (generation === healthPollGeneration) {
+                healthCheckRunning = false;
+                healthController = null;
+            }
         }
     };
 
@@ -79,6 +93,10 @@ export function startHealthPoll(serverUrl: string, intervalMs: number = 5000): v
 }
 
 export function stopHealthPoll(resetState: boolean = true): void {
+    healthPollGeneration++;
+    healthController?.abort();
+    healthController = null;
+    healthCheckRunning = false;
     if (healthTimer !== null) {
         clearInterval(healthTimer);
         healthTimer = null;

@@ -6309,6 +6309,15 @@
         return result;
     }
 
+    function escapeHtml(value: string): string {
+        return value
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     function formatMessage(content: string | MessageContent[]): string {
         let textContent = getMessageText(content);
 
@@ -6316,6 +6325,7 @@
             // 检查window.Lute是否存在
             if (typeof window !== 'undefined' && (window as any).Lute) {
                 const lute = (window as any).Lute.New();
+                lute.SetSanitize(true);
                 // 启用行内数学公式支持，将 $...$ 解析为 <span class="language-math">...</span>
                 lute.SetInlineMath(true);
                 // 允许 $ 后面紧跟数字，如 $7.24 s$
@@ -6326,7 +6336,7 @@
                 return html;
             }
             // 如果Lute不可用，回退到简单渲染
-            return textContent
+            return escapeHtml(textContent)
                 .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
                 .replace(/\*(.*?)\*/g, '<em>$1</em>')
                 .replace(/`([^`]+)`/g, '<code>$1</code>')
@@ -6337,7 +6347,7 @@
                 .replace(/\n/g, '<br>');
         } catch (error) {
             console.error('Format message error:', error);
-            return textContent;
+            return escapeHtml(textContent);
         }
     }
 
@@ -6345,10 +6355,8 @@
     function highlightCodeBlocks(element: HTMLElement) {
         if (!element) return;
 
-        // 使用 tick 确保 DOM 已更新
         tick().then(async () => {
             try {
-                // 确保 highlight.js 已加载
                 if (!(window as any).hljs) {
                     const loaded = await initHljs();
                     if (!loaded) {
@@ -6358,84 +6366,33 @@
                 }
 
                 const hljs = (window as any).hljs;
-
-                // 处理思源的代码块结构: div.hljs > div[contenteditable]
-                const siyuanCodeBlocks = element.querySelectorAll(
+                const codeBlocks = element.querySelectorAll(
                     'pre > code:not([data-highlighted])'
                 );
-                siyuanCodeBlocks.forEach((block: HTMLElement) => {
-                    // 检查是否已经高亮过（通过检查是否有 hljs 的高亮 class）
+                codeBlocks.forEach((block: HTMLElement) => {
                     if (block.querySelector('.hljs-keyword, .hljs-string, .hljs-comment')) {
                         return;
                     }
-
                     try {
                         const code = block.textContent || '';
-                        const parent = block.parentElement as HTMLElement;
-
-                        // 尝试从父元素获取语言信息
-                        let language = '';
-                        const langAttr =
-                            parent.getAttribute('data-node-id') ||
-                            parent.getAttribute('data-subtype');
-
-                        // 自动检测语言并高亮
-                        let highlighted;
-                        if (language) {
-                            highlighted = hljs.highlight(code, { language, ignoreIllegals: true });
-                            block.classList.add('hljs');
-                        } else {
-                            highlighted = hljs.highlightAuto(code);
-                            block.classList.add('hljs');
-                        }
-                        block.classList.add('hljs');
-                        // 将高亮后的 HTML 设置到 contenteditable 元素中
-                        block.innerHTML = highlighted.value;
-
-                        // 标记已处理，添加一个自定义属性
-                        block.setAttribute('data-highlighted', 'true');
-                    } catch (error) {
-                        console.error('Highlight siyuan code block error:', error);
-                    }
-                });
-
-                // 处理标准的 pre > code 结构（作为后备）
-                const standardCodeBlocks = element.querySelectorAll(
-                    'pre > code:not([data-highlighted])'
-                );
-                standardCodeBlocks.forEach((block: HTMLElement) => {
-                    if (block.querySelector('.hljs-keyword, .hljs-string, .hljs-comment')) {
-                        return;
-                    }
-                    try {
-                        // 尝试从 class 中获取 language
-                        let language = '';
                         const codeClass = block.className || '';
                         const match = codeClass.match(/(?:^|\s)language-([a-zA-Z0-9_-]+)/);
-                        if (match && match[1]) {
-                            language = match[1];
-                        }
+                        const language = match?.[1] || '';
                         let highlighted;
-                        // 如果指定了语言且可识别，使用 hljs.highlight
-                        debugSidebar(language);
-                        if (language) {
-                            const code = block.textContent || '';
-                            hljs.highlight(code, {
+                        if (language && (!hljs.getLanguage || hljs.getLanguage(language))) {
+                            highlighted = hljs.highlight(code, {
                                 language,
                                 ignoreIllegals: true,
                             });
-                            block.innerHTML = highlighted.value;
-                            block.classList.add('hljs');
                         } else {
-                            // 否则使用 highlightElement（自动检测）
-                            highlighted = hljs.highlightAuto(block);
-                            block.innerHTML = highlighted.value;
-                            block.classList.add('hljs');
+                            highlighted = hljs.highlightAuto(code);
                         }
+                        block.innerHTML = highlighted.value;
+                        block.classList.add('hljs');
                         block.setAttribute('data-highlighted', 'true');
                         if (language) block.setAttribute('data-language', language);
                     } catch (error) {
-                        console.error('Highlight standard code block error:', error);
+                        console.error('Highlight code block error:', error);
                     }
                 });
             } catch (error) {
@@ -8100,6 +8057,7 @@
         } catch (error) {
             console.error('Save sessions error:', error);
             pushErrMsg(t('aiSidebar.errors.saveSessionFailed'));
+            throw error;
         }
     }
 
@@ -8272,6 +8230,12 @@
 
             if (!silent) {
                 pushMsg(t('aiSidebar.success.saveSessionSuccess'));
+            }
+        } catch (error) {
+            hasUnsavedChanges = true;
+            console.error('Save current session error:', error);
+            if (!silent) {
+                pushErrMsg(t('aiSidebar.errors.saveSessionFailed'));
             }
         } finally {
             isSavingSession = false;
@@ -9807,6 +9771,7 @@
         try {
             const lute = (window as any).Lute.New();
             if (lute && typeof lute.Md2HTML === 'function') {
+                lute.SetSanitize(true);
                 return lute.Md2HTML(content);
             }
         } catch (error) {
