@@ -25,6 +25,15 @@
     import { renderMessageHtml } from './chat/message-renderer';
     import { TaskStateController } from './chat/task-state-controller';
     import { SessionRepository } from './chat/session-repository';
+    import {
+        AttachmentController,
+        validateAttachmentFile,
+    } from './chat/attachment-controller';
+    import {
+        ContextController,
+        buildDocumentSearchQuery,
+        createContextTitle,
+    } from './chat/context-controller';
     import { getActiveEditor, openTab } from 'siyuan';
     import {
         pushMsg,
@@ -357,7 +366,13 @@
     // 附件管理
     let currentAttachments: MessageAttachment[] = [];
     let isUploadingFile = false;
-    const pendingAttachmentSaveTasks = new Set<Promise<void>>();
+    const attachmentController = new AttachmentController(
+        (file, name) => saveAsset(file, name),
+        attachments => {
+            currentAttachments = attachments;
+            isUploadingFile = attachmentController.isSaving;
+        }
+    );
 
     // 网页链接功能
     let isWebLinkDialogOpen = false;
@@ -418,6 +433,9 @@
 
     // 上下文文档
     let contextDocuments: ContextDocument[] = [];
+    const contextController = new ContextController(documents => {
+        contextDocuments = documents;
+    });
     let isSearchDialogOpen = false;
     let searchKeyword = '';
     let searchResults: any[] = [];
@@ -507,8 +525,8 @@
     function applyTaskState(state: SidebarSessionState) {
         messages = state.messages;
         currentInput = state.currentInput;
-        currentAttachments = state.currentAttachments;
-        contextDocuments = state.contextDocuments;
+        attachmentController.replace(state.currentAttachments);
+        contextController.replace(state.contextDocuments);
         streamingMessage = state.streamingMessage;
         streamingThinking = state.streamingThinking;
         openCodeToolParts = state.openCodeToolParts;
@@ -980,7 +998,7 @@
             }
         }
 
-        contextDocuments = updatedDocs;
+        contextController.replace(updatedDocs);
     }
 
     // 重新生成单个多模型响应（在多模型选择阶段使用）
@@ -2381,63 +2399,26 @@
             pushErrMsg(t('aiSidebar.errors.imageOnly'));
             return;
         }
-
-        // 先立即显示预览，资源保存在后台进行，减少拖拽后的卡顿感
-        const blobUrl = URL.createObjectURL(file);
-        const attachment: MessageAttachment = {
-            type: 'image',
-            name: file.name,
-            data: blobUrl,
-            path: '',
-            mimeType: file.type,
-        };
-        currentAttachments = [...currentAttachments, attachment];
-
         isUploadingFile = true;
-        const saveTask = (async () => {
-            try {
-                const assetPath = await saveAsset(file, file.name);
-                currentAttachments = currentAttachments.map(att =>
-                    att === attachment ? { ...att, path: assetPath } : att
-                );
-            } catch (error) {
-                console.error('Add image error:', error);
-                // 保存失败时移除该附件，避免后续会话中保留无效 blob URL
-                currentAttachments = currentAttachments.filter(att => att !== attachment);
-                pushErrMsg(t('aiSidebar.errors.addImageFailed'));
-            }
-        })();
-
-        pendingAttachmentSaveTasks.add(saveTask);
-        saveTask.finally(() => {
-            pendingAttachmentSaveTasks.delete(saveTask);
-            if (pendingAttachmentSaveTasks.size === 0) {
-                isUploadingFile = false;
-            }
-        });
+        try {
+            await attachmentController.addImage(file, URL.createObjectURL(file));
+        } catch (error) {
+            console.error('Add image error:', error);
+            pushErrMsg(t('aiSidebar.errors.addImageFailed'));
+        } finally {
+            isUploadingFile = attachmentController.isSaving;
+        }
     }
 
     // 添加文件附件
     async function addFileAttachment(file: File) {
-        // 只支持文本文件和图片
-        const isText =
-            file.type.startsWith('text/') ||
-            file.name.endsWith('.md') ||
-            file.name.endsWith('.txt') ||
-            file.name.endsWith('.json') ||
-            file.name.endsWith('.xml') ||
-            file.name.endsWith('.csv');
-
         const isImage = file.type.startsWith('image/');
-
-        if (!isText && !isImage) {
+        const validationError = validateAttachmentFile(file);
+        if (validationError === 'unsupported') {
             pushErrMsg(t('aiSidebar.errors.textAndImageOnly'));
             return;
         }
-
-        // 检查文件大小 (文本文件最大 5MB，图片最大 10MB)
-        const maxSize = isImage ? 10 * 1024 * 1024 : 5 * 1024 * 1024;
-        if (file.size > maxSize) {
+        if (validationError === 'too_large') {
             pushErrMsg(t('aiSidebar.errors.fileTooLarge'));
             return;
         }
@@ -2447,37 +2428,19 @@
                 await addImageAttachment(file);
             } else {
                 isUploadingFile = true;
-                // 文本读取与资源保存并行，减少等待时间
-                const [content, assetPath] = await Promise.all([
-                    file.text(),
-                    saveAsset(file, file.name),
-                ]);
-
-                currentAttachments = [
-                    ...currentAttachments,
-                    {
-                        type: 'file',
-                        name: file.name,
-                        data: content, // 内存中保持 content 方便立即发送给 AI
-                        path: assetPath,
-                        mimeType: file.type,
-                    },
-                ];
+                await attachmentController.addText(file);
             }
         } catch (error) {
             console.error('Add file error:', error);
             pushErrMsg(t('aiSidebar.errors.addFileFailed'));
         } finally {
-            if (pendingAttachmentSaveTasks.size === 0) {
-                isUploadingFile = false;
-            }
+            isUploadingFile = attachmentController.isSaving;
         }
     }
 
     // 附件保存可能在后台进行，发送前等待完成，确保 path 持久化可用
     async function waitForPendingAttachmentSaves() {
-        if (pendingAttachmentSaveTasks.size === 0) return;
-        await Promise.all(Array.from(pendingAttachmentSaveTasks));
+        await attachmentController.waitForPendingSaves();
     }
 
     async function addFilesInBatches(files: File[], concurrency = 3) {
@@ -2546,7 +2509,7 @@
 
     // 移除附件
     function removeAttachment(index: number) {
-        currentAttachments = currentAttachments.filter((_, i) => i !== index);
+        attachmentController.remove(index);
     }
 
     // 打开网页链接对话框
@@ -2604,18 +2567,7 @@
                     );
 
                     // 添加到附件列表，标记为网页类型
-                    currentAttachments = [
-                        ...currentAttachments,
-                        {
-                            type: 'file',
-                            name: result.url,
-                            data: result.markdown,
-                            path: assetPath,
-                            mimeType: 'text/markdown',
-                            isWebPage: true, // 标记为网页附件
-                            url: result.url, // 保存原始URL
-                        },
-                    ];
+                    attachmentController.addWebPage(result.url, result.markdown, assetPath);
 
                     successCount++;
                     pushMsg(`✓ 成功获取: ${result.title || result.url}`);
@@ -2638,18 +2590,11 @@
                             );
 
                             // 添加到附件列表，标记为网页类型
-                            currentAttachments = [
-                                ...currentAttachments,
-                                {
-                                    type: 'file',
-                                    name: result.url,
-                                    data: webviewResult.markdown,
-                                    path: assetPath,
-                                    mimeType: 'text/markdown',
-                                    isWebPage: true, // 标记为网页附件
-                                    url: result.url, // 保存原始URL
-                                },
-                            ];
+                            attachmentController.addWebPage(
+                                result.url,
+                                webviewResult.markdown,
+                                assetPath
+                            );
 
                             successCount++;
                             pushMsg(`✓ WebView 模式成功: ${webviewResult.title || result.url}`);
@@ -3583,8 +3528,8 @@
             messages = [...messages, userMessage];
         }
         currentInput = '';
-        currentAttachments = [];
-        contextDocuments = [];
+        attachmentController.replace([]);
+        contextController.replace([]);
         isLoading = true;
         isWaitingForAnswerSelection = true;
         selectedAnswerIndex = null; // 重置选择的答案索引，因为这是新的多模型对话
@@ -5009,8 +4954,8 @@
 
         messages = [...messages, userMessage];
         currentInput = '';
-        currentAttachments = [];
-        contextDocuments = []; // 发送后清空全局上下文
+        attachmentController.replace([]);
+        contextController.replace([]); // 发送后清空全局上下文
         // isLoading 已经在函数开始时设置为 true
         isAborted = false; // 重置中断标志
         streamingMessage = '';
@@ -6054,7 +5999,7 @@
         messages = settings.aiSystemPrompt
             ? [{ role: 'system', content: settings.aiSystemPrompt }]
             : [];
-        contextDocuments = [];
+        contextController.replace([]);
         streamingMessage = '';
         streamingThinking = '';
         isThinkingPhase = false;
@@ -7434,14 +7379,7 @@
 
             // 将空格分隔的关键词转换为 SQL LIKE 查询
             // 转义单引号以防止SQL注入
-            const keywords = searchKeyword
-                .trim()
-                .split(/\s+/)
-                .map(kw => kw.replace(/'/g, "''"));
-            const conditions = keywords.map(kw => `content LIKE '%${kw}%'`).join(' AND ');
-            const sqlQuery = `SELECT * FROM blocks WHERE ${conditions} AND type = 'd' ORDER BY updated DESC LIMIT 20`;
-
-            const results = await sql(sqlQuery);
+            const results = await sql(buildDocumentSearchQuery(searchKeyword));
             searchResults = results || [];
         } catch (error) {
             console.error('Search error:', error);
@@ -7485,7 +7423,7 @@
     // 添加文档到上下文
     async function addDocumentToContext(docId: string, docTitle: string) {
         // 检查是否已存在
-        if (contextDocuments.find(doc => doc.id === docId)) {
+        if (contextController.has(docId)) {
             pushMsg(t('aiSidebar.success.documentExists'));
             return;
         }
@@ -7494,15 +7432,12 @@
             // 获取文档内容
             const data = await exportMdContent(docId, false, false, 2, 0, false);
             if (data && data.content) {
-                contextDocuments = [
-                    ...contextDocuments,
-                    {
-                        id: docId,
-                        title: docTitle,
-                        content: data.content,
-                        type: 'doc',
-                    },
-                ];
+                contextController.add({
+                    id: docId,
+                    title: docTitle,
+                    content: data.content,
+                    type: 'doc',
+                });
                 isSearchDialogOpen = false;
                 searchKeyword = '';
                 searchResults = [];
@@ -7637,7 +7572,7 @@
     // 添加块到上下文（而不是整个文档）
     async function addBlockToContext(blockId: string, blockTitle: string, isDocOverride?: boolean) {
         // 检查是否已存在
-        if (contextDocuments.find(doc => doc.id === blockId)) {
+        if (contextController.has(blockId)) {
             pushMsg(t('aiSidebar.success.blockExists'));
             return;
         }
@@ -7692,21 +7627,15 @@
 
                 // 不是纯图片块或上传失败，按照原有逻辑处理
                 // 从块内容中提取前20个字作为显示标题
-                const contentPreview = data.content.replace(/\n/g, ' ').trim();
-                const displayTitle =
-                    contentPreview.length > 20
-                        ? contentPreview.substring(0, 20) + '...'
-                        : contentPreview || blockTitle || (isDoc ? '文档内容' : '块内容');
-
-                contextDocuments = [
-                    ...contextDocuments,
-                    {
-                        id: blockId,
-                        title: displayTitle,
-                        content: data.content,
-                        type: isDoc ? 'doc' : 'block',
-                    },
-                ];
+                contextController.add({
+                    id: blockId,
+                    title: createContextTitle(
+                        data.content,
+                        blockTitle || (isDoc ? '文档内容' : '块内容')
+                    ),
+                    content: data.content,
+                    type: isDoc ? 'doc' : 'block',
+                });
             }
         } catch (error) {
             console.error('Add block error:', error);
@@ -7716,7 +7645,7 @@
 
     // 删除上下文文档
     function removeContextDocument(docId: string) {
-        contextDocuments = contextDocuments.filter(doc => doc.id !== docId);
+        contextController.remove(docId);
     }
 
     // 打开文档
@@ -7854,18 +7783,11 @@
                         );
 
                         // 添加到附件列表，标记为网页类型（与添加网页链接弹窗一致）
-                        currentAttachments = [
-                            ...currentAttachments,
-                            {
-                                type: 'file',
-                                name: webviewUrl,
-                                data: webviewResult.markdown,
-                                path: assetPath,
-                                mimeType: 'text/markdown',
-                                isWebPage: true, // 标记为网页附件
-                                url: webviewUrl, // 保存原始URL
-                            },
-                        ];
+                        attachmentController.addWebPage(
+                            webviewUrl,
+                            webviewResult.markdown,
+                            assetPath
+                        );
 
                         pushMsg(`✓ 成功添加网页: ${webviewResult.title || tabTitle || webviewUrl}`);
                     } else {
@@ -8370,7 +8292,7 @@
                 }
 
                 // 清空全局上下文文档（上下文现在存储在各个消息中）
-                contextDocuments = [];
+                contextController.replace([]);
                 // 确保系统提示词存在且是最新的
                 if (settings.aiSystemPrompt) {
                     const systemMsgIndex = messages.findIndex(m => m.role === 'system');
@@ -8461,7 +8383,7 @@
         taskStateController.addDraft(draftId, state, activeTaskKey(), activeSessions);
         syncTaskControllerState();
         applyTaskState(state);
-        contextDocuments = state.contextDocuments;
+        contextController.replace(state.contextDocuments);
         currentSessionId = '';
         hasUnsavedChanges = false;
 
