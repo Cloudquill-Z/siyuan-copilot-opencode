@@ -671,10 +671,7 @@
     let diffViewMode: DiffViewMode = 'diff'; // diff查看模式：diff或split
 
     // 图片查看器
-    let isImageViewerOpen = false;
-    let isImageViewerFullscreen = false;
-    let currentImageSrc = '';
-    let currentImageName = '';
+    let imageViewer: ImageViewer;
 
     function findModelById(models: any[] = [], modelId?: string, providerID?: string) {
         return findOpenCodeModelConfigMatch(models, modelId, providerID) || null;
@@ -850,90 +847,8 @@
         return formatMessage(textContent);
     }
 
-    // 打开图片查看器
     function openImageViewer(src: string, name: string) {
-        currentImageSrc = src;
-        currentImageName = name;
-        isImageViewerOpen = true;
-    }
-
-    // 关闭图片查看器
-    function closeImageViewer() {
-        isImageViewerOpen = false;
-        currentImageSrc = '';
-        currentImageName = '';
-        isImageViewerFullscreen = false;
-    }
-
-    // 切换图片查看器全屏
-    function toggleImageViewerFullscreen() {
-        isImageViewerFullscreen = !isImageViewerFullscreen;
-    }
-
-    // 下载图片
-    async function downloadImage(src: string, filename: string) {
-        try {
-            const link = document.createElement('a');
-            link.href = src;
-            link.download = filename;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            pushMsg('图片下载成功');
-        } catch (error) {
-            console.error('下载图片失败:', error);
-            pushErrMsg('下载图片失败');
-        }
-    }
-
-    // 复制图片为PNG
-    async function copyImageAsPng(src: string) {
-        try {
-            const response = await fetch(src);
-            const blob = await response.blob();
-
-            // 如果已经是 image/png，直接复制
-            if (blob.type === 'image/png') {
-                await navigator.clipboard.write([
-                    new ClipboardItem({
-                        'image/png': blob,
-                    }),
-                ]);
-            } else {
-                // 否则转换为 PNG
-                const img = new Image();
-                img.crossOrigin = 'anonymous';
-                img.src = URL.createObjectURL(blob);
-                await new Promise((resolve, reject) => {
-                    img.onload = resolve;
-                    img.onerror = reject;
-                });
-
-                const canvas = document.createElement('canvas');
-                canvas.width = img.width;
-                canvas.height = img.height;
-                const ctx = canvas.getContext('2d');
-                if (!ctx) throw new Error('无法创建 Canvas 上下文');
-                ctx.drawImage(img, 0, 0);
-
-                const pngBlob = await new Promise<Blob | null>(resolve =>
-                    canvas.toBlob(resolve, 'image/png')
-                );
-                if (!pngBlob) throw new Error('转换图片失败');
-
-                await navigator.clipboard.write([
-                    new ClipboardItem({
-                        'image/png': pngBlob,
-                    }),
-                ]);
-                URL.revokeObjectURL(img.src);
-            }
-
-            pushMsg('图片已复制到剪贴板');
-        } catch (error) {
-            console.error('复制图片失败:', error);
-            pushErrMsg('复制图片失败，请尝试下载后复制');
-        }
+        imageViewer.show(src, name);
     }
 
     // 当模式切换时，更新已添加的上下文文档内容
@@ -5407,17 +5322,6 @@
             isTokenDetailsOpen = false;
         }
 
-        // 关闭图片查看器
-        if (isImageViewerOpen && !target.closest('.image-viewer')) {
-            // 确保不是点击了触发开启图片的元素
-            if (
-                !target.closest('.ai-message__content img') &&
-                !target.closest('.ai-message__thinking-content img') &&
-                !target.closest('.ai-message__attachment-image')
-            ) {
-                closeImageViewer();
-            }
-        }
     }
 
     type ToolChangeContext = {
@@ -10379,15 +10283,6 @@
 
     <!-- 工具批准对话框 -->
 
-    <ImageViewer
-        open={isImageViewerOpen}
-        fullscreen={isImageViewerFullscreen}
-        src={currentImageSrc}
-        name={currentImageName}
-        onCopy={copyImageAsPng}
-        onDownload={downloadImage}
-        onToggleFullscreen={toggleImageViewerFullscreen}
-        onClose={closeImageViewer}
-    />
+    <ImageViewer bind:this={imageViewer} />
 
 </div>
