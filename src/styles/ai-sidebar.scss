@@ -3282,12 +3282,10 @@
         font-weight: 500;
     }
 
-    // 代码块复制按钮样式（绝对定位到代码块右上角）
+    // 代码块复制按钮样式（位于工具栏右侧，即代码块右上角）
     :global(.code-block-copy-btn) {
-        position: absolute;
-        top: 6px;
-        right: 6px;
-        z-index: 2;
+        appearance: none;
+        -webkit-appearance: none;
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -5125,6 +5123,8 @@
     }
 
     .ai-sidebar__status-trigger {
+        appearance: none;
+        -webkit-appearance: none;
         display: inline-flex;
         align-items: center;
         gap: 8px;
@@ -5135,6 +5135,7 @@
         border: 1px solid var(--b3-border-color);
         border-radius: 12px;
         background: var(--b3-theme-background);
+        background-clip: padding-box;
         color: var(--b3-theme-on-surface);
         font-size: 14px;
         font-weight: 600;

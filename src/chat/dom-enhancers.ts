@@ -362,18 +362,17 @@ export function cleanupCodeBlocks(element: HTMLElement) {
                 // 标记已处理
                 pre.setAttribute('data-lang-added', 'true');
 
-                // 创建工具栏容器（仅用于显示语言标签）
+                // 创建工具栏容器
                 const toolbar = document.createElement('div');
                 toolbar.className = 'code-block-toolbar';
 
-                // 只有当有语言时才创建语言标签
                 // 创建语言标签
                 const langLabel = document.createElement('div');
                 langLabel.className = 'code-block-lang-label';
                 langLabel.textContent = language;
                 toolbar.appendChild(langLabel);
 
-                // 创建复制按钮（绝对定位到代码块右上角）
+                // 创建复制按钮（放在工具栏右侧，即代码块右上角）
                 const copyButton = document.createElement('button');
                 copyButton.className = 'code-block-copy-btn';
                 copyButton.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24"><use xlink:href="#iconCopy"></use></svg>';
@@ -403,14 +402,14 @@ export function cleanupCodeBlocks(element: HTMLElement) {
                         });
                 });
 
-                // 设置 pre 为相对定位（绝对定位的复制按钮需要）
+                // 组装工具栏：语言标签在左，复制按钮在右
+                toolbar.appendChild(copyButton);
+
+                // 设置 pre 为相对定位
                 pre.style.position = 'relative';
 
                 // 将工具栏插入到 pre 的开头
                 pre.insertBefore(toolbar, pre.firstChild);
-
-                // 将复制按钮作为 pre 的直接子元素，定位到右上角
-                pre.appendChild(copyButton);
             });
         } catch (error) {
             console.error('Cleanup code blocks error:', error);
