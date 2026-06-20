@@ -11,8 +11,6 @@
         fetchModels,
         executeCommand,
         sendStillPrompt,
-        estimateTokens,
-        calculateTotalTokens,
         invalidateModelCache,
     } from './ai-chat';
     import type { MessageContent } from './ai-chat';
@@ -25,6 +23,7 @@
         type MultiModelResponse,
     } from './chat/execution/multi-model-state';
     import { runMultiModelTargets } from './chat/execution/multi-model-runner';
+    import { generateSessionTitleWithModel } from './chat/execution/session-title-generator';
     import { prepareMessagesForAI as prepareMessagesForAIRequest } from './chat/execution/message-preparer';
     import {
         convertLatexToMarkdown,
@@ -32,6 +31,14 @@
         getMessageText,
     } from './chat/message-content';
     import { renderMessageHtml } from './chat/message-renderer';
+    import { replaceAssetPathsWithBlob, saveBase64ImagesInContent } from './chat/message-assets';
+    import { groupMessages, type MessageGroup } from './chat/message-groups';
+    import { readCollapsed, toggleCollapsed } from './chat/collapse-state';
+    import {
+        getDocName,
+        resolveToolChangeContext,
+        type ToolChangeContext,
+    } from './chat/tool-change-context';
     import {
         cleanupCodeBlocks,
         highlightCodeBlocks,
@@ -50,17 +57,16 @@
         groupOpenCodeTimeline,
     } from './chat/timeline-display';
     import {
-        escapeSqlString,
         generateSimpleDiff,
         normalizeOperationContentForDiff,
         renderMarkdownForSplitDiff,
     } from './chat/diff-utils';
+    import { prepareDiffOperation } from './chat/diff-view';
+    import { estimateComposerContextTokens, estimateMessagesContextTokens } from './chat/token-estimator';
     import { TaskStateController } from './chat/task-state-controller';
     import { SessionRepository } from './chat/session-repository';
     import { hydrateSessionMessages } from './chat/session-hydrator';
-    import {
-        AttachmentController,
-    } from './chat/attachment-controller';
+    import { AttachmentController } from './chat/attachment-controller';
     import { AttachmentWorkflow } from './chat/attachment-workflow';
     import {
         ContextController,
@@ -81,7 +87,7 @@
         putFile,
         removeFile,
     } from './api';
-    import { saveAsset, loadAsset, base64ToBlob, readAssetAsText, revokeLoadedAssetUrls } from './utils/assets';
+    import { saveAsset, base64ToBlob, readAssetAsText, revokeLoadedAssetUrls } from './utils/assets';
     import {
         CHAT_SESSIONS_PATH,
         getLegacySessionPath,
@@ -91,13 +97,8 @@
         loadJsonFile,
         saveJsonFile,
     } from './pluginPaths';
-    import {
-        createDiagnosticLogger,
-        shouldStartDiagnosticLog,
-        type DiagnosticLogger,
-        type DiagnosticLogLevel,
-        type DiagnosticLogMode,
-    } from './diagnostic-logger';
+    import { createDiagnosticLogger, shouldStartDiagnosticLog, type DiagnosticLogger,
+        type DiagnosticLogLevel, type DiagnosticLogMode } from './diagnostic-logger';
     import { SUMMARY_EVENT, WEBAPP_TAB_TYPE } from './pluginNamespace';
     import {
         fetchWithWebView,
@@ -105,10 +106,11 @@
     } from './utils/webParser';
     import TaskToolbar from './components/chat/TaskToolbar.svelte';
     import MessageList from './components/chat/MessageList.svelte';
+    import ChatComposer from './components/chat/ChatComposer.svelte';
     import ModelPresetButton from './components/ModelPreset.svelte';
-    import MultiModelSelector from './components/MultiModelSelector.svelte';
     import SaveToNoteDialog from './components/chat/dialogs/SaveToNoteDialog.svelte';
     import ImageViewer from './components/chat/dialogs/ImageViewer.svelte';
+    import PromptManagerDialog from './components/chat/dialogs/PromptManagerDialog.svelte';
     import openCodeIconUrl from '../assets/opencode-icon.svg';
     import type { ProviderConfig } from './defaultSettings';
     import { settingsStore, updateSettings } from './stores/settings';
@@ -117,32 +119,26 @@
     import { t } from './utils/i18n';
     import { getModelCapabilities } from './utils/modelCapabilities';
     import { shouldSendMessageFromKeydown } from './utils/sendShortcut';
+    import { migrateLegacyProviderSettings } from './utils/settingsMigration';
     import {
         findOpenCodeModelConfigMatch,
         shouldRefreshOpenCodeModelCatalog,
         uniqueOpenCodeModelRefs,
     } from './providers/opencode-models';
-    import {
-        getChatModeDescription,
-        getChatModeLabel,
-        getChatModeSystemInstruction,
-        getContextLimitForActiveModels,
-        shouldToggleChatModeFromKeydown,
-        type ChatMode,
-    } from './utils/chatMode';
+    import { getChatModeDescription, getChatModeLabel, getChatModeSystemInstruction,
+        getContextLimitForActiveModels, shouldToggleChatModeFromKeydown,
+        type ChatMode } from './utils/chatMode';
     import {
         appendTokenUsageRecord,
         createTokenUsageRecord,
         formatTokenCount,
     } from './utils/tokenUsage';
-    import {
-        formatComposerStatusSummary,
-        getPromptMenuToggleState,
-    } from './utils/composerControls';
+    import { formatComposerStatusSummary, getPromptMenuToggleState } from './utils/composerControls';
     import {
         buildSessionMarkdown,
         cleanModelName,
         createSessionExportSnapshot,
+        resolveAssistantDisplayName,
         sanitizeDocumentName,
         type SessionExportSnapshot,
     } from './utils/sessionExport';
@@ -179,20 +175,11 @@
             return { success: false, content: '' };
         }
     }
-    function isSupportedThinkingGeminiModel(_id: string) { return false; }
-    function isSupportedThinkingClaudeModel(_id: string) { return false; }
-    function isGemini3Model(_id: string) { return false; }
 
     export let plugin: any;
     export let initialMessage: string = ''; // 初始消息
     export let mode: 'sidebar' | 'dialog' = 'sidebar'; // 使用模式：sidebar或dialog
     export let respondToGlobalActions: boolean = false; // 是否响应全局事件（仅标签页实例）
-    const AI_SIDEBAR_DEBUG_LOGS = false;
-    function debugSidebar(...args: any[]) {
-        if (AI_SIDEBAR_DEBUG_LOGS) {
-            console.debug(...args);
-        }
-    }
 
     type ChatSession = TaskSession;
     const sessionRepository = new SessionRepository<ChatSession>();
@@ -241,71 +228,37 @@
     let timelineCollapsed: Record<string, boolean> = {};
     let openCodeProcessCollapsed: Record<string, boolean> = {};
 
-    function isOpenCodeProcessCollapsed(key: string): boolean {
-        return openCodeProcessCollapsed[key] ?? true;
-    }
-
-    function toggleOpenCodeProcessCollapsed(key: string) {
-        openCodeProcessCollapsed = {
-            ...openCodeProcessCollapsed,
-            [key]: !isOpenCodeProcessCollapsed(key),
-        };
-    }
-
+    const isOpenCodeProcessCollapsed = (key: string) =>
+        readCollapsed(openCodeProcessCollapsed, key);
+    const toggleOpenCodeProcessCollapsed = (key: string) =>
+        (openCodeProcessCollapsed = toggleCollapsed(openCodeProcessCollapsed, key));
 
     function isThinkingCollapsed(
-        stateOrKey: Record<string, any> | string | number,
+        stateOrKey: Record<string, boolean> | string | number,
         key?: string | number
-    ): boolean {
-        const state = key === undefined ? thinkingCollapsed : stateOrKey as Record<string, any>;
-        const stateKey = key === undefined ? stateOrKey : key;
-        return state[String(stateKey)] ?? true;
+    ) {
+        return key === undefined
+            ? readCollapsed(thinkingCollapsed, stateOrKey as string | number)
+            : readCollapsed(stateOrKey as Record<string, boolean>, key);
     }
-
-    function toggleThinkingCollapsed(key: string | number) {
-        const stateKey = String(key);
-        thinkingCollapsed = {
-            ...thinkingCollapsed,
-            [stateKey]: !isThinkingCollapsed(stateKey),
-        };
-    }
-
-    function isToolCallGroupCollapsed(
-        state: Record<string, boolean>,
-        key: string
-    ): boolean {
-        return state[key] ?? true;
-    }
-
-    function toggleToolCallGroup(key: string) {
-        toolCallGroupsCollapsed = {
-            ...toolCallGroupsCollapsed,
-            [key]: !isToolCallGroupCollapsed(toolCallGroupsCollapsed, key),
-        };
-    }
+    const toggleThinkingCollapsed = (key: string | number) =>
+        (thinkingCollapsed = toggleCollapsed(thinkingCollapsed, key));
+    const isToolCallGroupCollapsed = (state: Record<string, boolean>, key: string) =>
+        readCollapsed(state, key);
+    const toggleToolCallGroup = (key: string) =>
+        (toolCallGroupsCollapsed = toggleCollapsed(toolCallGroupsCollapsed, key));
 
     function isTimelineCollapsed(
         stateOrKey: Record<string, boolean> | string,
         keyOrDefault: string | boolean,
-        defaultCollapsed?: boolean
-    ): boolean {
-        const state =
-            typeof keyOrDefault === 'boolean'
-                ? timelineCollapsed
-                : stateOrKey as Record<string, boolean>;
-        const stateKey =
-            typeof keyOrDefault === 'boolean' ? stateOrKey as string : keyOrDefault;
-        const fallback =
-            typeof keyOrDefault === 'boolean' ? keyOrDefault : defaultCollapsed ?? true;
-        return state[stateKey] ?? fallback;
+        defaultCollapsed = true
+    ) {
+        return typeof keyOrDefault === 'boolean'
+            ? readCollapsed(timelineCollapsed, stateOrKey as string, keyOrDefault)
+            : readCollapsed(stateOrKey as Record<string, boolean>, keyOrDefault, defaultCollapsed);
     }
-
-    function toggleTimelineCollapsed(key: string, defaultCollapsed: boolean) {
-        timelineCollapsed = {
-            ...timelineCollapsed,
-            [key]: !isTimelineCollapsed(key, defaultCollapsed),
-        };
-    }
+    const toggleTimelineCollapsed = (key: string, fallback: boolean) =>
+        (timelineCollapsed = toggleCollapsed(timelineCollapsed, key, fallback));
 
     let editingMessageIndex: number | null = null;
     let editingMessageContent = '';
@@ -423,14 +376,11 @@
         createdAt: number;
     }
     let prompts: Prompt[] = [];
-    let isPromptManagerOpen = false;
     let isPromptSelectorOpen = false;
     let isAddMenuOpen = false;
     let isStatusMenuOpen = false;
     let isModelSelectorOpen = false;
-    let editingPrompt: Prompt | null = null;
-    let newPromptTitle = '';
-    let newPromptContent = '';
+    let promptManagerDialog: PromptManagerDialog;
 
     // 会话管理
     let sessions: ChatSession[] = [];
@@ -633,10 +583,7 @@
     // 显示设置
     let messageFontSize = 12;
     let multiModelViewMode: 'tab' | 'card' = 'tab'; // 多模型回答样式
-    let isTokenDetailsOpen = false;
     let lastPreparedContextTokens = 0;
-    let tokenButtonElement: HTMLButtonElement | null = null;
-    let tokenPopoverStyle = '';
 
     // 模型临时设置
     let tempModelSettings = {
@@ -691,37 +638,13 @@
         });
     }
 
-    function estimateMessageExtraTokens(message: Message): number {
-        const contextTokens = (message.contextDocuments || []).reduce(
-            (sum, doc) => sum + estimateTokens(doc.content || ''),
-            0
-        );
-        const attachmentTokens = (message.attachments || []).reduce((sum, attachment) => {
-            if (attachment.type === 'image') return sum + 85;
-            return sum + estimateTokens(attachment.data || attachment.name || '');
-        }, 0);
-        return contextTokens + attachmentTokens;
-    }
-
-    function estimateMessagesContextTokens(messagesToMeasure: Message[]): number {
-        return calculateTotalTokens(messagesToMeasure) + messagesToMeasure.length * 4;
-    }
-
     function estimateCurrentContextTokens(): number {
-        const visibleMessages = messages.filter(message => message.role !== 'system');
-        const messageTokens =
-            estimateMessagesContextTokens(messages) +
-            visibleMessages.reduce((sum, message) => sum + estimateMessageExtraTokens(message), 0);
-        const draftTokens = estimateTokens(currentInput || '');
-        const contextTokens = contextDocuments.reduce(
-            (sum, doc) => sum + estimateTokens(doc.content || ''),
-            0
-        );
-        const attachmentTokens = currentAttachments.reduce((sum, attachment) => {
-            if (attachment.type === 'image') return sum + 85;
-            return sum + estimateTokens(attachment.data || attachment.name || '');
-        }, 0);
-        return messageTokens + draftTokens + contextTokens + attachmentTokens;
+        return estimateComposerContextTokens({
+            messages,
+            draft: currentInput,
+            documents: contextDocuments,
+            attachments: currentAttachments,
+        });
     }
 
     async function recordTokenUsage(
@@ -749,28 +672,6 @@
             await plugin.saveSettings(settings);
         } catch (error) {
             console.warn('Failed to record token usage:', error);
-        }
-    }
-
-    function updateTokenPopoverPosition() {
-        if (!tokenButtonElement || typeof window === 'undefined') return;
-        const rect = tokenButtonElement.getBoundingClientRect();
-        const margin = 12;
-        const width = Math.min(280, Math.max(220, window.innerWidth - margin * 2));
-        const left = Math.min(
-            Math.max(margin, rect.right - width),
-            Math.max(margin, window.innerWidth - width - margin)
-        );
-        const bottom = Math.max(margin, window.innerHeight - rect.top + 10);
-        tokenPopoverStyle = `--token-popover-left: ${left}px; --token-popover-bottom: ${bottom}px; --token-popover-width: ${width}px;`;
-    }
-
-    async function toggleTokenDetails(event: MouseEvent) {
-        event.stopPropagation();
-        isTokenDetailsOpen = !isTokenDetailsOpen;
-        if (isTokenDetailsOpen) {
-            await tick();
-            updateTokenPopoverPosition();
         }
     }
 
@@ -858,41 +759,12 @@
 
     // 更新上下文文档内容以匹配当前模式
     async function updateContextDocumentsForMode() {
-        if (contextDocuments.length === 0) return;
-
-        const updatedDocs: ContextDocument[] = [];
-        for (const doc of contextDocuments) {
-            try {
-                let content: string;
-
-                if (doc.type === 'webpage') {
-                    // 网页类型：保持原内容不变（已经获取到内容）
-                    content = doc.content;
-                } else {
-                    // ask模式：获取Markdown格式
-                    const data = await exportMdContent(doc.id, false, false, 2, 0, false);
-                    if (data && data.content) {
-                        content = data.content;
-                    } else {
-                        content = doc.content; // 保留原内容
-                    }
-                }
-
-                updatedDocs.push({
-                    id: doc.id,
-                    title: doc.title,
-                    content: content,
-                    type: doc.type,
-                    url: doc.url,
-                });
-            } catch (error) {
-                console.error(`Failed to update content for block ${doc.id}:`, error);
-                // 出错时保留原内容
-                updatedDocs.push(doc);
-            }
-        }
-
-        contextController.replace(updatedDocs);
+        contextController.replace(await refreshContextDocuments(
+            contextDocuments,
+            async document => document.type === 'webpage'
+                ? document.content
+                : (await exportMdContent(document.id, false, false, 2, 0, false))?.content
+        ));
     }
 
     async function runResponseRegeneration(
@@ -1416,6 +1288,10 @@
     onMount(async () => {
         settings = await plugin.loadSettings();
 
+
+
+
+
         // 迁移旧设置到新结构
         migrateOldSettings();
 
@@ -1562,7 +1438,6 @@
         document.addEventListener('scroll', closeContextMenu, true);
         // 添加全局复制事件监听器
         document.addEventListener('copy', handleCopyEvent);
-        window.addEventListener('resize', updateTokenPopoverPosition);
         // 监听文档总结事件
         window.addEventListener(SUMMARY_EVENT, handleSummarizeDoc as EventListener);
 
@@ -1645,7 +1520,6 @@
         document.removeEventListener('scroll', closeContextMenu, true);
         // 移除全局复制事件监听器
         document.removeEventListener('copy', handleCopyEvent);
-        window.removeEventListener('resize', updateTokenPopoverPosition);
         // 移除文档总结事件监听器
         window.removeEventListener(SUMMARY_EVENT, handleSummarizeDoc as EventListener);
         if (savePathSearchTimeout) {
@@ -1660,62 +1534,9 @@
         }
     });
 
-    // 迁移旧设置到新结构
+
     function migrateOldSettings() {
-        if (!settings.aiProviders && settings.aiProvider && settings.aiApiKey) {
-            // 创建新的提供商结构
-            if (!settings.aiProviders) {
-                settings.aiProviders = {
-                    gemini: { apiKey: '', customApiUrl: '', models: [] },
-                    deepseek: { apiKey: '', customApiUrl: '', models: [] },
-                    openai: { apiKey: '', customApiUrl: '', models: [] },
-                    volcano: { apiKey: '', customApiUrl: '', models: [] },
-                    opencode: { serverUrl: 'http://localhost:4096', models: [] },
-                    customProviders: [],
-                    disabledBuiltInProviders: [],
-                    providerOrder: [],
-                };
-            }
-
-            // 迁移旧的设置
-            const oldProvider = settings.aiProvider;
-            if (settings.aiProviders[oldProvider]) {
-                settings.aiProviders[oldProvider].apiKey = settings.aiApiKey || '';
-                settings.aiProviders[oldProvider].customApiUrl = settings.aiCustomApiUrl || '';
-
-                // 如果有模型，添加到列表
-                if (settings.aiModel) {
-                    settings.aiProviders[oldProvider].models = [
-                        {
-                            id: settings.aiModel,
-                            name: settings.aiModel,
-                            temperature: settings.aiTemperature || 1,
-                            maxTokens: settings.aiMaxTokens || -1,
-                        },
-                    ];
-                    settings.currentProvider = oldProvider;
-                    settings.currentModelId = settings.aiModel;
-                }
-            }
-
-            // 保存迁移后的设置
-            plugin.saveSettings(settings);
-        }
-
-        // 确保 customProviders 数组存在
-        if (settings.aiProviders && !settings.aiProviders.customProviders) {
-            settings.aiProviders.customProviders = [];
-        }
-
-        // 确保 disabledBuiltInProviders 数组存在
-        if (settings.aiProviders && !settings.aiProviders.disabledBuiltInProviders) {
-            settings.aiProviders.disabledBuiltInProviders = [];
-        }
-
-        // 确保 providerOrder 数组存在
-        if (settings.aiProviders && !settings.aiProviders.providerOrder) {
-            settings.aiProviders.providerOrder = [];
-        }
+        if (migrateLegacyProviderSettings(settings)) void plugin.saveSettings(settings);
     }
 
     // 自动调整textarea高度
@@ -2108,8 +1929,8 @@
     $: isWebSearchModeEnabled =
         showWebSearchToggle && Boolean(currentReactiveModelConfig?.webSearchEnabled);
     $: showThinkingEffortSelector = isThinkingModeEnabled;
-    $: isCurrentModelGemini = isSupportedThinkingGeminiModel(currentModelId);
-    $: isCurrentModelGemini3 = isGemini3Model(currentModelId);
+    $: isCurrentModelGemini = false;
+    $: isCurrentModelGemini3 = false;
     $: currentThinkingEffort =
         (currentReactiveModelConfig?.thinkingEffort || 'low') as ThinkingEffort;
     $: currentThinkingSelectValue = (
@@ -2132,7 +1953,6 @@
         const nextOpen = !isAddMenuOpen;
         closeComposerMenus();
         isPromptSelectorOpen = false;
-        isTokenDetailsOpen = false;
         isAddMenuOpen = nextOpen;
     }
 
@@ -2140,7 +1960,6 @@
         const nextOpen = !isStatusMenuOpen;
         closeComposerMenus();
         isPromptSelectorOpen = false;
-        isTokenDetailsOpen = false;
         isStatusMenuOpen = nextOpen;
     }
 
@@ -2150,7 +1969,6 @@
         isPromptSelectorOpen = nextState.promptListOpen;
         isStatusMenuOpen = nextState.statusMenuOpen;
         isModelSelectorOpen = false;
-        isTokenDetailsOpen = false;
     }
 
     function selectComposerMode(mode: ChatMode) {
@@ -2436,27 +2254,8 @@
         };
     }
 
-    function getPlatformAndModelLabel(provider: string, modelId?: string, modelName?: string) {
-        const id = `${modelId || ''}`.trim();
-        const parts = id.split('/').filter(Boolean);
-        const platform =
-            parts.length > 1
-                ? parts.slice(0, -1).join('/')
-                : provider === 'opencode'
-                  ? 'OpenCode'
-                  : provider || 'OpenCode';
-        const model =
-            `${modelName || parts[parts.length - 1] || id || t('aiSidebar.messages.assistant') || 'AI'}`.trim();
-        return `${platform} / ${model}`;
-    }
-
     function getCurrentAssistantDisplayName() {
-        const modelConfig = getCurrentModelConfig();
-        return getPlatformAndModelLabel(
-            currentProvider,
-            modelConfig?.id || currentModelId,
-            modelConfig?.name
-        );
+        return resolveAssistantDisplayName({}, getSessionExportContext());
     }
 
     function createAssistantMessage(
@@ -2477,32 +2276,7 @@
     }
 
     function getAssistantDisplayName(message?: Message) {
-        if (message?.multiModelResponses && message.multiModelResponses.length > 0) {
-            const selectedResponse =
-                message.multiModelResponses.find(response => response.isSelected) ||
-                message.multiModelResponses.find(response => response.content && !response.error) ||
-                message.multiModelResponses[0];
-
-            if (selectedResponse) {
-                return getPlatformAndModelLabel(
-                    selectedResponse.provider,
-                    selectedResponse.modelId,
-                    selectedResponse.modelName
-                );
-            }
-
-            return t('multiModel.responses') || t('aiSidebar.messages.assistant') || 'AI';
-        }
-
-        if (message?.modelId || message?.modelName || message?.provider) {
-            return getPlatformAndModelLabel(
-                message.provider || currentProvider,
-                message.modelId || currentModelId,
-                message.modelName
-            );
-        }
-
-        return getCurrentAssistantDisplayName();
+        return resolveAssistantDisplayName(message || {}, getSessionExportContext());
     }
 
     function getGroupDisplayName(group: MessageGroup) {
@@ -2756,83 +2530,29 @@
         hasUnsavedChanges = true;
         void saveCurrentSession(true);
     }
-    // 自动重命名会话
     async function autoRenameSession(content: string) {
-        // 检查是否启用自动重命名
-        if (!settings.autoRenameSession) {
-            return;
-        }
-
-        // 检查是否配置了重命名模型
-        const renameProvider = settings.autoRenameProvider || 'opencode';
-        if (!settings.autoRenameModelId) {
-            return;
-        }
-
-        // 获取重命名模型配置
-        const config = getProviderAndModelConfig(
-            renameProvider,
-            settings.autoRenameModelId
-        );
-        if (!config) {
-            return;
-        }
-
-        const { providerConfig, modelConfig } = config;
-        if (providerRequiresApiKey(renameProvider) && !providerConfig.apiKey) {
-            return;
-        }
-
+        if (!settings.autoRenameSession || !settings.autoRenameModelId) return;
+        const provider = settings.autoRenameProvider || 'opencode';
+        const config = getProviderAndModelConfig(provider, settings.autoRenameModelId);
+        if (!config || (providerRequiresApiKey(provider) && !config.providerConfig.apiKey)) return;
         try {
-            // 使用自定义提示词模板，替换 {message} 占位符
-            const promptTemplate =
-                settings.autoRenamePrompt ||
+            const template = settings.autoRenamePrompt ||
                 '请根据以下内容生成一个简洁的会话标题（不超过20个字，不要使用引号）：\n\n{message}';
-            const prompt = promptTemplate.replace('{message}', content);
-
-            let generatedTitle = '';
-
-            // 调用AI生成标题
-            await runChat(
-                renameProvider,
-                {
-                    apiKey: providerConfig.apiKey,
-                    model: modelConfig.id,
-                    messages: [{ role: 'user', content: prompt }],
-                    temperature: modelConfig.temperature,
-                    maxTokens: 50,
-                    stream: true,
-                    onChunk: async (chunk: string) => {
-                        generatedTitle += chunk;
-                    },
-                    onComplete: async (text: string) => {
-                        // 清理生成的标题（移除引号和多余空格）
-                        const cleanTitle = (text || generatedTitle)
-                            .trim()
-                            .replace(/^["']|["']$/g, '')
-                            .substring(0, 50);
-                        if (cleanTitle && currentSessionId) {
-                            // 直接更新当前会话的标题（不重新加载，避免覆盖刚创建的会话）
-                            const session = sessions.find(s => s.id === currentSessionId);
-                            if (session) {
-                                session.title = cleanTitle;
-                                sessions = [...sessions];
-                                await saveSessions();
-                            }
-                        }
-                    },
-                    onError: (error: Error) => {
-                        console.error('Auto-rename session failed:', error);
-                        // 静默失败，不影响用户体验
-                    },
-                },
-                providerConfig.customApiUrl || providerConfig.serverUrl,
-                providerConfig.advancedConfig,
-                providerConfig.serverUrl
-            );
+            const title = await generateSessionTitleWithModel({
+                provider,
+                ...config,
+                prompt: template.replace('{message}', content),
+            });
+            const session = title && currentSessionId
+                ? sessions.find(item => item.id === currentSessionId)
+                : null;
+            if (session) {
+                session.title = title;
+                sessions = [...sessions];
+                await saveSessions();
+            }
         } catch (error) {
             console.error('Auto-rename session error:', error);
-            // 静默失败
         }
     }
 
@@ -3724,77 +3444,6 @@
         }
     }
 
-    // 将消息内容中的 base64 图片保存为 assets 文件并替换为路径
-    async function saveBase64ImagesInContent(content: string): Promise<string> {
-        // 匹配 Markdown 图片语法中的 base64 数据
-        const base64ImageRegex = /!\[([^\]]*)\]\((data:image\/[^;]+;base64,[^)]+)\)/g;
-        const matches = Array.from(content.matchAll(base64ImageRegex));
-
-        if (matches.length === 0) {
-            return content;
-        }
-
-        let result = content;
-        for (const match of matches) {
-            const fullMatch = match[0];
-            const altText = match[1];
-            const dataUrl = match[2];
-
-            try {
-                // 解析 data URL
-                const dataUrlMatch = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-                if (!dataUrlMatch) continue;
-
-                const mimeType = dataUrlMatch[1];
-                const base64Data = dataUrlMatch[2];
-
-                // 保存到 assets
-                const blob = base64ToBlob(base64Data, mimeType);
-                const ext = mimeType.split('/')[1] || 'png';
-                const assetPath = await saveAsset(blob, `image-${Date.now()}.${ext}`);
-
-                // 替换为 assets 路径
-                result = result.replace(fullMatch, `![${altText}](${assetPath})`);
-
-                debugSidebar(`Saved generated image to assets: ${assetPath}`);
-            } catch (error) {
-                console.error('Failed to save base64 image:', error);
-            }
-        }
-
-        return result;
-    }
-
-    // 将消息内容中的 assets 路径替换为 blob URL（用于显示）
-    async function replaceAssetPathsWithBlob(content: string): Promise<string> {
-        // 匹配 Markdown 图片语法中的 assets 路径
-        const assetImageRegex =
-            /!\[([^\]]*)\]\((\/data\/storage\/petal\/(?:siyuan-copilot-opencode|siyuan-plugin-copilot)\/assets\/[^)]+)\)/g;
-        const matches = Array.from(content.matchAll(assetImageRegex));
-
-        if (matches.length === 0) {
-            return content;
-        }
-
-        let result = content;
-        for (const match of matches) {
-            const fullMatch = match[0];
-            const altText = match[1];
-            const assetPath = match[2];
-
-            try {
-                const blobUrl = await loadAsset(assetPath);
-                if (blobUrl) {
-                    result = result.replace(fullMatch, `![${altText}](${blobUrl})`);
-                }
-            } catch (error) {
-                console.error('Failed to load asset for display:', error);
-            }
-        }
-
-        return result;
-    }
-
     // 高亮代码块
     function handleContextMenu(
         event: MouseEvent,
@@ -4395,7 +4044,6 @@
         if (type.startsWith(Constants.SIYUAN_DROP_GUTTER)) {
             const meta = type.replace(Constants.SIYUAN_DROP_GUTTER, '');
             const info = meta.split(Constants.ZWSP);
-            debugSidebar('Dropped gutter info:', info);
             const blockIdStr = info[2];
             const blockIds = blockIdStr
                 .split(',')
@@ -4448,8 +4096,6 @@
 
             // 判断是否是 webview 网页标签页：customModelType 包含 copilot-webapp
             const isWebViewTab = customModelType && customModelType.includes(WEBAPP_TAB_TYPE);
-            debugSidebar(isWebViewTab, webviewUrl);
-            debugSidebar(payload);
             if (isWebViewTab && webviewUrl) {
                 // 是 webview 网页，直接使用 WebView 模式获取内容（因为已经是 webview 打开的）
                 pushMsg(`正在获取网页内容: ${tabTitle || webviewUrl}`);
@@ -4701,7 +4347,6 @@
 
                 // 如果会话被修改（迁移了 base64 图片或自动选择了模型），自动保存
                 if (sessionModified) {
-                    debugSidebar('Session was modified during load, saving...');
                     await saveCurrentSession(true); // 静默保存
                 }
 
@@ -5012,83 +4657,20 @@
         }
     }
 
-    async function savePrompts() {
-        try {
-            await plugin.saveData('prompts.json', { prompts });
-        } catch (error) {
-            console.error('Save prompts error:', error);
-            pushErrMsg(t('aiSidebar.errors.savePromptFailed'));
-        }
-    }
-
     function openPromptManager() {
         isAddMenuOpen = false;
         isPromptSelectorOpen = false;
-        isPromptManagerOpen = true;
-        editingPrompt = null;
-        newPromptTitle = '';
-        newPromptContent = '';
-    }
-
-    function closePromptManager() {
-        isPromptManagerOpen = false;
-        editingPrompt = null;
-        newPromptTitle = '';
-        newPromptContent = '';
-    }
-
-    async function saveNewPrompt() {
-        if (!newPromptTitle.trim() || !newPromptContent.trim()) {
-            pushErrMsg(t('aiSidebar.errors.emptyPromptContent'));
-            return;
-        }
-
-        const now = Date.now();
-        if (editingPrompt) {
-            // 编辑现有提示词
-            const index = prompts.findIndex(p => p.id === editingPrompt.id);
-            if (index >= 0) {
-                prompts[index] = {
-                    ...prompts[index],
-                    title: newPromptTitle.trim(),
-                    content: newPromptContent.trim(),
-                };
-                prompts = [...prompts];
-            }
-        } else {
-            // 创建新提示词
-            const newPrompt: Prompt = {
-                id: `prompt_${now}`,
-                title: newPromptTitle.trim(),
-                content: newPromptContent.trim(),
-                createdAt: now,
-            };
-            prompts = [newPrompt, ...prompts];
-        }
-
-        await savePrompts();
-        closePromptManager();
+        promptManagerDialog.show();
     }
 
     function editPrompt(prompt: Prompt) {
-        editingPrompt = prompt;
-        newPromptTitle = prompt.title;
-        newPromptContent = prompt.content;
         isAddMenuOpen = false;
         isPromptSelectorOpen = false;
-        isPromptManagerOpen = true;
+        promptManagerDialog.show(prompt);
     }
 
-    // 删除提示词
-    async function deletePrompt(promptId: string) {
-        confirm(
-            t('aiSidebar.confirm.deletePrompt.title'),
-            t('aiSidebar.confirm.deletePrompt.message'),
-            async () => {
-                prompts = prompts.filter(p => p.id !== promptId);
-                await savePrompts();
-            }
-        );
+    function deletePrompt(promptId: string) {
+        promptManagerDialog.remove(promptId);
     }
 
     // 获取工具的显示名称
@@ -5136,150 +4718,6 @@
             closeContextMenu();
         }
 
-        if (
-            isTokenDetailsOpen &&
-            !target.closest('.ai-sidebar__token-widget') &&
-            !target.closest('.ai-sidebar__token-popover')
-        ) {
-            isTokenDetailsOpen = false;
-        }
-
-    }
-
-    type ToolChangeContext = {
-        operationType: 'update' | 'insert' | 'delete' | 'rename';
-        docId: string;
-        docTitle: string;
-        oldDocTitle: string;
-        affectedBlockId: string;
-        renameTitleTo?: string;
-    };
-
-    async function getDocDisplayTitle(docId: string): Promise<string> {
-        try {
-            const hpath = await getHPathByID(docId);
-            if (typeof hpath === 'string' && hpath.trim() && hpath !== docId) {
-                return hpath;
-            }
-        } catch (error) {
-            console.warn('获取文档路径失败:', error);
-        }
-
-        try {
-            const docBlock = await getBlockByID(docId);
-            if (docBlock?.content) {
-                return docBlock.content;
-            }
-        } catch (error) {
-            console.warn('通过 getBlockByID 获取文档标题失败:', error);
-        }
-
-        try {
-            const safeDocId = escapeSqlString(docId);
-            const rows = await sql(`SELECT content FROM blocks WHERE id = '${safeDocId}' LIMIT 1`);
-            const title = rows?.[0]?.content;
-            if (typeof title === 'string' && title.trim()) {
-                return title;
-            }
-        } catch (error) {
-            console.warn('通过 SQL 获取文档标题失败:', error);
-        }
-
-        return `文档 ${docId}`;
-    }
-
-    async function getDocNameById(docId: string): Promise<string> {
-        try {
-            const docBlock = await getBlockByID(docId);
-            if (docBlock?.content && docBlock.content.trim()) {
-                return docBlock.content.trim();
-            }
-        } catch (error) {
-            console.warn('通过 getBlockByID 获取文档标题失败:', error);
-        }
-
-        try {
-            const safeDocId = escapeSqlString(docId);
-            const rows = await sql(`SELECT content FROM blocks WHERE id = '${safeDocId}' LIMIT 1`);
-            const title = rows?.[0]?.content;
-            if (typeof title === 'string' && title.trim()) {
-                return title.trim();
-            }
-        } catch (error) {
-            console.warn('通过 SQL 获取文档标题失败:', error);
-        }
-
-        return '';
-    }
-
-    async function resolveToolChangeContext(toolCall: ToolCall): Promise<ToolChangeContext | null> {
-        const toolName = toolCall.function.name;
-        if (
-            toolName !== 'siyuan_update_block' &&
-            toolName !== 'siyuan_insert_block' &&
-            toolName !== 'siyuan_delete_block' &&
-            toolName !== 'siyuan_rename_document'
-        ) {
-            return null;
-        }
-
-        try {
-            const args = JSON.parse(toolCall.function.arguments || '{}');
-            let operationType: ToolChangeContext['operationType'];
-            let targetBlockId = '';
-
-            if (toolName === 'siyuan_update_block') {
-                operationType = 'update';
-                targetBlockId = args.id || '';
-            } else if (toolName === 'siyuan_insert_block') {
-                operationType = 'insert';
-                targetBlockId =
-                    args.nextID || args.previousID || args.parentID || args.appendParentID || '';
-            } else if (toolName === 'siyuan_rename_document') {
-                operationType = 'rename';
-                targetBlockId = args.id || '';
-            } else {
-                operationType = 'delete';
-                targetBlockId = args.id || '';
-            }
-
-            if (!targetBlockId) {
-                return null;
-            }
-
-            let blockInfo = await getBlockByID(targetBlockId);
-            if (!blockInfo) {
-                try {
-                    const safeBlockId = escapeSqlString(targetBlockId);
-                    const rows = await sql(
-                        `SELECT id, root_id, type FROM blocks WHERE id = '${safeBlockId}' LIMIT 1`
-                    );
-                    blockInfo = rows?.[0] || null;
-                } catch (error) {
-                    console.warn('通过 SQL 获取块信息失败:', error);
-                }
-            }
-            const docId =
-                blockInfo?.type === 'd' ? blockInfo.id : blockInfo?.root_id || targetBlockId;
-
-            const docTitle = await getDocDisplayTitle(docId);
-            const currentDocName = (await getDocNameById(docId)) || docTitle;
-
-            return {
-                operationType,
-                docId,
-                docTitle,
-                affectedBlockId: targetBlockId,
-                renameTitleTo:
-                    toolName === 'siyuan_rename_document'
-                        ? String(args.title || '').trim()
-                        : undefined,
-                oldDocTitle: currentDocName,
-            };
-        } catch (error) {
-            console.warn('解析工具调用参数失败，无法生成汇总差异记录:', error);
-            return null;
-        }
     }
 
     async function ensureDocDiffSnapshotBefore(
@@ -5333,7 +4771,7 @@
         const newMdData = await exportMdContent(changeContext.docId, false, false, 2, 0, false);
         pendingDiff.newContent = newMdData?.content || '';
         if (!changeContext.renameTitleTo) {
-            pendingDiff.newDocTitle = await getDocNameById(changeContext.docId);
+            pendingDiff.newDocTitle = await getDocName(changeContext.docId);
             pendingDiff.docTitle = pendingDiff.newDocTitle || pendingDiff.docTitle;
         } else {
             pendingDiff.newDocTitle = changeContext.renameTitleTo;
@@ -5390,69 +4828,8 @@
         pendingDocDiffsByMessage.delete(messageIndex);
     }
 
-    // 查看差异
     async function viewDiff(operation: EditOperation) {
-        const operationType = operation.operationType || 'update';
-
-        if (operationType === 'insert') {
-            // 插入操作：旧内容为空，新内容为要插入的内容
-            const newMdContent =
-                operation.newContentForDisplay ||
-                operation.newContent.replace(/\{:\s*id="[^"]+"\s*\}/g, '').trim();
-
-            currentDiffOperation = {
-                ...operation,
-                oldContent: '', // 插入操作没有旧内容
-                newContent: operation.newContentForDisplay || newMdContent,
-            };
-        } else {
-            // 更新操作
-            // 使用保存的Markdown格式内容来显示差异
-            // 这样可以看到真正的修改前内容，即使块已经被修改了
-            let oldMdContent = operation.oldContentForDisplay || operation.oldContent || '';
-            let newMdContent =
-                operation.newContentForDisplay ||
-                operation.newContent.replace(/\{:\s*id="[^"]+"\s*\}/g, '').trim();
-
-            // 文档重命名差异：在对比内容头部注入标题信息，确保即使正文不变也可见
-            if (
-                operation.oldDocTitle &&
-                operation.newDocTitle &&
-                operation.oldDocTitle !== operation.newDocTitle
-            ) {
-                const oldTitleLine = `# 文档标题: ${operation.oldDocTitle}\n\n`;
-                const newTitleLine = `# 文档标题: ${operation.newDocTitle}\n\n`;
-                oldMdContent = oldTitleLine + oldMdContent;
-                newMdContent = newTitleLine + newMdContent;
-            }
-
-            // 如果没有保存的显示内容（兼容旧数据），尝试实时获取
-            if (!operation.oldContentForDisplay) {
-                try {
-                    const oldMdData = await exportMdContent(
-                        operation.blockId,
-                        false,
-                        false,
-                        2,
-                        0,
-                        false
-                    );
-                    if (oldMdData?.content) {
-                        operation.oldContentForDisplay = oldMdData.content;
-                    }
-                } catch (error) {
-                    console.error('获取块内容失败:', error);
-                }
-            }
-
-            // 创建用于显示的临时operation对象
-            currentDiffOperation = {
-                ...operation,
-                oldContent: oldMdContent,
-                newContent: newMdContent,
-            };
-        }
-
+        currentDiffOperation = await prepareDiffOperation(operation);
         isDiffDialogOpen = true;
     }
 
@@ -5617,60 +4994,6 @@
         }
     }
 
-    // 将消息数组分组，合并连续的 AI 相关消息
-    interface MessageGroup {
-        type: 'user' | 'assistant';
-        messages: Message[];
-        startIndex: number; // 原始消息数组中的起始索引
-    }
-
-    function groupMessages(messages: Message[]): MessageGroup[] {
-        const groups: MessageGroup[] = [];
-        let currentGroup: MessageGroup | null = null;
-
-        messages.forEach((message, index) => {
-            // 跳过 system 消息
-            if (message.role === 'system') {
-                return;
-            }
-
-            if (message.role === 'user') {
-                // 用户消息：结束当前组，开始新的用户组
-                if (currentGroup) {
-                    groups.push(currentGroup);
-                }
-                currentGroup = {
-                    type: 'user',
-                    messages: [message],
-                    startIndex: index,
-                };
-            } else if (message.role === 'assistant' || message.role === 'tool') {
-                // AI 或工具消息
-                if (!currentGroup || currentGroup.type === 'user') {
-                    // 如果没有当前组或当前组是用户组，结束当前组并开始新的 AI 组
-                    if (currentGroup) {
-                        groups.push(currentGroup);
-                    }
-                    currentGroup = {
-                        type: 'assistant',
-                        messages: [message],
-                        startIndex: index,
-                    };
-                } else {
-                    // 继续添加到当前 AI 组
-                    currentGroup.messages.push(message);
-                }
-            }
-        });
-
-        // 添加最后一个组
-        if (currentGroup) {
-            groups.push(currentGroup);
-        }
-
-        return groups;
-    }
-
     // 响应式计算消息组
     $: messageGroups = groupMessages(messages);
 </script>
@@ -5804,552 +5127,103 @@
         {viewDiff}
     />
 
-    <!-- 上下文文档和附件列表 -->
-    {#if contextDocuments.length > 0 || currentAttachments.length > 0}
-        <div
-            class="ai-sidebar__context-docs"
-            class:ai-sidebar__context-docs--drag-over={isDragOver && contextDocuments.length > 0}
-            on:dragover={handleDragOver}
-            on:dragleave={handleDragLeave}
-            on:drop={handleDrop}
-        >
-            <div class="ai-sidebar__context-docs-title">📎 {t('aiSidebar.context.content')}</div>
-            <div class="ai-sidebar__context-docs-list">
-                <!-- 显示上下文文档 -->
-                {#each contextDocuments as doc (doc.id)}
-                    <div class="ai-sidebar__context-doc-item">
-                        <button
-                            class="ai-sidebar__context-doc-remove"
-                            on:click={() => removeContextDocument(doc.id)}
-                            title="移除文档"
-                        >
-                            ×
-                        </button>
-                        <button
-                            class="ai-sidebar__context-doc-link"
-                            on:click={() => openDocument(doc.id)}
-                            title="点击查看文档"
-                        >
-                            📄 {doc.title}
-                        </button>
-                        <button
-                            class="b3-button b3-button--text ai-sidebar__context-doc-copy"
-                            on:click|stopPropagation={() => copyMessage(doc.content || '')}
-                            title={t('aiSidebar.actions.copyMessage')}
-                        >
-                            <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
-                        </button>
-                    </div>
-                {/each}
+    <ChatComposer
+        bind:commandPaletteIndex
+        bind:currentInput
+        bind:enableMultiModel
+        bind:fileInputElement
+        bind:imageInputElement
+        bind:inputContainer
+        bind:isInputComposing
+        bind:isModelSelectorOpen
+        bind:isSearchDialogOpen
+        bind:selectedMultiModels
+        bind:textareaElement
+        {THINKING_EFFORT_OPTIONS}
+        {abortMessage}
+        {activePermissionRequest}
+        {activeQuestionRequest}
+        {activeSessions}
+        {activeTaskIds}
+        {addClipboardText}
+        {addCurrentDocToContext}
+        {applyCommand}
+        {chatMode}
+        {closeActiveTaskTab}
+        {contextDocuments}
+        {copyMessage}
+        {currentAttachments}
+        {currentModelId}
+        {currentActiveTaskId}
+        {composerStatusSummary}
+        {showThinkingToggle}
+        {currentThinkingSelectValue}
+        {displayedContextPercent}
+        {displayedContextTokens}
+        {currentContextLimit}
+        {isContextCompactionLikely}
+        {currentProvider}
+        {deletePrompt}
+        {editPrompt}
+        {formatTokenCount}
+        {getFilteredCommands}
+        {getTaskTabTitle}
+        {handleDragLeave}
+        {handleDragOver}
+        {handleDrop}
+        {handleFileSelect}
+        {handleInput}
+        {handleKeydown}
+        {handleModelSelect}
+        {handleMultiModelChange}
+        {handlePaste}
+        {handlePermissionResponse}
+        {handleToggleMultiModel}
+        {isAddMenuOpen}
+        {isDragOver}
+        {isFetchingWebContent}
+        {isLoading}
+        {isPromptSelectorOpen}
+        {isStatusMenuOpen}
+        {isUploadingFile}
+        {mode}
+        {newSession}
+        {openDocument}
+        {openPromptManager}
+        {openWebLinkDialog}
+        {platformUtils}
+        {prompts}
+        {providers}
+        {pushMsg}
+        {questionDrafts}
+        {rejectQuestionAnswer}
+        {removeAttachment}
+        {removeContextDocument}
+        {searchDocuments}
+        {searchKeyword}
+        {selectActiveTaskTab}
+        {selectComposerMode}
+        {selectThinkingValue}
+        {sendMessage}
+        {sendMessageDuringExecution}
+        {showCommandPalette}
+        {submitQuestionAnswer}
+        {toggleAddMenu}
+        {togglePromptList}
+        {toggleQuestionOption}
+        {toggleStatusMenu}
+        {triggerFileUpload}
+        {triggerImageUpload}
+        {unreadTaskIds}
+        {updateQuestionCustom}
+        {usePrompt}
+    />
 
-                <!-- 显示当前附件 -->
-                {#each currentAttachments as attachment, index}
-                    <div class="ai-sidebar__context-doc-item">
-                        <button
-                            class="ai-sidebar__context-doc-remove"
-                            on:click={() => removeAttachment(index)}
-                            title="移除附件"
-                        >
-                            ×
-                        </button>
-                        {#if attachment.type === 'image'}
-                            <img
-                                src={attachment.data}
-                                alt={attachment.name}
-                                class="ai-sidebar__context-attachment-preview"
-                                title={attachment.name}
-                            />
-                            <span class="ai-sidebar__context-doc-name" title={attachment.name}>
-                                🖼️ {attachment.name}
-                            </span>
-                            <button
-                                class="b3-button b3-button--text ai-sidebar__context-doc-copy"
-                                on:click|stopPropagation={() => {
-                                    platformUtils.writeText(attachment.data);
-                                    pushMsg('已复制图片URL');
-                                }}
-                                title="复制图片URL"
-                            >
-                                <svg class="b3-button__icon">
-                                    <use xlink:href="#iconCopy"></use>
-                                </svg>
-                            </button>
-                        {:else if attachment.isWebPage}
-                            <span class="ai-sidebar__context-attachment-icon-emoji">🔗</span>
-                            <span class="ai-sidebar__context-doc-name" title={attachment.name}>
-                                {attachment.name}
-                            </span>
-                            <button
-                                class="b3-button b3-button--text ai-sidebar__context-doc-copy"
-                                on:click|stopPropagation={() => {
-                                    platformUtils.writeText(attachment.data);
-                                    pushMsg('已复制网页Markdown内容');
-                                }}
-                                title="复制网页Markdown"
-                            >
-                                <svg class="b3-button__icon">
-                                    <use xlink:href="#iconCopy"></use>
-                                </svg>
-                            </button>
-                        {:else}
-                            <svg class="ai-sidebar__context-attachment-icon">
-                                <use xlink:href="#iconFile"></use>
-                            </svg>
-                            <span class="ai-sidebar__context-doc-name" title={attachment.name}>
-                                📄 {attachment.name}
-                            </span>
-                            <button
-                                class="b3-button b3-button--text ai-sidebar__context-doc-copy"
-                                on:click|stopPropagation={() => {
-                                    platformUtils.writeText(attachment.data);
-                                    pushMsg('已复制文件内容');
-                                }}
-                                title="复制文件内容"
-                            >
-                                <svg class="b3-button__icon">
-                                    <use xlink:href="#iconCopy"></use>
-                                </svg>
-                            </button>
-                        {/if}
-                    </div>
-                {/each}
-            </div>
-        </div>
-    {/if}
-    {#if activePermissionRequest}
-        <div class="permission-dialog">
-            <div class="permission-dialog__header">
-                <svg class="permission-dialog__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-                <span class="permission-dialog__title">OpenCode 请求权限</span>
-            </div>
-            <div class="permission-dialog__body">
-                <div class="permission-dialog__tool">
-                    <code>{activePermissionRequest.tool}</code>
-                </div>
-                {#if activePermissionRequest.input}
-                    <pre class="permission-dialog__input">{activePermissionRequest.input}</pre>
-                {/if}
-                {#if activePermissionRequest.description && activePermissionRequest.description !== activePermissionRequest.input}
-                    <p class="permission-dialog__desc">{activePermissionRequest.description}</p>
-                {/if}
-            </div>
-            <div class="permission-dialog__actions">
-                <button class="permission-dialog__btn permission-dialog__btn--once" on:click={() => handlePermissionResponse('once')}>
-                    允许一次
-                </button>
-                <button class="permission-dialog__btn permission-dialog__btn--always" on:click={() => handlePermissionResponse('always')}>
-                    始终允许
-                </button>
-                <button class="permission-dialog__btn permission-dialog__btn--reject" on:click={() => handlePermissionResponse('reject')}>
-                    拒绝
-                </button>
-            </div>
-        </div>
-    {/if}
-    {#if activeQuestionRequest}
-        <div class="question-dialog" role="dialog" aria-modal={mode === 'dialog'} aria-label="OpenCode 需要确认">
-            <div class="question-dialog__scrim"></div>
-            <div class="question-dialog__panel">
-                <div class="question-dialog__header">
-                    <div class="question-dialog__mark">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path>
-                            <path d="M9 9h6M9 13h4"></path>
-                        </svg>
-                    </div>
-                    <div class="question-dialog__heading">
-                        <div class="question-dialog__title">OpenCode 需要你的确认</div>
-                        <div class="question-dialog__subtitle">选择一个选项，或在底部输入自己的回答。</div>
-                    </div>
-                </div>
-
-                <div class="question-dialog__body">
-                    {#each activeQuestionRequest.questions as question, questionIndex}
-                        <section class="question-dialog__item">
-                            {#if question.header}
-                                <div class="question-dialog__item-header">{question.header}</div>
-                            {/if}
-                            <div class="question-dialog__question">{question.question}</div>
-                            {#if question.options.length > 0}
-                                <div class="question-dialog__options">
-                                    {#each question.options as option}
-                                        <button
-                                            type="button"
-                                            class="question-dialog__option"
-                                            class:question-dialog__option--active={(questionDrafts[questionIndex]?.selected || []).includes(option.label)}
-                                            on:click={() => toggleQuestionOption(questionIndex, option.label, question.multiple)}
-                                        >
-                                            <span class="question-dialog__option-check"></span>
-                                            <span class="question-dialog__option-text">
-                                                <span class="question-dialog__option-label">{option.label}</span>
-                                                {#if option.description}
-                                                    <span class="question-dialog__option-desc">{option.description}</span>
-                                                {/if}
-                                            </span>
-                                        </button>
-                                    {/each}
-                                </div>
-                            {/if}
-                            <label class="question-dialog__custom">
-                                <span>其他</span>
-                                <textarea
-                                    rows="3"
-                                    value={questionDrafts[questionIndex]?.custom || ''}
-                                    on:input={(event) => updateQuestionCustom(questionIndex, event.currentTarget.value)}
-                                    placeholder="输入自定义回答..."
-                                ></textarea>
-                            </label>
-                        </section>
-                    {/each}
-                </div>
-
-                <div class="question-dialog__actions">
-                    <button class="question-dialog__button question-dialog__button--ghost" type="button" on:click={rejectQuestionAnswer}>
-                        取消
-                    </button>
-                    <button class="question-dialog__button question-dialog__button--primary" type="button" on:click={submitQuestionAnswer}>
-                        发送回答
-                    </button>
-                </div>
-            </div>
-        </div>
-    {/if}
-    <div
-        class="ai-sidebar__input-container"
-        class:ai-sidebar__input-container--drag-over={isDragOver && contextDocuments.length === 0}
-        bind:this={inputContainer}
-        on:dragover={handleDragOver}
-        on:dragleave={handleDragLeave}
-        on:drop={handleDrop}
-    >
-        <div class="ai-sidebar__task-tabs" aria-label="任务切换">
-            <div class="ai-sidebar__task-tab-list">
-                {#each activeTaskIds as taskId, index (taskId)}
-                    {@const active = taskId === currentActiveTaskId}
-                    {@const running = activeSessions.has(taskId)}
-                    {@const unread = unreadTaskIds.has(taskId)}
-                    <button
-                        type="button"
-                        class="ai-sidebar__task-tab"
-                        class:ai-sidebar__task-tab--active={active}
-                        class:ai-sidebar__task-tab--running={running}
-                        class:ai-sidebar__task-tab--unread={unread}
-                        title={`${index + 1}. ${getTaskTabTitle(taskId)} / Cmd/Ctrl + ${index + 1}`}
-                        on:click={() => selectActiveTaskTab(taskId)}
-                        on:contextmenu|preventDefault|stopPropagation={e => closeActiveTaskTab(taskId, e)}
-                    >
-                        <span class="ai-sidebar__task-tab-index">{index + 1}</span>
-                        {#if unread}
-                            <span class="ai-sidebar__task-tab-dot" aria-hidden="true"></span>
-                        {/if}
-                    </button>
-                {/each}
-                <button
-                    type="button"
-                    class="ai-sidebar__task-tab ai-sidebar__task-tab--add"
-                    title={t('aiSidebar.session.new')}
-                    on:click={newSession}
-                >
-                    <svg class="b3-button__icon"><use xlink:href="#iconAdd"></use></svg>
-                </button>
-            </div>
-        </div>
-
-        <!-- 大输入框 -->
-        <div
-            class="ai-sidebar__chat-input-box"
-            class:ai-sidebar__chat-input-box--answer={chatMode === 'plan'}
-            class:ai-sidebar__chat-input-box--revision={chatMode === 'build'}
-        >
-            {#if showCommandPalette}
-                <div class="command-palette">
-                    {#each getFilteredCommands() as cmd, i}
-                        <button
-                            class="command-palette__item"
-                            class:command-palette__item--active={i === commandPaletteIndex}
-                            on:click={() => applyCommand(cmd.name)}
-                            on:mouseenter={() => { commandPaletteIndex = i; }}
-                        >
-                            <span class="command-palette__name">/{cmd.name}</span>
-                            {#if cmd.args}
-                                <span class="command-palette__args">{cmd.args}</span>
-                            {/if}
-                            <span class="command-palette__desc">{cmd.desc}</span>
-                        </button>
-                    {/each}
-                </div>
-            {/if}
-            <textarea
-                bind:this={textareaElement}
-                bind:value={currentInput}
-                on:keydown={handleKeydown}
-                on:compositionstart={() => (isInputComposing = true)}
-                on:compositionend={() => (isInputComposing = false)}
-                on:input={handleInput}
-                on:paste={handlePaste}
-                placeholder={t('aiSidebar.input.placeholder')}
-                class="ai-sidebar__chat-textarea"
-                rows="1"
-                spellcheck="false"
-            ></textarea>
-
-            <!-- 输入框底部工具栏 -->
-            <div class="ai-sidebar__chat-input-toolbar">
-                <div class="ai-sidebar__composer-action">
-                    <button
-                        type="button"
-                        class="ai-sidebar__composer-icon-button ai-sidebar__add-trigger"
-                        class:ai-sidebar__composer-icon-button--active={isAddMenuOpen}
-                        aria-label="添加内容"
-                        aria-expanded={isAddMenuOpen}
-                        on:click|stopPropagation={toggleAddMenu}
-                    >
-                        {#if isUploadingFile}
-                            <svg class="b3-button__icon ai-sidebar__loading-icon"><use xlink:href="#iconRefresh"></use></svg>
-                        {:else}
-                            <svg class="b3-button__icon"><use xlink:href="#iconAdd"></use></svg>
-                        {/if}
-                    </button>
-
-                    {#if isAddMenuOpen}
-                        <div class="ai-sidebar__composer-menu ai-sidebar__add-menu" on:click|stopPropagation>
-                            <div class="ai-sidebar__composer-menu-label">添加内容</div>
-                            <button class="ai-sidebar__composer-menu-item" on:click={triggerFileUpload} disabled={isUploadingFile || isLoading}>
-                                <svg><use xlink:href="#iconFile"></use></svg><span>上传文件</span>
-                            </button>
-                            <button class="ai-sidebar__composer-menu-item" on:click={triggerImageUpload} disabled={isUploadingFile || isLoading}>
-                                <svg><use xlink:href="#iconImage"></use></svg><span>上传图片</span>
-                            </button>
-                            <button class="ai-sidebar__composer-menu-item" on:click={() => { isAddMenuOpen = false; openWebLinkDialog(); }} disabled={isFetchingWebContent || isLoading}>
-                                <svg><use xlink:href="#iconLink"></use></svg><span>添加链接</span>
-                            </button>
-                            <div class="ai-sidebar__composer-menu-divider"></div>
-                            <button class="ai-sidebar__composer-menu-item" on:click={() => { isAddMenuOpen = false; addCurrentDocToContext(); }}>
-                                <svg><use xlink:href="#iconFile"></use></svg><span>添加当前文档到上下文</span>
-                            </button>
-                            <button class="ai-sidebar__composer-menu-item" on:click={() => { isAddMenuOpen = false; isSearchDialogOpen = true; if (!searchKeyword.trim()) searchDocuments(); }}>
-                                <svg><use xlink:href="#iconSearch"></use></svg><span>搜索文档或块</span>
-                            </button>
-                            <button class="ai-sidebar__composer-menu-item" on:click={addClipboardText}>
-                                <svg><use xlink:href="#iconCopy"></use></svg><span>从剪贴板粘贴</span>
-                            </button>
-                            <div class="ai-sidebar__composer-menu-divider"></div>
-                            <button
-                                class="ai-sidebar__composer-menu-item"
-                                class:ai-sidebar__composer-menu-item--selected={isPromptSelectorOpen}
-                                aria-expanded={isPromptSelectorOpen}
-                                on:click={togglePromptList}
-                            >
-                                <svg><use xlink:href="#iconEdit"></use></svg><span>常用提示词</span>
-                                <svg class="ai-sidebar__composer-menu-chevron" class:ai-sidebar__composer-menu-chevron--expanded={isPromptSelectorOpen}>
-                                    <use xlink:href="#iconRight"></use>
-                                </svg>
-                            </button>
-                            {#if isPromptSelectorOpen}
-                                <div class="ai-sidebar__composer-prompt-list">
-                                    <button class="ai-sidebar__prompt-item ai-sidebar__prompt-item--new" on:click={openPromptManager}>
-                                        <svg class="ai-sidebar__prompt-item-icon"><use xlink:href="#iconAdd"></use></svg>
-                                        <span class="ai-sidebar__prompt-item-title">{t('aiSidebar.prompt.new')}</span>
-                                    </button>
-                                    {#if prompts.length > 0}
-                                        {#each prompts as prompt (prompt.id)}
-                                            <button class="ai-sidebar__prompt-item" on:click={() => usePrompt(prompt)} title={prompt.content}>
-                                                <span class="ai-sidebar__prompt-item-title">{prompt.title}</span>
-                                                <div class="ai-sidebar__prompt-item-actions">
-                                                    <button class="ai-sidebar__prompt-item-edit" on:click|stopPropagation={() => editPrompt(prompt)} title={t('aiSidebar.prompt.edit')}>
-                                                        <svg class="b3-button__icon"><use xlink:href="#iconEdit"></use></svg>
-                                                    </button>
-                                                    <button class="ai-sidebar__prompt-item-delete" on:click|stopPropagation={() => deletePrompt(prompt.id)} title={t('aiSidebar.prompt.delete')}>
-                                                        <svg class="b3-button__icon"><use xlink:href="#iconTrashcan"></use></svg>
-                                                    </button>
-                                                </div>
-                                            </button>
-                                        {/each}
-                                    {/if}
-                                </div>
-                            {/if}
-                        </div>
-                    {/if}
-                </div>
-
-                <div class="ai-sidebar__composer-spacer"></div>
-
-                <div class="ai-sidebar__composer-action ai-sidebar__composer-action--status">
-                    <button
-                        type="button"
-                        class="ai-sidebar__status-trigger"
-                        aria-label={`配置${composerStatusSummary}`}
-                        aria-expanded={isStatusMenuOpen}
-                        on:click|stopPropagation={toggleStatusMenu}
-                    >
-                        <span class="ai-sidebar__status-dot" aria-hidden="true"></span>
-                        <span class="ai-sidebar__status-summary">{composerStatusSummary}</span>
-                        <svg class="ai-sidebar__composer-chevron"><use xlink:href="#iconDown"></use></svg>
-                    </button>
-
-                    {#if isStatusMenuOpen}
-                        <div class="ai-sidebar__composer-menu ai-sidebar__status-menu" on:click|stopPropagation>
-                            <section class="ai-sidebar__status-section">
-                                <div class="ai-sidebar__composer-menu-label">模式</div>
-                                <button class="ai-sidebar__composer-menu-item" class:ai-sidebar__composer-menu-item--selected={chatMode === 'plan'} on:click={() => selectComposerMode('plan')}>
-                                    <span>问答</span>{#if chatMode === 'plan'}<svg class="ai-sidebar__menu-check"><use xlink:href="#iconCheck"></use></svg>{/if}
-                                </button>
-                                <button class="ai-sidebar__composer-menu-item" class:ai-sidebar__composer-menu-item--selected={chatMode === 'build'} on:click={() => selectComposerMode('build')}>
-                                    <span>修订</span>{#if chatMode === 'build'}<svg class="ai-sidebar__menu-check"><use xlink:href="#iconCheck"></use></svg>{/if}
-                                </button>
-                            </section>
-                            <div class="ai-sidebar__composer-menu-divider"></div>
-                            <section class="ai-sidebar__status-section">
-                                <div class="ai-sidebar__composer-menu-label">模型</div>
-                                <div class="ai-sidebar__status-model-picker">
-                                    <MultiModelSelector
-                                        {providers}
-                                        bind:isOpen={isModelSelectorOpen}
-                                        selectedModels={chatMode === 'plan' ? selectedMultiModels : []}
-                                        enableMultiModel={chatMode === 'plan' ? enableMultiModel : false}
-                                        currentProvider={currentProvider}
-                                        currentModelId={currentModelId}
-                                        {chatMode}
-                                        on:select={handleModelSelect}
-                                        on:change={handleMultiModelChange}
-                                        on:toggleEnable={handleToggleMultiModel}
-                                    />
-                                </div>
-                            </section>
-                            <div class="ai-sidebar__composer-menu-divider"></div>
-                            <section class="ai-sidebar__status-section" class:ai-sidebar__status-section--disabled={!showThinkingToggle}>
-                                <div class="ai-sidebar__composer-menu-label">思考深度</div>
-                                <button class="ai-sidebar__composer-menu-item" class:ai-sidebar__composer-menu-item--selected={currentThinkingSelectValue === 'off'} on:click={() => selectThinkingValue('off')} disabled={!showThinkingToggle}>
-                                    <span>关闭</span>{#if currentThinkingSelectValue === 'off'}<svg class="ai-sidebar__menu-check"><use xlink:href="#iconCheck"></use></svg>{/if}
-                                </button>
-                                {#each THINKING_EFFORT_OPTIONS as option}
-                                    <button class="ai-sidebar__composer-menu-item" class:ai-sidebar__composer-menu-item--selected={currentThinkingSelectValue === option.value} on:click={() => selectThinkingValue(option.value)} disabled={!showThinkingToggle}>
-                                        <span>{option.label}</span>{#if currentThinkingSelectValue === option.value}<svg class="ai-sidebar__menu-check"><use xlink:href="#iconCheck"></use></svg>{/if}
-                                    </button>
-                                {/each}
-                            </section>
-                            <div class="ai-sidebar__composer-menu-divider"></div>
-                            <div class="ai-sidebar__token-widget">
-                                <button
-                                    bind:this={tokenButtonElement}
-                                    type="button"
-                                    class="ai-sidebar__token-pill"
-                                    class:ai-sidebar__token-pill--warn={displayedContextPercent >= 80}
-                                    style={`--token-percent: ${displayedContextPercent};`}
-                                    on:click={toggleTokenDetails}
-                                    title="Token 使用详情"
-                                >
-                                    <span class="ai-sidebar__token-ring" aria-hidden="true"></span>
-                                    <span>上下文 {currentContextLimit ? `${displayedContextPercent}%` : formatTokenCount(displayedContextTokens)}</span>
-                                </button>
-                                {#if isTokenDetailsOpen}
-                                    <div class="ai-sidebar__token-popover" style={tokenPopoverStyle} on:click|stopPropagation>
-                                        <div class="ai-sidebar__token-popover-header">
-                                            <span>上下文长度</span>
-                                            <button type="button" class="ai-sidebar__token-close" on:click={() => (isTokenDetailsOpen = false)} title="关闭">×</button>
-                                        </div>
-                                        <div class="ai-sidebar__token-meter">
-                                            <div class="ai-sidebar__token-meter-fill" style={`width: ${currentContextLimit ? displayedContextPercent : 0}%`}></div>
-                                        </div>
-                                        {#if isContextCompactionLikely}
-                                            <div class="ai-sidebar__token-status">正在接近上下文上限，OpenCode 可能会自动压缩上下文。</div>
-                                        {/if}
-                                        <div class="ai-sidebar__token-row"><span>上下文上限</span><strong>{currentContextLimit ? formatTokenCount(currentContextLimit) : '未设置'}</strong></div>
-                                        <div class="ai-sidebar__token-row"><span>当前使用百分比</span><strong>{currentContextLimit ? `${displayedContextPercent}%` : '无法计算'}</strong></div>
-                                        <div class="ai-sidebar__token-row"><span>当前使用的上下文</span><strong>{formatTokenCount(displayedContextTokens)}</strong></div>
-                                    </div>
-                                {/if}
-                            </div>
-                        </div>
-                    {/if}
-                </div>
-
-                <button
-                    class="ai-sidebar__chat-send-btn"
-                    class:ai-sidebar__chat-send-btn--abort={isLoading && !currentInput.trim()}
-                    class:ai-sidebar__chat-send-btn--followup={isLoading && !!currentInput.trim()}
-                    on:click={isLoading ? (currentInput.trim() ? sendMessageDuringExecution : abortMessage) : sendMessage}
-                    disabled={!isLoading && !currentInput.trim() && currentAttachments.length === 0}
-                    title={isLoading ? (currentInput.trim() ? '执行中发送消息' : '中断生成') : '发送消息'}
-                >
-                    {#if isLoading && !currentInput.trim()}
-                        <svg class="b3-button__icon"><use xlink:href="#iconPause"></use></svg>
-                    {:else}
-                        <svg class="b3-button__icon" style="width:18px;height:18px"><use xlink:href="#iconUp"></use></svg>
-                    {/if}
-                </button>
-            </div>
-        </div>
-
-        <!-- 隐藏的文件上传 input -->
-        <input
-            type="file"
-            bind:this={fileInputElement}
-            on:change={handleFileSelect}
-            accept="image/*,.txt,.md,.json,.xml,.csv,text/*"
-            multiple
-            style="display: none;"
-        />
-        <input
-            type="file"
-            bind:this={imageInputElement}
-            on:change={handleFileSelect}
-            accept="image/*"
-            multiple
-            style="display: none;"
-        />
-
-    </div>
-
-    <!-- 提示词管理对话框 -->
-    {#if isPromptManagerOpen}
-        <div class="ai-sidebar__prompt-dialog">
-            <div class="ai-sidebar__prompt-dialog-overlay" on:click={closePromptManager}></div>
-            <div class="ai-sidebar__prompt-dialog-content">
-                <div class="ai-sidebar__prompt-dialog-header">
-                    <h4>
-                        {editingPrompt ? t('aiSidebar.prompt.edit') : t('aiSidebar.prompt.create')}
-                    </h4>
-                    <button class="b3-button b3-button--text" on:click={closePromptManager}>
-                        <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
-                    </button>
-                </div>
-                <div class="ai-sidebar__prompt-dialog-body">
-                    <div class="ai-sidebar__prompt-form">
-                        <div class="ai-sidebar__prompt-form-field">
-                            <label class="ai-sidebar__prompt-form-label">标题</label>
-                            <input
-                                type="text"
-                                bind:value={newPromptTitle}
-                                placeholder={t('aiSidebar.prompt.titlePlaceholder')}
-                                class="b3-text-field"
-                            />
-                        </div>
-                        <div class="ai-sidebar__prompt-form-field">
-                            <label class="ai-sidebar__prompt-form-label">内容</label>
-                            <textarea
-                                bind:value={newPromptContent}
-                                placeholder="输入提示词内容"
-                                class="b3-text-field ai-sidebar__prompt-textarea"
-                                rows="20"
-                            ></textarea>
-                        </div>
-                        <div class="ai-sidebar__prompt-form-actions">
-                            <button
-                                class="b3-button b3-button--cancel"
-                                on:click={closePromptManager}
-                            >
-                                取消
-                            </button>
-                            <button class="b3-button b3-button--primary" on:click={saveNewPrompt}>
-                                {editingPrompt ? '更新' : '保存'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    {/if}
+    <PromptManagerDialog
+        bind:this={promptManagerDialog}
+        bind:prompts
+        {plugin}
+    />
 
     <!-- 网页链接对话框 -->
     {#if isWebLinkDialogOpen}

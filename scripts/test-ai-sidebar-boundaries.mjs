@@ -15,8 +15,10 @@ const metrics = {
 
 // Tighten these ceilings after every extraction so the shell cannot silently
 // regain responsibilities that have moved into dedicated modules.
-assert.ok(metrics.totalLines <= 11_500, `unexpected sidebar growth: ${metrics.totalLines}`);
-assert.ok(metrics.scriptLines <= 7_360, `unexpected script growth: ${metrics.scriptLines}`);
+assert.ok(metrics.totalLines <= 6_000, `unexpected sidebar growth: ${metrics.totalLines}`);
+assert.ok(metrics.scriptLines <= 5_000, `unexpected script growth: ${metrics.scriptLines}`);
 assert.ok(metrics.styleLines <= 2, `sidebar styles must remain external: ${metrics.styleLines}`);
+assert.doesNotMatch(source, /async function saveBase64ImagesInContent/);
+assert.doesNotMatch(source, /async function replaceAssetPathsWithBlob/);
 
 console.log('ai sidebar boundary baseline', metrics);
