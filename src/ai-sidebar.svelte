@@ -11,10 +11,13 @@
         fetchModels,
         executeCommand,
         sendStillPrompt,
+        respondToPermission,
+        replyToQuestion,
+        rejectQuestion,
         invalidateModelCache,
     } from './ai-chat';
     import type { MessageContent } from './ai-chat';
-    import { runChat } from './chat/execution/run-controller';
+    import { runSingleModelTarget } from './chat/execution/single-model-runner';
     import {
         applyMultiModelSelection,
         createMultiModelResponses,
@@ -87,7 +90,7 @@
         putFile,
         removeFile,
     } from './api';
-    import { saveAsset, base64ToBlob, readAssetAsText, revokeLoadedAssetUrls } from './utils/assets';
+    import { saveAsset, readAssetAsText, revokeLoadedAssetUrls } from './utils/assets';
     import {
         CHAT_SESSIONS_PATH,
         getLegacySessionPath,
@@ -179,7 +182,6 @@
     export let plugin: any;
     export let initialMessage: string = ''; // 初始消息
     export let mode: 'sidebar' | 'dialog' = 'sidebar'; // 使用模式：sidebar或dialog
-    export let respondToGlobalActions: boolean = false; // 是否响应全局事件（仅标签页实例）
 
     type ChatSession = TaskSession;
     const sessionRepository = new SessionRepository<ChatSession>();
@@ -1161,7 +1163,6 @@
                 response,
             });
             const serverUrl = settings?.aiProviders?.opencode?.serverUrl || 'http://localhost:4096';
-            const { respondToPermission } = await import('./ai-chat');
             await respondToPermission(serverUrl, req.sessionID, req.permissionID, response);
         } catch (err) {
             console.warn('[Permission] Failed to respond:', err);
@@ -1227,7 +1228,6 @@
                 answers,
             });
             const serverUrl = settings?.aiProviders?.opencode?.serverUrl || 'http://localhost:4096';
-            const { replyToQuestion } = await import('./ai-chat');
             const ok = await replyToQuestion(serverUrl, request.requestID, answers);
             if (!ok) {
                 pushErrMsg('回答发送失败，请检查 OpenCode 服务状态');
@@ -1249,7 +1249,6 @@
                 sessionID: request.sessionID,
             });
             const serverUrl = settings?.aiProviders?.opencode?.serverUrl || 'http://localhost:4096';
-            const { rejectQuestion } = await import('./ai-chat');
             await rejectQuestion(serverUrl, request.requestID);
         } catch (err) {
             console.warn('[Question] Failed to reject:', err);
@@ -2834,83 +2833,19 @@
         const diagnosticLogger = await startDiagnosticLog(effectiveUserContent, modelConfig);
 
         try {
-            // 准备联网搜索工具（如果启用）
-            let webSearchTools: any[] | undefined = undefined;
-            if (
-                modelConfig.capabilities?.webSearch &&
-                modelConfig.webSearchEnabled
-            ) {
-                // 根据模型类型构建不同的联网工具配置
-                const modelIdLower = modelConfig.id.toLowerCase();
-
-                if (modelIdLower.includes('gemini')) {
-                    // Gemini 模型使用 googleSearch 函数
-                    webSearchTools = [
-                        {
-                            type: 'function',
-                            function: {
-                                name: 'googleSearch',
-                            },
-                        },
-                    ];
-                } else if (modelIdLower.includes('claude')) {
-                    // Claude 模型使用 web_search 工具
-                    // webSearchTools = [
-                    //     {
-                    //         type: 'web_search_20250305',
-                    //         name: 'web_search',
-                    //         max_uses: modelConfig.webSearchMaxUses || 5,
-                    //     },
-                    // ];
-                }
-            }
-
-
-                // 检查是否启用图片生成
-                const enableImageGeneration = modelConfig.capabilities?.imageGeneration || false;
-                // 用于保存生成的图片
-                let generatedImages: any[] = [];
-
-                await runChat(
-                    currentProvider,
-                    {
-                        apiKey: providerConfig.apiKey,
-                        model: modelConfig.id,
-                        messages: messagesToSend,
-                        temperature: tempModelSettings.temperatureEnabled
-                            ? tempModelSettings.temperature
-                            : modelConfig.temperature,
-                        maxTokens: modelConfig.maxTokens > 0 ? modelConfig.maxTokens : undefined,
-                        stream: true,
-                        signal: abortController.signal,
-                        enableThinking,
-                        reasoningEffort: modelConfig.thinkingEffort || 'low',
-                        mode: effectiveChatMode,
-                        tools: webSearchTools, // 传递联网搜索工具
-                        customBody,
-                        diagnosticLogger: diagnosticLogger || undefined,
-                        enableImageGeneration,
-                        onImageGenerated: async (images: any[]) => {
-                            // 立即保存生成的图片到 SiYuan 资源文件夹并转换为 blob URL
-                            generatedImages = await Promise.all(
-                                images.map(async (img, idx) => {
-                                    const blob = base64ToBlob(
-                                        img.data,
-                                        img.mimeType || 'image/png'
-                                    );
-                                    const name = `generated-image-${Date.now()}-${idx + 1}.${
-                                        img.mimeType?.split('/')[1] || 'png'
-                                    }`;
-                                    const assetPath = await saveAsset(blob, name);
-                                    return {
-                                        ...img,
-                                        path: assetPath,
-                                        // 给前端显示用的 blob url
-                                        previewUrl: URL.createObjectURL(blob),
-                                    };
-                                })
-                            );
-                        },
+            await runSingleModelTarget({
+                provider: currentProvider,
+                providerConfig,
+                modelConfig,
+                messages: messagesToSend,
+                temperature: tempModelSettings.temperatureEnabled
+                    ? tempModelSettings.temperature
+                    : undefined,
+                signal: abortController.signal,
+                enableThinking,
+                mode: effectiveChatMode,
+                customBody,
+                diagnosticLogger: diagnosticLogger || undefined,
                         onThinkingChunk: (chunk: string) => appendThinkingForTask(runTaskId, chunk),
                         onThinkingComplete: () => {
                             if (isActiveTask(runTaskId)) {
@@ -2931,7 +2866,7 @@
                                 await scrollToBottom();
                             }
                         },
-                        onComplete: async (fullText: string) => {
+                        onComplete: async (fullText: string, generatedImages) => {
                             // 如果已经中断，不再添加消息（避免重复）
                             if (sessionIsAborted.get(runTaskId)) {
                                 return;
@@ -3087,10 +3022,7 @@
                                 error,
                             });
                         },
-                    },
-                    providerConfig.customApiUrl,
-                    providerConfig.advancedConfig
-                );
+                    });
         } catch (error) {
             console.error('Send message error:', error);
             await closeDiagnosticLog(diagnosticLogger, 'ui.failed', {
@@ -5239,10 +5171,11 @@
                 <div class="ai-sidebar__prompt-dialog-body">
                     <div class="ai-sidebar__prompt-form">
                         <div class="ai-sidebar__prompt-form-field">
-                            <label class="ai-sidebar__prompt-form-label">
+                            <label class="ai-sidebar__prompt-form-label" for="web-link-input">
                                 网页链接（每行一个）
                             </label>
                             <textarea
+                                id="web-link-input"
                                 bind:value={webLinkInput}
                                 placeholder="输入一个或多个网页链接，每行一个&#10;示例：&#10;https://example.com&#10;https://example.org/page"
                                 class="b3-text-field ai-sidebar__prompt-textarea"
@@ -5370,7 +5303,6 @@
                         class="ai-sidebar__edit-dialog-textarea"
                         bind:value={editingMessageContent}
                         rows="15"
-                        autofocus
                     ></textarea>
                 </div>
                 <div class="ai-sidebar__edit-dialog-footer">

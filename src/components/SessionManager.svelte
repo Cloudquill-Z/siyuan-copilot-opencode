@@ -535,7 +535,6 @@
                         bind:value={renameSessionTitle}
                         placeholder={t('aiSidebar.session.titlePlaceholder') || '请输入会话标题'}
                         on:keydown={e => e.key === 'Enter' && confirmRename()}
-                        autofocus
                     />
                 </div>
                 <div class="session-rename-dialog__footer">

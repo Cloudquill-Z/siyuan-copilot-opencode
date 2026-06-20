@@ -1,3 +1,5 @@
+    @use 'sass:color';
+
     // ── OpenCode Design System ─────────────────────────────────────
     $primary: #2563EB;
     $primary-light: #3B82F6;
@@ -3964,7 +3966,7 @@
         &--always {
             background: $success;
             color: #fff;
-            &:hover { background: darken($success, 8%); }
+            &:hover { background: color.adjust($success, $lightness: -8%); }
         }
 
         &--reject {
@@ -5367,4 +5369,3 @@
             right: -46px;
         }
     }
-

@@ -40,6 +40,12 @@ assert.deepEqual(calls, [
 ]);
 
 const brokenLute = { New() { throw new Error('broken renderer'); } };
-assert.equal(renderMessageHtml('<unsafe>', brokenLute), '&lt;unsafe&gt;');
+const originalConsoleError = console.error;
+console.error = () => undefined;
+try {
+    assert.equal(renderMessageHtml('<unsafe>', brokenLute), '&lt;unsafe&gt;');
+} finally {
+    console.error = originalConsoleError;
+}
 
 console.log('message renderer verification passed');

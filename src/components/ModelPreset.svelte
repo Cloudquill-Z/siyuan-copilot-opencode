@@ -1068,11 +1068,12 @@
             <div class="model-settings-content">
                 <!-- 预设名称 -->
                 <div class="model-settings-item">
-                    <label class="model-settings-label">
+                    <label class="model-settings-label" for="preset-name">
                         {t('aiSidebar.modelSettings.presetName')}
                     </label>
                     <div class="model-settings-preset-new">
                         <input
+                            id="preset-name"
                             type="text"
                             bind:value={newPresetName}
                             on:input={applySettings}
@@ -1084,7 +1085,7 @@
 
                 <!-- 上下文数设置 -->
                 <div class="model-settings-item">
-                    <label class="model-settings-label">
+                    <label class="model-settings-label" for="context-count">
                         {t('aiSidebar.modelSettings.contextCount')}
                         <span class="model-settings-value">
                             {tempContextCount === -1
@@ -1093,6 +1094,7 @@
                         </span>
                     </label>
                     <input
+                        id="context-count"
                         type="range"
                         min="-1"
                         max="50"
@@ -1112,7 +1114,7 @@
 
                 <!-- Temperature设置 -->
                 <div class="model-settings-item">
-                    <label class="model-settings-label">
+                    <label class="model-settings-label" for="temperature-value">
                         {t('aiSidebar.modelSettings.temperature')}
                         <span class="model-settings-value">{tempTemperature.toFixed(2)}</span>
                     </label>
@@ -1130,6 +1132,7 @@
                         </label>
                     </div>
                     <input
+                        id="temperature-value"
                         type="range"
                         min="0"
                         max="2"
@@ -1146,10 +1149,11 @@
 
                 <!-- 系统提示词设置 -->
                 <div class="model-settings-item">
-                    <label class="model-settings-label">
+                    <label class="model-settings-label" for="system-prompt">
                         {t('aiSidebar.modelSettings.systemPrompt')}
                     </label>
                     <textarea
+                        id="system-prompt"
                         bind:value={tempSystemPrompt}
                         on:change={applySettings}
                         class="b3-text-field model-settings-textarea"
@@ -1163,10 +1167,11 @@
 
                 <!-- 聊天模式设置 -->
                 <div class="model-settings-item">
-                    <label class="model-settings-label">
+                    <label class="model-settings-label" for="chat-mode">
                         {t('aiSidebar.modelSettings.chatMode') || '聊天模式'}
                     </label>
                     <select
+                        id="chat-mode"
                         bind:value={tempChatMode}
                         class="b3-select"
                         on:change={() => {
@@ -1349,7 +1354,7 @@
             }
         }
 
-        &.dragging {
+        &:global(.dragging) {
             opacity: 0.5;
         }
 
@@ -1511,10 +1516,6 @@
             color: var(--b3-theme-on-surface);
             cursor: pointer;
 
-            &.disabled {
-                opacity: 0.5;
-                cursor: not-allowed;
-            }
         }
     }
 
@@ -1554,12 +1555,6 @@
         width: 100%;
         padding: 6px 8px;
         font-size: 12px;
-    }
-
-    .model-settings-disabled-hint {
-        font-size: 11px;
-        color: var(--b3-theme-on-surface-light);
-        font-weight: normal;
     }
 
     .model-settings-preset-selected-icon {

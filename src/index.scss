@@ -4,7 +4,7 @@
    Primary: #2563EB  Accent: #F97316  Success: #22C55E
    ═══════════════════════════════════════════════════════════════ */
 
-@import './styles/ai-sidebar.scss';
+@use './styles/ai-sidebar';
 
 :root {
   --oc-primary: #2563EB;

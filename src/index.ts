@@ -516,8 +516,7 @@ export default class PluginSample extends Plugin {
                 const app = new AISidebar({
                     target: element,
                     props: {
-                        plugin: pluginInstance,
-                        respondToGlobalActions: true
+                        plugin: pluginInstance
                     }
                 });
                 pluginInstance.aiTabApps.set(element, app);
