@@ -13,9 +13,9 @@ const metrics = {
     styleLines: source.slice(styleStart).split('\n').length,
 };
 
-// Baseline characterization. The final phase replaces these ceilings with the
-// completion-contract limits after responsibilities have moved out of the shell.
-assert.ok(metrics.totalLines <= 21_000, `unexpected sidebar growth: ${metrics.totalLines}`);
-assert.ok(metrics.scriptLines <= 11_500, `unexpected script growth: ${metrics.scriptLines}`);
+// Tighten these ceilings after every extraction so the shell cannot silently
+// regain responsibilities that have moved into dedicated modules.
+assert.ok(metrics.totalLines <= 20_800, `unexpected sidebar growth: ${metrics.totalLines}`);
+assert.ok(metrics.scriptLines <= 11_100, `unexpected script growth: ${metrics.scriptLines}`);
 
 console.log('ai sidebar boundary baseline', metrics);

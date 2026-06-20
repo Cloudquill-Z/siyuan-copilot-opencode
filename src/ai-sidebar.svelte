@@ -17,6 +17,12 @@
         invalidateModelCache,
     } from './ai-chat';
     import type { MessageContent } from './ai-chat';
+    import {
+        convertLatexToMarkdown,
+        getActualMessageContent,
+        getMessageText,
+    } from './chat/message-content';
+    import { renderMessageHtml } from './chat/message-renderer';
     import { getActiveEditor, openTab } from 'siyuan';
     import {
         pushMsg,
@@ -799,6 +805,9 @@
 
     // 消息内容显示缓存（存储每个消息的显示内容，键为content的哈希）
     const messageDisplayCache = new Map<string, { loading: boolean; content: string }>();
+
+    const formatMessage = (content: string | MessageContent[]): string =>
+        renderMessageHtml(getMessageText(content));
 
     // 获取content的缓存键
     function getContentHash(content: string): string {
@@ -6187,57 +6196,6 @@
         }
     }
 
-    // 使用思源内置的Lute渲染markdown为HTML
-    // 将消息内容转换为字符串
-    function getMessageText(content: string | MessageContent[]): string {
-        if (typeof content === 'string') {
-            return content;
-        }
-        // 对于多模态内容，只提取文本部分
-        return content
-            .filter(part => part.type === 'text' && part.text)
-            .map(part => part.text)
-            .join('\n');
-    }
-
-    // 获取消息的实际内容（处理多模型响应）
-    function getActualMessageContent(message: Message): string {
-        // 如果有工具调用后的最终回复，优先返回
-        if (message.finalReply) {
-            return message.finalReply;
-        }
-        // 如果有多模型响应，返回被选中的模型的内容
-        if (message.multiModelResponses && message.multiModelResponses.length > 0) {
-            const selectedResponse = message.multiModelResponses.find(r => r.isSelected);
-            if (selectedResponse && selectedResponse.content) {
-                return getMessageText(selectedResponse.content);
-            }
-            // 如果没有选中的，返回第一个有内容的
-            const firstWithContent = message.multiModelResponses.find(r => r.content);
-            if (firstWithContent) {
-                return getMessageText(firstWithContent.content);
-            }
-        }
-        // 否则返回常规内容
-        return getMessageText(message.content);
-    }
-
-    // 将 LaTeX 数学公式格式转换为 Markdown 格式（永久转换）
-    function convertLatexToMarkdown(text: string): string {
-        // 将 LaTeX 块级数学公式 \[...\] 转换为 $$...$$
-        text = text.replace(/\\\[([\s\S]*?)\\\]/g, (_match, formula) => {
-            const trimmedFormula = formula.trim();
-            return `\n\n$$\n${trimmedFormula}\n$$\n\n`;
-        });
-
-        // 将 LaTeX 行内数学公式 \(...\) 转换为 $...$
-        text = text.replace(/\\\((.*?)\\\)/g, (_match, formula) => {
-            return `$${formula}$`;
-        });
-
-        return text;
-    }
-
     // 将消息内容中的 base64 图片保存为 assets 文件并替换为路径
     async function saveBase64ImagesInContent(content: string): Promise<string> {
         // 匹配 Markdown 图片语法中的 base64 数据
@@ -6307,48 +6265,6 @@
         }
 
         return result;
-    }
-
-    function escapeHtml(value: string): string {
-        return value
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
-
-    function formatMessage(content: string | MessageContent[]): string {
-        let textContent = getMessageText(content);
-
-        try {
-            // 检查window.Lute是否存在
-            if (typeof window !== 'undefined' && (window as any).Lute) {
-                const lute = (window as any).Lute.New();
-                lute.SetSanitize(true);
-                // 启用行内数学公式支持，将 $...$ 解析为 <span class="language-math">...</span>
-                lute.SetInlineMath(true);
-                // 允许 $ 后面紧跟数字，如 $7.24 s$
-                lute.SetInlineMathAllowDigitAfterOpenMarker(true);
-                // 使用Md2HTML将markdown转换为HTML，而不是Md2BlockDOM
-                // Md2HTML不会生成带data-node-id的块级结构，可以正常跨块选择文本
-                const html = lute.Md2HTML(textContent);
-                return html;
-            }
-            // 如果Lute不可用，回退到简单渲染
-            return escapeHtml(textContent)
-                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                .replace(/\*(.*?)\*/g, '<em>$1</em>')
-                .replace(/`([^`]+)`/g, '<code>$1</code>')
-                .replace(
-                    /```(\w+)?\n([\s\S]*?)```/g,
-                    '<pre><code class="language-$1">$2</code></pre>'
-                )
-                .replace(/\n/g, '<br>');
-        } catch (error) {
-            console.error('Format message error:', error);
-            return escapeHtml(textContent);
-        }
     }
 
     // 高亮代码块

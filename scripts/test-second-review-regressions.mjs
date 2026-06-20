@@ -52,9 +52,9 @@ assert.equal(
 );
 assert.match(highlightBlock, /highlighted = hljs\.highlight\(code/, 'explicit languages must retain the highlight result');
 assert.match(highlightBlock, /highlightAuto\(code\)/, 'automatic highlighting must receive code text');
-const formatMessageBlock = sidebarSource.slice(sidebarSource.indexOf('function formatMessage'), sidebarSource.indexOf('// 高亮代码块'));
-assert.match(formatMessageBlock, /lute\.SetSanitize\(true\)/, 'Lute rendering must sanitize untrusted chat HTML');
-assert.match(formatMessageBlock, /escapeHtml\(textContent\)/, 'fallback rendering must escape untrusted chat HTML');
+const messageRendererSource = await readFile(new URL('../src/chat/message-renderer.ts', import.meta.url), 'utf8');
+assert.match(messageRendererSource, /lute\.SetSanitize\(true\)/, 'Lute rendering must sanitize untrusted chat HTML');
+assert.match(messageRendererSource, /escapeHtml\(textContent\)/, 'fallback rendering must escape untrusted chat HTML');
 const diffRenderBlock = sidebarSource.slice(sidebarSource.indexOf('function renderMarkdownForSplitDiff'), sidebarSource.indexOf('// 简单的差异高亮'));
 assert.match(diffRenderBlock, /lute\.SetSanitize\(true\)/, 'diff rendering must sanitize untrusted markdown HTML');
 
