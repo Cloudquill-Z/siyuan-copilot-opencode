@@ -56,7 +56,7 @@ assert.match(highlightBlock, /highlightAuto\(code\)/, 'automatic highlighting mu
 const messageRendererSource = await readFile(new URL('../src/chat/message-renderer.ts', import.meta.url), 'utf8');
 assert.match(messageRendererSource, /lute\.SetSanitize\(true\)/, 'Lute rendering must sanitize untrusted chat HTML');
 assert.match(messageRendererSource, /escapeHtml\(textContent\)/, 'fallback rendering must escape untrusted chat HTML');
-const diffRenderBlock = sidebarSource.slice(sidebarSource.indexOf('function renderMarkdownForSplitDiff'), sidebarSource.indexOf('// 简单的差异高亮'));
+const diffRenderBlock = await readFile(new URL('../src/chat/diff-utils.ts', import.meta.url), 'utf8');
 assert.match(diffRenderBlock, /lute\.SetSanitize\(true\)/, 'diff rendering must sanitize untrusted markdown HTML');
 
 const healthSource = await readFile(new URL('../src/stores/connectionStatus.ts', import.meta.url), 'utf8');

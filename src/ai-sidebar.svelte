@@ -40,6 +40,12 @@
         getOpenCodeToolStatusText,
         groupOpenCodeTimeline,
     } from './chat/timeline-display';
+    import {
+        escapeSqlString,
+        generateSimpleDiff,
+        normalizeOperationContentForDiff,
+        renderMarkdownForSplitDiff,
+    } from './chat/diff-utils';
     import { TaskStateController } from './chat/task-state-controller';
     import { SessionRepository } from './chat/session-repository';
     import {
@@ -8157,10 +8163,6 @@
         }
     }
 
-    function normalizeOperationContentForDiff(content: string) {
-        return content.replace(/\{:\s*id="[^"]+"\s*\}/g, '').trim();
-    }
-
     type ToolChangeContext = {
         operationType: 'update' | 'insert' | 'delete' | 'rename';
         docId: string;
@@ -8169,10 +8171,6 @@
         affectedBlockId: string;
         renameTitleTo?: string;
     };
-
-    function escapeSqlString(value: string) {
-        return value.replace(/'/g, "''");
-    }
 
     async function getDocDisplayTitle(docId: string): Promise<string> {
         try {
@@ -8479,71 +8477,6 @@
     function closeDiffDialog() {
         isDiffDialogOpen = false;
         currentDiffOperation = null;
-    }
-
-    function escapeDiffHtml(text: string) {
-        return text
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
-
-    function renderMarkdownForSplitDiff(markdown: string) {
-        const content = markdown || '';
-        try {
-            const lute = (window as any).Lute.New();
-            if (lute && typeof lute.Md2HTML === 'function') {
-                lute.SetSanitize(true);
-                return lute.Md2HTML(content);
-            }
-        } catch (error) {
-            console.warn('使用 Lute 渲染差异内容失败:', error);
-        }
-        return `<pre>${escapeDiffHtml(content)}</pre>`;
-    }
-
-    // 简单的差异高亮（按行对比）
-    function generateSimpleDiff(
-        oldText: string,
-        newText: string
-    ): { type: 'removed' | 'added' | 'unchanged'; line: string }[] {
-        const oldLines = oldText.split('\n');
-        const newLines = newText.split('\n');
-        const result: { type: 'removed' | 'added' | 'unchanged'; line: string }[] = [];
-
-        // 简单的行对比（可以使用更复杂的diff算法）
-        const maxLen = Math.max(oldLines.length, newLines.length);
-        let oldIdx = 0;
-        let newIdx = 0;
-
-        while (oldIdx < oldLines.length || newIdx < newLines.length) {
-            const oldLine = oldLines[oldIdx] || '';
-            const newLine = newLines[newIdx] || '';
-
-            if (oldLine === newLine) {
-                result.push({ type: 'unchanged', line: oldLine });
-                oldIdx++;
-                newIdx++;
-            } else if (oldIdx < oldLines.length && newIdx < newLines.length) {
-                // 两行都存在但不同
-                result.push({ type: 'removed', line: oldLine });
-                result.push({ type: 'added', line: newLine });
-                oldIdx++;
-                newIdx++;
-            } else if (oldIdx < oldLines.length) {
-                // 只有旧行
-                result.push({ type: 'removed', line: oldLine });
-                oldIdx++;
-            } else {
-                // 只有新行
-                result.push({ type: 'added', line: newLine });
-                newIdx++;
-            }
-        }
-
-        return result;
     }
 
     // 消息操作函数
