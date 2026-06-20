@@ -345,21 +345,6 @@
                     请确认 OpenCode MCP 服务已启动并运行
                 </div>
             </div>
-
-            <div class="provider-config__checkbox-row">
-                <label class="b3-label__text provider-config__checkbox-label">
-                    <input
-                        type="checkbox"
-                        class="b3-switch"
-                        bind:checked={config.skipTlsVerify}
-                        on:change={() => dispatch('change')}
-                    />
-                    <span>跳过 TLS 证书验证</span>
-                </label>
-                <div class="b3-label__text label-description">
-                    开启后，自动启动的 OpenCode 服务器将跳过上游 AI 提供商的 SSL 证书验证。适用于公司代理、自签名证书或 CA 证书过期导致「certificate verification error」的场景。如果你手动启动 opencode serve，请自行设置环境变量 NODE_TLS_REJECT_UNAUTHORIZED=0。修改后需重启 OpenCode 服务器生效。
-                </div>
-            </div>
         {:else}
             <div>
                 <div class="b3-label__text">
@@ -786,21 +771,6 @@
         color: var(--b3-theme-on-surface-light);
         margin-top: 4px;
         line-height: 1.4;
-    }
-
-    .provider-config__checkbox-row {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        margin-top: 8px;
-    }
-
-    .provider-config__checkbox-label {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        cursor: pointer;
-        font-size: 13px;
     }
 
     .provider-config__model-buttons {

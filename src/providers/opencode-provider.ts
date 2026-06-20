@@ -10,6 +10,7 @@ import {
     type RealtimeSessionStatus,
 } from "./realtime-completion-watcher";
 import { getOpenCodeAgentForChatMode } from "../utils/chatMode";
+import { getOpenCodeServerAuthHeader } from "../utils/opencode";
 
 export type { OpenCodeModelInfo } from "./opencode-models";
 
@@ -537,10 +538,9 @@ function isTlsCertificateError(err: Error): boolean {
 function tlsCertificateErrorMessage(serverUrl: string): string {
     return (
         `TLS 证书验证失败 — OpenCode 服务器无法验证上游 AI 提供商的 SSL 证书。\n` +
-        `可能原因：公司代理拦截 HTTPS、自签名证书、系统 CA 证书包过期。\n` +
-        `解决方法：在设置 → OpenCode 提供商中开启「跳过 TLS 证书验证」选项，` +
-        `然后重启 OpenCode 服务器（${serverUrl}）。` +
-        `如果你是手动启动 opencode serve，请先设置环境变量：export NODE_TLS_REJECT_UNAUTHORIZED=0`
+        `可能原因：系统 CA 证书包缺失或 Bun 运行时无法访问 macOS 钥匙串。\n` +
+        `解决方法：重启 OpenCode 服务器（${serverUrl}）。插件会自动设置 NODE_EXTRA_CA_CERTS 和 SSL_CERT_FILE 环境变量指向系统 CA 证书包。` +
+        `如果你是手动启动 opencode serve，请先设置环境变量：export NODE_EXTRA_CA_CERTS=/etc/ssl/cert.pem（macOS）或 /etc/ssl/certs/ca-certificates.crt（Linux）`
     );
 }
 
@@ -580,8 +580,10 @@ async function fetchOpenCodeSessionStatus(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5_000);
     try {
+        const authHeader = getOpenCodeServerAuthHeader();
         const response = await fetch(`${normalizeServerUrl(serverUrl)}/session/status`, {
             signal: controller.signal,
+            headers: authHeader ? { Authorization: authHeader } : undefined,
         });
         if (!response.ok) {
             return 'unknown';
@@ -662,11 +664,13 @@ async function openCodeFetch(
         : null;
 
     try {
+        const authHeader = getOpenCodeServerAuthHeader();
         const response = await fetch(url, {
             ...options,
             signal: controller.signal as AbortSignal,
             headers: {
                 'Content-Type': 'application/json',
+                ...(authHeader ? { Authorization: authHeader } : {}),
                 ...(options.headers || {})
             }
         });
@@ -820,7 +824,11 @@ class EventStreamClient {
         debugOpenCode('[OpenCode] EventStream: connecting to', url);
         let response: Response;
         try {
-            response = await fetch(url, { signal: this.controller.signal });
+            const authHeader = getOpenCodeServerAuthHeader();
+            response = await fetch(url, {
+                signal: this.controller.signal,
+                headers: authHeader ? { Authorization: authHeader } : undefined,
+            });
         } catch (err: any) {
             outerCleanup?.();
             if (err.name === 'AbortError') return;

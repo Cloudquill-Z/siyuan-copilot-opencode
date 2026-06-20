@@ -1,4 +1,5 @@
-import { expandOpenCodeCliPath, getNodeModule, isWindowsRuntime } from './utils/opencode';
+import { expandOpenCodeCliPath, getNodeModule, getOpenCodeServerAuthHeader, getSystemCaCertBundlePath, isWindowsRuntime } from './utils/opencode';
+import { startTlsProxy, stopTlsProxy, getProxyPort, isProxyRunning } from './opencode-tls-proxy';
 
 const DEFAULT_PORT = 4096;
 const DEFAULT_HOSTNAME = '127.0.0.1';
@@ -15,6 +16,11 @@ function debugRunner(...args: any[]) {
     }
 }
 
+function buildAuthHeaders(): Record<string, string> {
+    const auth = getOpenCodeServerAuthHeader();
+    return auth ? { Authorization: auth } : {};
+}
+
 function isElectron(): boolean {
     return typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('electron');
 }
@@ -25,7 +31,6 @@ export interface OpenCodeRunnerOptions {
     hostname?: string;
     workingDir?: string;
     env?: Record<string, string>;
-    skipTlsVerify?: boolean;
 }
 
 export interface OpenCodeRunnerResult {
@@ -45,7 +50,7 @@ export function isServeRunning(): boolean {
     return serveRunning;
 }
 
-function getExpandedEnv(options?: Pick<OpenCodeRunnerOptions, 'env' | 'skipTlsVerify'>): Record<string, string> {
+function getExpandedEnv(options?: Pick<OpenCodeRunnerOptions, 'env'>): Record<string, string> {
     const env: Record<string, string> = {
         ...(typeof process !== 'undefined' && process.env ? Object.fromEntries(
             Object.entries(process.env).filter(([, v]) => v !== undefined && v !== null) as [string, string][]
@@ -53,8 +58,15 @@ function getExpandedEnv(options?: Pick<OpenCodeRunnerOptions, 'env' | 'skipTlsVe
         ...(options?.env || {}),
     };
 
-    if (options?.skipTlsVerify) {
-        env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+    // The opencode binary embeds a Bun JS runtime whose BoringSSL TLS stack
+    // cannot read the macOS keychain. Bun respects NODE_EXTRA_CA_CERTS to
+    // append CA certificates to its trust store, and SSL_CERT_FILE for Go's
+    // crypto/x509. Setting both to the system cert bundle ensures proper TLS
+    // verification for upstream AI provider APIs — no verification is disabled.
+    const caBundlePath = getSystemCaCertBundlePath();
+    if (caBundlePath) {
+        if (!env.SSL_CERT_FILE) env.SSL_CERT_FILE = caBundlePath;
+        if (!env.NODE_EXTRA_CA_CERTS) env.NODE_EXTRA_CA_CERTS = caBundlePath;
     }
 
     return expandOpenCodeCliPath(env, isWindowsRuntime());
@@ -178,6 +190,7 @@ export async function checkServerAvailable(
             const response = await fetch(url, {
                 method: 'GET',
                 signal: controller.signal,
+                headers: buildAuthHeaders(),
             });
             clearTimeout(timer);
             return response.ok;
@@ -211,10 +224,46 @@ export function startServe(options?: OpenCodeRunnerOptions): OpenCodeRunnerResul
     const hostname = options?.hostname || DEFAULT_HOSTNAME;
     const workingDir = options?.workingDir || process.cwd();
 
-    const args = ['serve', '--port', String(port), '--hostname', hostname];
+    const args = ['serve', '--port', String(port), '--hostname', hostname, '--pure'];
 
     const isWin = isWindowsRuntime();
-    const expandedEnv = getExpandedEnv(options);
+    let expandedEnv = getExpandedEnv(options);
+
+    // Start the local TLS proxy. The opencode binary embeds a Bun runtime whose
+    // BoringSSL cannot access the macOS keychain, causing TLS verification
+    // failures for upstream HTTPS API calls. The proxy forwards HTTP requests
+    // to HTTPS targets using Node.js's https module (which CAN access the
+    // keychain). HTTPS_PROXY is set so Bun routes HTTPS requests through it.
+    if (!isProxyRunning()) {
+        const proxyResult = startTlsProxy();
+        if (proxyResult.success && proxyResult.port) {
+            const proxyUrl = `http://127.0.0.1:${proxyResult.port}`;
+            expandedEnv = {
+                ...expandedEnv,
+                HTTPS_PROXY: proxyUrl,
+                https_proxy: proxyUrl,
+            };
+            // Don't proxy local connections
+            const existingNoProxy = expandedEnv.NO_PROXY || expandedEnv.no_proxy || '';
+            const noProxyEntries = ['127.0.0.1', 'localhost', '::1'];
+            if (existingNoProxy) {
+                noProxyEntries.unshift(existingNoProxy);
+            }
+            const noProxyValue = noProxyEntries.filter((v, i, a) => a.indexOf(v) === i).join(',');
+            expandedEnv.NO_PROXY = noProxyValue;
+            expandedEnv.no_proxy = noProxyValue;
+            debugRunner(`[OpenCode Runner] TLS proxy started on port ${proxyResult.port}`);
+        } else {
+            console.warn('[OpenCode Runner] Failed to start TLS proxy:', proxyResult.error);
+        }
+    } else if (getProxyPort() > 0) {
+        const proxyUrl = `http://127.0.0.1:${getProxyPort()}`;
+        expandedEnv = {
+            ...expandedEnv,
+            HTTPS_PROXY: proxyUrl,
+            https_proxy: proxyUrl,
+        };
+    }
 
     try {
         serveProcess = childProcess.spawn(cliPath, args, {
@@ -283,6 +332,7 @@ export function stopServe(): void {
         serveProcess = null;
         serveRunning = false;
     }
+    stopTlsProxy();
 }
 
 export async function restartServe(options?: OpenCodeRunnerOptions): Promise<OpenCodeRunnerResult> {
@@ -379,7 +429,7 @@ export async function fetchSessionStatuses(
 
         let response: Response;
         try {
-            response = await fetch(url, { signal: controller.signal });
+            response = await fetch(url, { signal: controller.signal, headers: buildAuthHeaders() });
         } finally {
             clearTimeout(timer);
         }
@@ -410,7 +460,7 @@ export async function checkServerHealth(
 
         let response: Response;
         try {
-            response = await fetch(url, { signal: controller.signal });
+            response = await fetch(url, { signal: controller.signal, headers: buildAuthHeaders() });
         } finally {
             clearTimeout(timer);
         }
