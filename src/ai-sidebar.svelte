@@ -60,8 +60,8 @@
     import { hydrateSessionMessages } from './chat/session-hydrator';
     import {
         AttachmentController,
-        validateAttachmentFile,
     } from './chat/attachment-controller';
+    import { AttachmentWorkflow } from './chat/attachment-workflow';
     import {
         ContextController,
         buildDocumentSearchQuery,
@@ -100,7 +100,6 @@
     } from './diagnostic-logger';
     import { SUMMARY_EVENT, WEBAPP_TAB_TYPE } from './pluginNamespace';
     import {
-        parseMultipleWebPages,
         fetchWithWebView,
         parseWebPageToMarkdown,
     } from './utils/webParser';
@@ -344,6 +343,7 @@
             isUploadingFile = attachmentController.isSaving;
         }
     );
+    const attachmentWorkflow = new AttachmentWorkflow(attachmentController);
 
     // 网页链接功能
     let isWebLinkDialogOpen = false;
@@ -1758,107 +1758,36 @@
         });
     }
 
-    // 处理粘贴事件
-    async function handlePaste(event: ClipboardEvent) {
-        const items = event.clipboardData?.items;
-        if (!items) return;
-
-        for (let i = 0; i < items.length; i++) {
-            const item = items[i];
-
-            // 处理图片
-            if (item.type.startsWith('image/')) {
-                event.preventDefault();
-                const file = item.getAsFile();
-                if (file) {
-                    await addImageAttachment(file);
-                }
-                return;
-            }
-
-            // 处理文件
-            if (item.kind === 'file') {
-                event.preventDefault();
-                const file = item.getAsFile();
-                if (file) {
-                    await addFileAttachment(file);
-                }
-                return;
-            }
-        }
-    }
-
-    // 添加图片附件
-    async function addImageAttachment(file: File) {
-        if (!file.type.startsWith('image/')) {
-            pushErrMsg(t('aiSidebar.errors.imageOnly'));
-            return;
-        }
+    async function addAttachmentFile(file: File) {
         isUploadingFile = true;
         try {
-            await attachmentController.addImage(file, URL.createObjectURL(file));
+            await attachmentWorkflow.addFile(file);
         } catch (error) {
-            console.error('Add image error:', error);
-            pushErrMsg(t('aiSidebar.errors.addImageFailed'));
+            const code = (error as Error).message;
+            if (code === 'unsupported') pushErrMsg(t('aiSidebar.errors.textAndImageOnly'));
+            else if (code === 'too_large') pushErrMsg(t('aiSidebar.errors.fileTooLarge'));
+            else pushErrMsg(t('aiSidebar.errors.addFileFailed'));
         } finally {
             isUploadingFile = attachmentController.isSaving;
         }
     }
 
-    // 添加文件附件
-    async function addFileAttachment(file: File) {
-        const isImage = file.type.startsWith('image/');
-        const validationError = validateAttachmentFile(file);
-        if (validationError === 'unsupported') {
-            pushErrMsg(t('aiSidebar.errors.textAndImageOnly'));
-            return;
-        }
-        if (validationError === 'too_large') {
-            pushErrMsg(t('aiSidebar.errors.fileTooLarge'));
-            return;
-        }
-
+    async function handlePaste(event: ClipboardEvent) {
+        isUploadingFile = true;
         try {
-            if (isImage) {
-                await addImageAttachment(file);
-            } else {
-                isUploadingFile = true;
-                await attachmentController.addText(file);
-            }
+            await attachmentWorkflow.addFromPaste(event);
         } catch (error) {
-            console.error('Add file error:', error);
+            console.error('Paste attachment error:', error);
             pushErrMsg(t('aiSidebar.errors.addFileFailed'));
         } finally {
             isUploadingFile = attachmentController.isSaving;
         }
     }
 
-    // 附件保存可能在后台进行，发送前等待完成，确保 path 持久化可用
     async function waitForPendingAttachmentSaves() {
         await attachmentController.waitForPendingSaves();
     }
 
-    async function addFilesInBatches(files: File[], concurrency = 3) {
-        for (let i = 0; i < files.length; i += concurrency) {
-            const batch = files.slice(i, i + concurrency);
-            await Promise.all(batch.map(file => addFileAttachment(file)));
-        }
-    }
-
-    // 文件转 base64
-    function fileToBase64(file: File): Promise<string> {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => {
-                const result = reader.result as string;
-                resolve(result);
-            };
-            reader.onerror = reject;
-            reader.readAsDataURL(file);
-        });
-    }
-
-    // 触发文件选择
     function triggerFileUpload() {
         isAddMenuOpen = false;
         fileInputElement?.click();
@@ -1869,16 +1798,19 @@
         imageInputElement?.click();
     }
 
-    // 处理文件选择
     async function handleFileSelect(event: Event) {
         const input = event.target as HTMLInputElement;
-        const files = input.files;
-
-        if (!files || files.length === 0) return;
-
-        await addFilesInBatches(Array.from(files));
-
-        // 清空 input，允许重复选择同一文件
+        if (input.files?.length) {
+            isUploadingFile = true;
+            try {
+                await attachmentWorkflow.addFiles(Array.from(input.files));
+            } catch (error) {
+                console.error('Add files error:', error);
+                pushErrMsg(t('aiSidebar.errors.addFileFailed'));
+            } finally {
+                isUploadingFile = attachmentController.isSaving;
+            }
+        }
         input.value = '';
     }
 
@@ -1886,10 +1818,7 @@
         isAddMenuOpen = false;
         try {
             const text = await navigator.clipboard.readText();
-            if (!text.trim()) {
-                pushErrMsg('剪贴板中没有可用文本');
-                return;
-            }
+            if (!text.trim()) return pushErrMsg('剪贴板中没有可用文本');
             currentInput = currentInput.trimEnd()
                 ? `${currentInput.trimEnd()}\n\n${text}`
                 : text;
@@ -1902,119 +1831,26 @@
         }
     }
 
-    // 移除附件
     function removeAttachment(index: number) {
         attachmentController.remove(index);
     }
 
-    // 打开网页链接对话框
     function openWebLinkDialog() {
         isWebLinkDialogOpen = true;
         webLinkInput = '';
     }
 
-    // 关闭网页链接对话框
     function closeWebLinkDialog() {
         isWebLinkDialogOpen = false;
         webLinkInput = '';
     }
 
-    // 爬取网页内容并转换为Markdown
     async function fetchWebPages() {
-        if (!webLinkInput.trim()) {
-            pushErrMsg('请输入至少一个链接');
-            return;
-        }
-
-        // 解析多个链接（按换行符分割）
-        const links = webLinkInput
-            .split('\n')
-            .map(link => link.trim())
-            .filter(link => link.length > 0);
-
-        if (links.length === 0) {
-            pushErrMsg('请输入有效的链接');
-            return;
-        }
-
+        const links = webLinkInput.split('\n').map(link => link.trim()).filter(Boolean);
+        if (!links.length) return pushErrMsg('请输入至少一个链接');
         isFetchingWebContent = true;
-        let successCount = 0;
-
         try {
-            // 使用工具函数批量解析网页
-            const results = await parseMultipleWebPages(links, (current, total, url, success) => {
-                if (success) {
-                    pushMsg(`正在获取 (${current}/${total}): ${url}`);
-                }
-            });
-
-            // 处理解析结果
-            for (const result of results) {
-                if (result.success) {
-                    // 从 URL 中提取文件名
-                    const urlObj = new URL(result.url);
-                    const fileName = `${urlObj.hostname.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.md`;
-
-                    // 保存为 SiYuan 资源
-                    const assetPath = await saveAsset(
-                        new Blob([result.markdown], { type: 'text/markdown' }),
-                        fileName
-                    );
-
-                    // 添加到附件列表，标记为网页类型
-                    attachmentController.addWebPage(result.url, result.markdown, assetPath);
-
-                    successCount++;
-                    pushMsg(`✓ 成功获取: ${result.title || result.url}`);
-                } else {
-                    // 解析失败，尝试使用 WebView 模式
-                    pushMsg(`普通模式失败，尝试 WebView 模式: ${result.url}`);
-
-                    try {
-                        const webviewResult = await fetchWithWebView(result.url);
-
-                        if (webviewResult.success && webviewResult.markdown) {
-                            // 从 URL 中提取文件名
-                            const urlObj = new URL(result.url);
-                            const fileName = `${urlObj.hostname.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.md`;
-
-                            // 保存为 SiYuan 资源
-                            const assetPath = await saveAsset(
-                                new Blob([webviewResult.markdown], { type: 'text/markdown' }),
-                                fileName
-                            );
-
-                            // 添加到附件列表，标记为网页类型
-                            attachmentController.addWebPage(
-                                result.url,
-                                webviewResult.markdown,
-                                assetPath
-                            );
-
-                            successCount++;
-                            pushMsg(`✓ WebView 模式成功: ${webviewResult.title || result.url}`);
-                        } else {
-                            // WebView 也失败了
-                            if (
-                                result.error?.includes('CORS') ||
-                                result.error?.includes('Failed to fetch')
-                            ) {
-                                pushErrMsg(`✗ CORS 限制: ${result.url} - 该网站不允许跨域访问`);
-                            } else {
-                                pushErrMsg(`✗ 获取失败: ${result.url} - ${result.error}`);
-                            }
-                        }
-                    } catch (webviewError) {
-                        console.error('WebView fetch error:', webviewError);
-                        pushErrMsg(`✗ WebView 模式也失败了: ${result.url}`);
-                    }
-                }
-            }
-
-            // 如果有成功的结果，关闭弹窗
-            if (successCount > 0) {
-                closeWebLinkDialog();
-            }
+            if (await attachmentWorkflow.addWebPages(links)) closeWebLinkDialog();
         } catch (error) {
             console.error('Fetch web pages error:', error);
             pushErrMsg('获取网页内容失败');
@@ -2023,7 +1859,6 @@
         }
     }
 
-    // 检查是否在底部
     function isAtBottom() {
         if (!messagesContainer) return true;
         const threshold = 100; // 100px的阈值
@@ -4462,7 +4297,7 @@
                             });
 
                             // 使用统一的图片附件添加逻辑（包含保存到资源目录）
-                            await addImageAttachment(file);
+                            await addAttachmentFile(file);
 
                             pushMsg(t('aiSidebar.success.imageAutoUploaded'));
                             return; // 图片已作为附件添加，不需要再添加为上下文文档
@@ -4550,7 +4385,7 @@
         // 处理标准文件拖放
         const files = event.dataTransfer.files;
         if (files && files.length > 0) {
-            await addFilesInBatches(Array.from(files));
+            await attachmentWorkflow.addFiles(Array.from(files));
             return;
         }
 
@@ -5732,387 +5567,66 @@
         );
     }
 
-    // 重新生成AI回复
+    // 重新生成统一复用发送入口，避免维护第二套模型执行生命周期
     async function regenerateMessage(index: number) {
-        const providerConfig = getCurrentProviderConfig();
-        const modelConfig = getCurrentModelConfig();
+        if (isLoading) return pushErrMsg(t('aiSidebar.errors.generating'));
+        const target = messages[index];
+        if (!target) return pushErrMsg(t('aiSidebar.errors.noMessage'));
 
-        if (isLoading) {
-            pushErrMsg(t('aiSidebar.errors.generating'));
-            return;
-        }
-
-        // 【修复】立即设置加载状态，防止并发点击
-        isLoading = true;
-
-        const targetMessage = messages[index];
-        if (!targetMessage) {
-            pushErrMsg(t('aiSidebar.errors.noMessage'));
-            return;
-        }
-
-        // 检查目标消息或后续消息是否包含多模型响应
-        let useMultiModel = false;
-        let previousMultiModels: Array<{ provider: string; modelId: string }> = [];
-
-        if (targetMessage.role === 'assistant' && targetMessage.multiModelResponses) {
-            useMultiModel = true;
-            // 提取之前使用的模型列表
-            previousMultiModels = targetMessage.multiModelResponses.map(r => ({
-                provider: r.provider,
-                modelId: r.modelId,
-            }));
-        }
-
-        // 如果是用户消息，删除该消息及之后的所有消息，然后重新发送
-        // 如果是AI消息，删除该消息及之后的所有消息，然后重新请求
-        if (targetMessage.role === 'user') {
-            // 检查下一条消息是否是多模型响应
-            const nextMessage = messages[index + 1];
-            if (
-                nextMessage &&
-                nextMessage.role === 'assistant' &&
-                nextMessage.multiModelResponses
-            ) {
-                useMultiModel = true;
-                previousMultiModels = nextMessage.multiModelResponses.map(r => ({
-                    provider: r.provider,
-                    modelId: r.modelId,
-                }));
-            }
-
-            // 删除该用户消息及之后的所有消息
-            messages = messages.slice(0, index);
-            hasUnsavedChanges = true;
-
-            // 重新添加该用户消息
-            const userMessage: Message = {
-                role: 'user',
-                content: targetMessage.content,
-                attachments: targetMessage.attachments,
-                contextDocuments: targetMessage.contextDocuments,
-            };
-            messages = [...messages, userMessage];
-        } else {
-            // AI消息：删除从此消息开始的所有后续消息
-            messages = messages.slice(0, index);
-            hasUnsavedChanges = true;
-        }
-
-        // 获取最后一条用户消息
-        const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
-        if (!lastUserMessage) {
-            pushErrMsg(t('aiSidebar.errors.noUserMessage'));
-            return;
-        }
-
-        // 处理多模型重新生成的逻辑
-        // 情况1：之前使用了多模型，且用户当前启用了多模型，优先使用当前用户设置的模型列表
-        // 情况2：用户当前启用了多模型，使用当前选择的多模型
-        // 情况3：用户关闭了多模型，使用单模型
-        if (chatMode === 'plan') {
-            // 检查是否应该使用多模型
-            let shouldUseMultiModel = false;
-            let modelsToUse: Array<{ provider: string; modelId: string }> = [];
-
-            // 只有当用户当前启用了多模型时，才考虑使用多模型
-            if (enableMultiModel && selectedMultiModels.length > 0) {
-                // 优先使用当前用户设置的模型列表
-                const validCurrentModels = selectedMultiModels.filter(model => {
-                    const config = getProviderAndModelConfig(model.provider, model.modelId);
-                    return config !== null;
-                });
-
-                if (validCurrentModels.length > 0) {
-                    // 使用当前有效的模型
-                    shouldUseMultiModel = true;
-                    modelsToUse = validCurrentModels;
-                } else {
-                    // 当前设置的模型都无效，检查是否之前有使用多模型
-                    if (useMultiModel && previousMultiModels.length > 0) {
-                        const validPreviousModels = previousMultiModels.filter(model => {
-                            const config = getProviderAndModelConfig(model.provider, model.modelId);
-                            return config !== null;
-                        });
-
-                        if (validPreviousModels.length > 0) {
-                            pushMsg('当前选择的多模型无效，将使用之前的模型重新生成');
-                            shouldUseMultiModel = true;
-                            modelsToUse = validPreviousModels;
-                        }
-                    }
+        let userIndex = target.role === 'user' ? index : -1;
+        if (userIndex < 0) {
+            for (let cursor = index - 1; cursor >= 0; cursor--) {
+                if (messages[cursor].role === 'user') {
+                    userIndex = cursor;
+                    break;
                 }
             }
-            // 情况3：用户关闭了多模型，不使用多模型（继续执行后续单模型逻辑）
-
-            // 如果应该使用多模型，则调用多模型发送
-            if (shouldUseMultiModel && modelsToUse.length > 0) {
-                // 临时保存当前的多模型选择
-                const originalMultiModels = [...selectedMultiModels];
-                const originalEnableMultiModel = enableMultiModel;
-
-                // 设置为要使用的模型
-                selectedMultiModels = modelsToUse;
-                enableMultiModel = true;
-
-                // 调用多模型发送
-                try {
-                    await sendMultiModelMessage();
-                } finally {
-                    // 恢复原来的设置
-                    selectedMultiModels = originalMultiModels;
-                    enableMultiModel = originalEnableMultiModel;
-                }
-
-                return; // 多模型发送完成，直接返回
-            }
         }
+        if (userIndex < 0) return pushErrMsg(t('aiSidebar.errors.noUserMessage'));
 
-        // 重新发送请求
-        // isLoading 已经在函数开始时设置为 true
-        isAborted = false; // 重置中断标志
-        streamingMessage = '';
-        streamingThinking = '';
-        thinkingBeforeToolCalls = ''; // 重置工具调用前的思考内容
-        isThinkingPhase = false;
-        autoScroll = true; // 重新生成时启用自动滚动
+        const userMessage = messages[userIndex];
+        const responseMessage =
+            target.role === 'assistant'
+                ? target
+                : messages
+                      .slice(userIndex + 1)
+                      .find(message => message.role === 'assistant');
+        const previousChoices: MultiModelChoice[] = (
+            responseMessage?.multiModelResponses || []
+        ).map(response => ({
+            provider: response.provider,
+            modelId: response.modelId,
+            thinkingEnabled: response.thinkingEnabled,
+            thinkingEffort: response.thinkingEffort,
+        }));
 
-        if (!providerConfig || !modelConfig) {
-            pushErrMsg(t('aiSidebar.errors.noProvider'));
-            isLoading = false;
-            return;
-        }
+        messages = messages.slice(0, userIndex);
+        currentInput = getMessageText(userMessage.content);
+        attachmentController.replace(userMessage.attachments || []);
+        contextController.replace(userMessage.contextDocuments || []);
+        hasUnsavedChanges = true;
 
-        await scrollToBottom(true);
-
-        // 获取最后一条用户消息关联的上下文文档，并获取最新内容
-        const contextDocumentsWithLatestContent: ContextDocument[] = [];
-        const userContextDocs = lastUserMessage.contextDocuments || [];
-        for (const doc of userContextDocs) {
-            try {
-                let content: string;
-
-                // 问答模式：获取Markdown格式
-                const data = await exportMdContent(doc.id, false, false, 2, 0, false);
-                if (data && data.content) {
-                    content = data.content;
-                } else {
-                    // 降级使用缓存内容
-                    content = doc.content;
-                }
-
-                contextDocumentsWithLatestContent.push({
-                    id: doc.id,
-                    title: doc.title,
-                    content: content,
-                    type: doc.type,
-                });
-            } catch (error) {
-                console.error(`Failed to fetch latest content for block ${doc.id}:`, error);
-                // 如果获取失败，使用原有内容
-                contextDocumentsWithLatestContent.push(doc);
-            }
-        }
-
-        const userContent = getMessageText(lastUserMessage.content);
-        const enableThinking =
-            !!(modelConfig.capabilities?.thinking && modelConfig.thinkingEnabled);
-        const messagesToSend = await prepareMessagesForAI(
-            messages,
-            contextDocumentsWithLatestContent,
-            userContent,
-            lastUserMessage,
-            enableThinking,
-            modelConfig.id
-        );
-        lastPreparedContextTokens = estimateMessagesContextTokens(messagesToSend);
-
-        // 创建新的 AbortController
-        setController(currentSessionId, new AbortController());
-
-        if (!providerConfig || !modelConfig) {
-            pushErrMsg(t('aiSidebar.errors.noProvider'));
-            isLoading = false;
-            return;
-        }
-
-        // 解析自定义参数
-        let customBody = {};
-        if (modelConfig.customBody) {
-            try {
-                customBody = JSON.parse(modelConfig.customBody);
-            } catch (e) {
-                console.error('Failed to parse custom body:', e);
-                pushErrMsg('自定义参数 JSON 格式错误');
-                isLoading = false;
-                return;
+        const originalChoices = [...selectedMultiModels];
+        const originalMultiModelEnabled = enableMultiModel;
+        if (chatMode === 'plan' && enableMultiModel) {
+            const currentValid = selectedMultiModels.filter(choice =>
+                getProviderAndModelConfig(choice.provider, choice.modelId)
+            );
+            const previousValid = previousChoices.filter(choice =>
+                getProviderAndModelConfig(choice.provider, choice.modelId)
+            );
+            selectedMultiModels = currentValid.length ? currentValid : previousValid;
+            enableMultiModel = selectedMultiModels.length > 0;
+            if (!currentValid.length && previousValid.length) {
+                pushMsg('当前选择的多模型无效，将使用之前的模型重新生成');
             }
         }
 
         try {
-            const enableThinking =
-                modelConfig.capabilities?.thinking && (modelConfig.thinkingEnabled || false);
-
-
-            // 用于保存生成的图片
-            let generatedImages: any[] = [];
-
-                // 检查是否启用图片生成
-                const enableImageGeneration = modelConfig.capabilities?.imageGeneration || false;
-
-                await runChat(
-                    currentProvider,
-                    {
-                        apiKey: providerConfig.apiKey,
-                        model: modelConfig.id,
-                        messages: messagesToSend,
-                        temperature: tempModelSettings.temperatureEnabled
-                            ? tempModelSettings.temperature
-                            : modelConfig.temperature,
-                        maxTokens: modelConfig.maxTokens > 0 ? modelConfig.maxTokens : undefined,
-                        stream: true,
-                        signal: abortController.signal,
-                        customBody,
-                        enableThinking,
-                        reasoningEffort: modelConfig.thinkingEffort || 'low',
-                        mode: chatMode,
-                        enableImageGeneration,
-                        onThinkingChunk: appendStreamingThinking,
-                        onThinkingComplete: () => finishStreamingThinking(messages.length),
-                        onToolPartUpdate: updateOpenCodeToolPart,
-                        onPermissionAsked: handleOpenCodePermissionAsked,
-                        onQuestionAsked: handleOpenCodeQuestionAsked,
-                        onImageGenerated: async (images: any[]) => {
-                            // 立即保存生成的图片到 SiYuan 资源文件夹并转换为 blob URL
-                            generatedImages = await Promise.all(
-                                images.map(async (img, idx) => {
-                                    const blob = base64ToBlob(
-                                        img.data,
-                                        img.mimeType || 'image/png'
-                                    );
-                                    const name = `generated-image-${Date.now()}-${idx + 1}.${
-                                        img.mimeType?.split('/')[1] || 'png'
-                                    }`;
-                                    const assetPath = await saveAsset(blob, name);
-                                    return {
-                                        ...img,
-                                        path: assetPath,
-                                        // 给前端显示用的 blob url
-                                        previewUrl: URL.createObjectURL(blob),
-                                    };
-                                })
-                            );
-                        },
-                        onChunk: async (chunk: string) => {
-                            streamingMessage += chunk;
-                            appendOpenCodeTimelineText(chunk);
-                            await scrollToBottom();
-                        },
-                        onComplete: async (fullText: string) => {
-                            // 如果已经中断，不再添加消息（避免重复）
-                            if (isAborted) {
-                                return;
-                            }
-
-                            // 转换 LaTeX 数学公式格式为 Markdown 格式
-                            const convertedText = convertLatexToMarkdown(fullText);
-
-                            // 处理content中的base64图片，保存为assets文件
-                            const processedContent = await saveBase64ImagesInContent(convertedText);
-
-                            const assistantMessage = createAssistantMessage(processedContent);
-
-                            if (streamingThinking) {
-                                assistantMessage.thinking = streamingThinking;
-                            }
-                            if (openCodeToolParts.length > 0) {
-                                assistantMessage.openCodeToolParts = openCodeToolParts.map(part => ({
-                                    ...part,
-                                }));
-                            }
-                            if (openCodeTimeline.length > 0) {
-                                assistantMessage.openCodeTimeline = cloneOpenCodeTimeline();
-                            }
-
-                            // 如果有生成的图片，保存到消息中
-                            if (generatedImages.length > 0) {
-                                // 保存图片信息（不包含base64数据，只保存路径）
-                                assistantMessage.generatedImages = generatedImages.map(img => ({
-                                    mimeType: img.mimeType,
-                                    data: '', // 不保存base64数据，节省空间
-                                    path: img.path,
-                                }));
-
-                                // 添加为附件以便显示（使用blob URL）
-                                assistantMessage.attachments = generatedImages.map((img, idx) => ({
-                                    type: 'image' as const,
-                                    name: `generated-image-${idx + 1}.${
-                                        img.mimeType?.split('/')[1] || 'png'
-                                    }`,
-                                    data: img.previewUrl, // 使用 blob URL 显示
-                                    path: img.path, // 保存路径用于持久化
-                                    mimeType: img.mimeType || 'image/png',
-                                }));
-                            }
-
-                            messages = [...messages, assistantMessage];
-                            streamingMessage = '';
-                            streamingThinking = '';
-                            openCodeToolParts = [];
-        resetOpenCodeTimeline();
-                            isThinkingPhase = false;
-                            isLoading = false;
-                            setController(currentSessionId, null);
-                            hasUnsavedChanges = true;
-
-                            await recordTokenUsage(messagesToSend, processedContent, modelConfig);
-
-                            // AI 回复完成后，自动保存当前会话
-                            await saveCurrentSession(true);
-                        },
-                        onError: (error: Error) => {
-                            if (error.message !== 'Request aborted') {
-                                // 将错误消息作为一条 assistant 消息添加
-                                const errorMessage = createAssistantMessage(
-                                    `❌ **${t('aiSidebar.errors.requestFailed')}**\n\n${error.message}`
-                                );
-                                messages = [...messages, errorMessage];
-                                hasUnsavedChanges = true;
-                            }
-                            isLoading = false;
-                            streamingMessage = '';
-                            streamingThinking = '';
-                            openCodeToolParts = [];
-        resetOpenCodeTimeline();
-                            isThinkingPhase = false;
-                            setController(currentSessionId, null);
-                        },
-                    },
-                    providerConfig.customApiUrl,
-                    providerConfig.advancedConfig
-                );
-        } catch (error) {
-            console.error('Regenerate message error:', error);
-            // onError 回调已经处理了错误消息的添加，这里不需要重复添加
-            if ((error as Error).name === 'AbortError') {
-                // 中断错误已经在 abortMessage 中处理
-            } else if (!isLoading) {
-                // 如果 isLoading 已经是 false，说明 onError 已经被调用并处理了
-                // 不需要做任何事情
-            } else {
-                // 如果 isLoading 还是 true，说明 onError 没有被调用
-                // 这种情况下才需要添加错误消息
-                const errorMessage = createAssistantMessage(
-                    `❌ **${t('aiSidebar.errors.requestFailed')}**\n\n${(error as Error).message}`
-                );
-                messages = [...messages, errorMessage];
-                hasUnsavedChanges = true;
-                isLoading = false;
-                streamingMessage = '';
-                streamingThinking = '';
-                isThinkingPhase = false;
-            }
-            setController(currentSessionId, null);
+            await sendMessage();
+        } finally {
+            selectedMultiModels = originalChoices;
+            enableMultiModel = originalMultiModelEnabled;
         }
     }
 

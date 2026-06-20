@@ -12,6 +12,13 @@ async function importTypeScript(path) {
 
 const { AttachmentController, validateAttachmentFile } =
     await importTypeScript('../src/chat/attachment-controller.ts');
+const workflowSource = await readFile(
+    new URL('../src/chat/attachment-workflow.ts', import.meta.url),
+    'utf8'
+);
+assert.match(workflowSource, /class AttachmentWorkflow/);
+assert.match(workflowSource, /addFromPaste/);
+assert.match(workflowSource, /addWebPages/);
 
 assert.equal(validateAttachmentFile(new File(['x'], 'bad.pdf', { type: 'application/pdf' })), 'unsupported');
 assert.equal(
