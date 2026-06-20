@@ -1156,176 +1156,69 @@
             const finalTools = [...(toolsForAgent || []), ...(webSearchTools || [])];
             const toolsToPass = finalTools.length > 0 ? finalTools : undefined;
 
-            // 多模型工具调用循环
-            let modelMessagesToSend = [...messagesToSend];
-            let shouldContinue = true;
             let fullText = '';
             let totalThinking = '';
-
-            while (shouldContinue && !localAbort.signal.aborted) {
-                let hasNewToolCalls = false;
-                let lastAssistantContent = '';
-                let turnThinking = '';
-
-                await runChat(
-                    response.provider,
-                    {
-                        apiKey: providerConfig.apiKey,
-                        model: modelConfig.id,
-                        messages: modelMessagesToSend,
-                        temperature: tempModelSettings.temperatureEnabled
-                            ? tempModelSettings.temperature
-                            : modelConfig.temperature,
-                        maxTokens: modelConfig.maxTokens > 0 ? modelConfig.maxTokens : undefined,
-                        stream: true,
-                        signal: localAbort.signal,
-                        customBody, // 同时检查模型能力和用户是否启用，与 sendMultiModelMessage 保持一致
-                        enableThinking:
-                            modelConfig.capabilities?.thinking &&
-                            (response.thinkingEnabled ?? modelConfig.thinkingEnabled ?? false),
-                        reasoningEffort:
-                            response.thinkingEffort ?? modelConfig.thinkingEffort ?? 'low',
-                        mode: chatMode,
-                        tools: toolsToPass,
-                        onThinkingChunk: async (chunk: string) => {
-                            turnThinking += chunk;
-                            totalThinking += chunk;
-                            if (multiModelResponses[index]) {
-                                multiModelResponses[index].thinking = totalThinking;
-                                multiModelResponses = [...multiModelResponses];
-                            }
-                        },
-                        onThinkingComplete: () => {
-                            if (multiModelResponses[index] && multiModelResponses[index].thinking) {
-                                multiModelResponses[index].thinkingCollapsed = true;
-                                multiModelResponses = [...multiModelResponses];
-                            }
-                        },
-                        onChunk: async (chunk: string) => {
-                            fullText += chunk;
-                            lastAssistantContent += chunk;
-                            if (multiModelResponses[index]) {
-                                multiModelResponses[index].content = fullText;
-                                multiModelResponses = [...multiModelResponses];
-                            }
-                        },
-                        onToolCallComplete: async (toolCalls: ToolCall[]) => {
-                            hasNewToolCalls = true;
-
-                            // 1. 将 assistant 消息（包含 tool_calls）添加到当前模型的上下文
-                            const isReasoningEnabled =
-                                modelConfig.capabilities?.thinking &&
-                                (response.thinkingEnabled ?? modelConfig.thinkingEnabled ?? false);
-
-                            const assistantMsg: any = {
-                                role: 'assistant',
-                                content: lastAssistantContent,
-                                tool_calls: toolCalls,
-                            };
-
-                            // 特别是 Kimi 等模型，如果启用了 thinking，assistant 消息必须包含 reasoning_content
-                            if (isReasoningEnabled) {
-                                assistantMsg.reasoning_content = turnThinking;
-                            }
-
-                            modelMessagesToSend.push(assistantMsg);
-
-                            // 2. 执行工具并添加结果，同时记录该轮工具调用前的思考内容
-                            for (const tc of toolCalls) {
-                                // 更新 UI 显示正在调用，并记录该工具调用前的思考内容
-                                if (multiModelResponses[index]) {
-                                    multiModelResponses[index].toolCalls = [
-                                        ...(multiModelResponses[index].toolCalls || []),
-                                        { ...tc, status: 'calling', thinkingBefore: turnThinking },
-                                    ];
-                                    multiModelResponses = [...multiModelResponses];
-                                }
-
-                                // 检查是否自动批准
-                                const currentSelectedTools =
-                                    chatMode === 'plan' ? selectedToolsAsk : selectedTools;
-                                const toolConfig = currentSelectedTools.find(
-                                    t => t.name === tc.function.name
-                                );
-                                const isSystemTool = tc.function.name === 'get_siyuan_skills';
-                                const autoApprove =
-                                    isSystemTool || (toolConfig && toolConfig.autoApprove) || false;
-
-                                let toolResult: string;
-                                if (autoApprove) {
-                                    debugSidebar(
-                                        `[RegenerateMultiModel] Auto-approving tool: ${tc.function.name}`
-                                    );
-                                    toolResult = await executeToolCall(tc);
-                                } else {
-                                    debugSidebar(
-                                        `[RegenerateMultiModel] Skipping non-auto-approved tool: ${tc.function.name}`
-                                    );
-                                    toolResult = `工具 ${tc.function.name} 需要手动批准。在多模型对比模式下，为了避免 UI 冲突，该工具未被自动执行。请在设置中将该工具设为“自动批准”。`;
-                                }
-
-                                modelMessagesToSend.push({
-                                    role: 'tool',
-                                    tool_call_id: tc.id,
-                                    name: tc.function.name,
-                                    content: toolResult,
-                                });
-
-                                // 更新 UI 显示结果
-                                if (multiModelResponses[index]) {
-                                    const callIndex = multiModelResponses[
-                                        index
-                                    ].toolCalls.findIndex(c => c.id === tc.id);
-                                    if (callIndex !== -1) {
-                                        multiModelResponses[index].toolCalls[callIndex].status =
-                                            'completed';
-                                        multiModelResponses[index].toolCalls[callIndex].result =
-                                            toolResult;
-                                        multiModelResponses = [...multiModelResponses];
-                                    }
-                                }
-                            }
-
-                            lastAssistantContent = '';
-                            if (multiModelResponses[index]) {
-                                multiModelResponses[index].isLoading = true;
-                                multiModelResponses = [...multiModelResponses];
-                            }
-                        },
-                        onComplete: async (text: string) => {
-                            if (multiModelResponses[index]) {
-                                const convertedText = convertLatexToMarkdown(text);
-                                // 处理content中的base64图片，保存为assets文件
-                                const processedContent =
-                                    await saveBase64ImagesInContent(convertedText);
-                                multiModelResponses[index].content = processedContent;
-                                multiModelResponses[index].thinking = totalThinking;
-                                multiModelResponses[index].isLoading = false;
-                                if (
-                                    totalThinking &&
-                                    !multiModelResponses[index].thinkingCollapsed
-                                ) {
-                                    multiModelResponses[index].thinkingCollapsed = true;
-                                }
-                                multiModelResponses = [...multiModelResponses];
-                            }
-                        },
-                        onError: (error: Error) => {
-                            if (error.message !== 'Request aborted' && multiModelResponses[index]) {
-                                multiModelResponses[index].error = error.message;
-                                multiModelResponses[index].isLoading = false;
-                                multiModelResponses = [...multiModelResponses];
-                            }
-                        },
+            await runChat(
+                response.provider,
+                {
+                    apiKey: providerConfig.apiKey,
+                    model: modelConfig.id,
+                    messages: messagesToSend,
+                    temperature: tempModelSettings.temperatureEnabled
+                        ? tempModelSettings.temperature
+                        : modelConfig.temperature,
+                    maxTokens: modelConfig.maxTokens > 0 ? modelConfig.maxTokens : undefined,
+                    stream: true,
+                    signal: localAbort.signal,
+                    customBody,
+                    enableThinking:
+                        modelConfig.capabilities?.thinking &&
+                        (response.thinkingEnabled ?? modelConfig.thinkingEnabled ?? false),
+                    reasoningEffort:
+                        response.thinkingEffort ?? modelConfig.thinkingEffort ?? 'low',
+                    mode: chatMode,
+                    tools: toolsToPass,
+                    onThinkingChunk: (chunk: string) => {
+                        totalThinking += chunk;
+                        if (multiModelResponses[index]) {
+                            multiModelResponses[index].thinking = totalThinking;
+                            multiModelResponses = [...multiModelResponses];
+                        }
                     },
-                    providerConfig.customApiUrl,
-                    providerConfig.advancedConfig
-                );
-
-                if (!hasNewToolCalls) {
-                    shouldContinue = false;
-                }
-            }
+                    onThinkingComplete: () => {
+                        if (multiModelResponses[index]?.thinking) {
+                            multiModelResponses[index].thinkingCollapsed = true;
+                            multiModelResponses = [...multiModelResponses];
+                        }
+                    },
+                    onChunk: (chunk: string) => {
+                        fullText += chunk;
+                        if (multiModelResponses[index]) {
+                            multiModelResponses[index].content = fullText;
+                            multiModelResponses = [...multiModelResponses];
+                        }
+                    },
+                    onComplete: async (text: string) => {
+                        if (!multiModelResponses[index]) return;
+                        const convertedText = convertLatexToMarkdown(text || fullText);
+                        multiModelResponses[index].content =
+                            await saveBase64ImagesInContent(convertedText);
+                        multiModelResponses[index].thinking = totalThinking;
+                        multiModelResponses[index].isLoading = false;
+                        if (totalThinking) multiModelResponses[index].thinkingCollapsed = true;
+                        multiModelResponses = [...multiModelResponses];
+                    },
+                    onError: (error: Error) => {
+                        if (error.message !== 'Request aborted' && multiModelResponses[index]) {
+                            multiModelResponses[index].error = error.message;
+                            multiModelResponses[index].isLoading = false;
+                            multiModelResponses = [...multiModelResponses];
+                        }
+                    },
+                },
+                providerConfig.customApiUrl,
+                providerConfig.advancedConfig
+            );
         } catch (error) {
             if ((error as Error).message !== 'Request aborted' && multiModelResponses[index]) {
                 multiModelResponses[index].error = (error as Error).message;
@@ -3603,6 +3496,30 @@
         let assistantMessageCreated = false;
         let assistantMessageIndex = -1;
 
+        async function persistMultiModelAssistantSnapshot() {
+            if (!assistantMessageCreated) {
+                assistantMessageCreated = true;
+                const lastMessage = messages[messages.length - 1];
+                if (lastMessage?.role === 'assistant' && lastMessage.multiModelResponses) {
+                    lastMessage.multiModelResponses = [...multiModelResponses];
+                    assistantMessageIndex = messages.length - 1;
+                    messages = [...messages];
+                } else {
+                    messages = [...messages, {
+                        role: 'assistant',
+                        content: '',
+                        multiModelResponses: [...multiModelResponses],
+                    }];
+                    assistantMessageIndex = messages.length - 1;
+                }
+                hasUnsavedChanges = true;
+            } else if (assistantMessageIndex >= 0 && messages[assistantMessageIndex]) {
+                messages[assistantMessageIndex].multiModelResponses = [...multiModelResponses];
+                messages = [...messages];
+            }
+            await saveCurrentSession(true);
+        }
+
         // 并发请求所有有效模型
         const promises = validModels.map(async (model, index) => {
             const config = getProviderAndModelConfig(model.provider, model.modelId);
@@ -3670,335 +3587,78 @@
                 const finalTools = [...(toolsForAgent || []), ...(webSearchTools || [])];
                 const toolsToPass = finalTools.length > 0 ? finalTools : undefined;
 
-                // 多模型工具调用循环
-                let modelMessagesToSend = [...messagesToSend];
-                let shouldContinue = true;
-
-                while (shouldContinue && !abortController.signal.aborted) {
-                    let hasNewToolCalls = false;
-                    let lastAssistantContent = '';
-                    let turnThinking = '';
-
-                    await runChat(
-                        model.provider,
-                        {
-                            apiKey: providerConfig.apiKey,
-                            model: modelConfig.id,
-                            messages: modelMessagesToSend,
-                            temperature: tempModelSettings.temperatureEnabled
-                                ? tempModelSettings.temperature
-                                : modelConfig.temperature,
-                            maxTokens:
-                                modelConfig.maxTokens > 0 ? modelConfig.maxTokens : undefined,
-                            stream: true,
-                            signal: abortController.signal,
-                            // 使用模型实例的 thinkingEnabled 值
-                            enableThinking:
-                                modelConfig.capabilities?.thinking &&
-                                (model.thinkingEnabled ?? modelConfig.thinkingEnabled ?? false),
-                            // 使用模型实例的 thinkingEffort 值，如果没有则使用 modelConfig 中的默认值
-                            reasoningEffort:
-                                model.thinkingEffort ?? modelConfig.thinkingEffort ?? 'low',
-                            mode: chatMode,
-                            tools: toolsToPass,
-                            customBody,
-                            onThinkingChunk: async (chunk: string) => {
-                                turnThinking += chunk;
-                                totalThinking += chunk;
-                                if (multiModelResponses[index]) {
-                                    multiModelResponses[index].thinking = totalThinking;
-                                    multiModelResponses = [...multiModelResponses];
-                                }
-                            },
-                            onThinkingComplete: () => {
-                                if (
-                                    multiModelResponses[index] &&
-                                    multiModelResponses[index].thinking
-                                ) {
-                                    multiModelResponses[index].thinkingCollapsed = true;
-                                    multiModelResponses = [...multiModelResponses];
-                                }
-                            },
-                            onChunk: async (chunk: string) => {
-                                fullText += chunk;
-                                lastAssistantContent += chunk;
-                                if (multiModelResponses[index]) {
-                                    multiModelResponses[index].content = fullText;
-                                    multiModelResponses = [...multiModelResponses];
-                                }
-                            },
-                            onToolCallComplete: async (toolCalls: ToolCall[]) => {
-                                hasNewToolCalls = true;
-
-                                // 1. 将 assistant 消息（包含 tool_calls）添加到当前模型的上下文
-                                const isReasoningEnabled =
-                                    modelConfig.capabilities?.thinking &&
-                                    (model.thinkingEnabled ?? modelConfig.thinkingEnabled ?? false);
-
-                                const assistantMsg: any = {
-                                    role: 'assistant',
-                                    content: lastAssistantContent,
-                                    tool_calls: toolCalls,
-                                };
-
-                                // 特别是 Kimi 等模型，如果启用了 thinking，assistant 消息必须包含 reasoning_content
-                                if (isReasoningEnabled) {
-                                    assistantMsg.reasoning_content = turnThinking;
-                                }
-
-                                modelMessagesToSend.push(assistantMsg);
-
-                                // 2. 执行工具并添加结果，同时记录该轮工具调用前的思考内容
-                                for (const tc of toolCalls) {
-                                    // 更新 UI 显示正在调用，并记录该工具调用前的思考内容
-                                    if (multiModelResponses[index]) {
-                                        multiModelResponses[index].toolCalls = [
-                                            ...(multiModelResponses[index].toolCalls || []),
-                                            {
-                                                ...tc,
-                                                status: 'calling',
-                                                thinkingBefore: turnThinking,
-                                            },
-                                        ];
-                                        multiModelResponses = [...multiModelResponses];
-                                    }
-
-                                    // 检查是否自动批准
-                                    const currentSelectedTools =
-                                        chatMode === 'plan' ? selectedToolsAsk : selectedTools;
-                                    const toolConfig = currentSelectedTools.find(
-                                        t => t.name === tc.function.name
-                                    );
-                                    const isSystemTool = tc.function.name === 'get_siyuan_skills';
-                                    const autoApprove =
-                                        isSystemTool ||
-                                        (toolConfig && toolConfig.autoApprove) ||
-                                        false;
-
-                                    let toolResult: string;
-                                    if (autoApprove) {
-                                        debugSidebar(
-                                            `[MultiModel] Auto-approving tool: ${tc.function.name}`
-                                        );
-                                        toolResult = await executeToolCall(tc);
-                                    } else {
-                                        // 多模型模式下，非自动批准的工具暂时直接拒绝，避免 UI 冲突
-                                        debugSidebar(
-                                            `[MultiModel] Skipping non-auto-approved tool: ${tc.function.name}`
-                                        );
-                                        toolResult = `工具 ${tc.function.name} 需要手动批准。在多模型对比模式下，为了避免 UI 冲突，该工具未被自动执行。请在选择该模型后的单模型模式下重新尝试，或在设置中将该工具设为“自动批准”。`;
-                                    }
-
-                                    modelMessagesToSend.push({
-                                        role: 'tool',
-                                        tool_call_id: tc.id,
-                                        name: tc.function.name,
-                                        content: toolResult,
-                                    });
-
-                                    // 更新 UI 显示结果
-                                    if (multiModelResponses[index]) {
-                                        const callIndex = multiModelResponses[
-                                            index
-                                        ].toolCalls.findIndex(c => c.id === tc.id);
-                                        if (callIndex !== -1) {
-                                            multiModelResponses[index].toolCalls[callIndex].status =
-                                                'completed';
-                                            multiModelResponses[index].toolCalls[callIndex].result =
-                                                toolResult;
-                                            multiModelResponses = [...multiModelResponses];
-                                        }
-                                    }
-                                }
-
-                                lastAssistantContent = '';
-                                // 标记模型仍在加载（等待下一轮响应）
-                                if (multiModelResponses[index]) {
-                                    multiModelResponses[index].isLoading = true;
-                                    // 保存当前模型的对话历史（包含 tool_calls 和 tool 响应）
-                                    multiModelResponses[index].conversationMessages = [
-                                        ...modelMessagesToSend,
-                                    ];
-                                    multiModelResponses = [...multiModelResponses];
-                                }
-                            },
-                            onComplete: async (text: string) => {
-                                // 如果已经中断，不再处理完成回调
-                                if (isAborted) {
-                                    return;
-                                }
-                                // 如果用户已经选择答案，不再更新消息
-                                if (!isWaitingForAnswerSelection) {
-                                    return;
-                                }
-                                if (multiModelResponses[index]) {
-                                    const convertedText = convertLatexToMarkdown(text);
-                                    // 处理content中的base64图片，保存为assets文件
-                                    const processedContent =
-                                        await saveBase64ImagesInContent(convertedText);
-                                    multiModelResponses[index].content = processedContent;
-                                    multiModelResponses[index].thinking = totalThinking;
-                                    multiModelResponses[index].isLoading = false;
-                                    // 保存最终的对话历史（包含最后一次 assistant 回复）
-                                    multiModelResponses[index].conversationMessages = [
-                                        ...modelMessagesToSend,
-                                    ];
-                                    if (
-                                        totalThinking &&
-                                        !multiModelResponses[index].thinkingCollapsed
-                                    ) {
-                                        multiModelResponses[index].thinkingCollapsed = true;
-                                    }
-                                    multiModelResponses = [...multiModelResponses];
-
-                                    // 【修复】首个模型完成时，尝试更新已有的多模型助手消息，或者创建新消息
-                                    if (!assistantMessageCreated) {
-                                        // 先标记已创建，防止并发的 onComplete 也进入此分支
-                                        assistantMessageCreated = true;
-
-                                        const lastMessage = messages[messages.length - 1];
-                                        if (
-                                            lastMessage &&
-                                            lastMessage.role === 'assistant' &&
-                                            lastMessage.multiModelResponses
-                                        ) {
-                                            // 如果已经存在（例如因为 abortMessage 已经提前创建了），则直接更新
-                                            lastMessage.multiModelResponses = [
-                                                ...multiModelResponses,
-                                            ];
-                                            // 保持 content 为空，等用户选择后填充
-                                            assistantMessageIndex = messages.length - 1;
-                                            messages = [...messages];
-                                        } else {
-                                            // 创建包含多模型响应的助手消息
-                                            const assistantMessage: Message = {
-                                                role: 'assistant',
-                                                content: '', // 暂时为空，等用户选择后填充
-                                                multiModelResponses: [...multiModelResponses],
-                                            };
-                                            messages = [...messages, assistantMessage];
-                                            assistantMessageIndex = messages.length - 1;
-                                        }
-                                        hasUnsavedChanges = true;
-
-                                        // 立即保存会话文件
-                                        await saveCurrentSession(true);
-                                    } else if (
-                                        assistantMessageIndex >= 0 &&
-                                        messages[assistantMessageIndex]
-                                    ) {
-                                        // 后续模型完成时更新助手消息的 multiModelResponses
-                                        messages[assistantMessageIndex].multiModelResponses = [
-                                            ...multiModelResponses,
-                                        ];
-                                        messages = [...messages];
-
-                                        // 保存更新后的会话
-                                        await saveCurrentSession(true);
-                                    }
-                                }
-                            },
-                            onError: (error: Error) => {
-                                // 如果是主动中断，不显示错误
-                                if (
-                                    error.message !== 'Request aborted' &&
-                                    multiModelResponses[index]
-                                ) {
-                                    // 如果用户已经选择答案，不再更新消息
-                                    if (!isWaitingForAnswerSelection) {
-                                        return;
-                                    }
-                                    multiModelResponses[index].error = error.message;
-                                    multiModelResponses[index].isLoading = false;
-                                    multiModelResponses = [...multiModelResponses];
-
-                                    // 【修复】模型出错时也尝试更新或创建助手消息
-                                    if (!assistantMessageCreated) {
-                                        assistantMessageCreated = true;
-                                        const lastMessage = messages[messages.length - 1];
-                                        if (
-                                            lastMessage &&
-                                            lastMessage.role === 'assistant' &&
-                                            lastMessage.multiModelResponses
-                                        ) {
-                                            lastMessage.multiModelResponses = [
-                                                ...multiModelResponses,
-                                            ];
-                                            assistantMessageIndex = messages.length - 1;
-                                            messages = [...messages];
-                                        } else {
-                                            const assistantMessage: Message = {
-                                                role: 'assistant',
-                                                content: '',
-                                                multiModelResponses: [...multiModelResponses],
-                                            };
-                                            messages = [...messages, assistantMessage];
-                                            assistantMessageIndex = messages.length - 1;
-                                        }
-                                        hasUnsavedChanges = true;
-                                        saveCurrentSession(true);
-                                    } else if (
-                                        assistantMessageIndex >= 0 &&
-                                        messages[assistantMessageIndex]
-                                    ) {
-                                        messages[assistantMessageIndex].multiModelResponses = [
-                                            ...multiModelResponses,
-                                        ];
-                                        messages = [...messages];
-                                        saveCurrentSession(true);
-                                    }
-                                }
-                            },
+                await runChat(
+                    model.provider,
+                    {
+                        apiKey: providerConfig.apiKey,
+                        model: modelConfig.id,
+                        messages: messagesToSend,
+                        temperature: tempModelSettings.temperatureEnabled
+                            ? tempModelSettings.temperature
+                            : modelConfig.temperature,
+                        maxTokens: modelConfig.maxTokens > 0 ? modelConfig.maxTokens : undefined,
+                        stream: true,
+                        signal: abortController.signal,
+                        enableThinking:
+                            modelConfig.capabilities?.thinking &&
+                            (model.thinkingEnabled ?? modelConfig.thinkingEnabled ?? false),
+                        reasoningEffort:
+                            model.thinkingEffort ?? modelConfig.thinkingEffort ?? 'low',
+                        mode: chatMode,
+                        tools: toolsToPass,
+                        customBody,
+                        onThinkingChunk: (chunk: string) => {
+                            totalThinking += chunk;
+                            if (multiModelResponses[index]) {
+                                multiModelResponses[index].thinking = totalThinking;
+                                multiModelResponses = [...multiModelResponses];
+                            }
                         },
-                        providerConfig.customApiUrl,
-                        providerConfig.advancedConfig
-                    );
-
-                    if (!hasNewToolCalls) {
-                        shouldContinue = false;
-                    }
-                }
+                        onThinkingComplete: () => {
+                            if (multiModelResponses[index]?.thinking) {
+                                multiModelResponses[index].thinkingCollapsed = true;
+                                multiModelResponses = [...multiModelResponses];
+                            }
+                        },
+                        onChunk: (chunk: string) => {
+                            fullText += chunk;
+                            if (multiModelResponses[index]) {
+                                multiModelResponses[index].content = fullText;
+                                multiModelResponses = [...multiModelResponses];
+                            }
+                        },
+                        onComplete: async (text: string) => {
+                            if (isAborted || !isWaitingForAnswerSelection || !multiModelResponses[index]) return;
+                            const convertedText = convertLatexToMarkdown(text || fullText);
+                            multiModelResponses[index].content =
+                                await saveBase64ImagesInContent(convertedText);
+                            multiModelResponses[index].thinking = totalThinking;
+                            multiModelResponses[index].isLoading = false;
+                            multiModelResponses[index].conversationMessages = [...messagesToSend];
+                            if (totalThinking) multiModelResponses[index].thinkingCollapsed = true;
+                            multiModelResponses = [...multiModelResponses];
+                            await persistMultiModelAssistantSnapshot();
+                        },
+                        onError: (error: Error) => {
+                            if (error.message === 'Request aborted' ||
+                                !isWaitingForAnswerSelection ||
+                                !multiModelResponses[index]) return;
+                            multiModelResponses[index].error = error.message;
+                            multiModelResponses[index].isLoading = false;
+                            multiModelResponses = [...multiModelResponses];
+                            void persistMultiModelAssistantSnapshot();
+                        },
+                    },
+                    providerConfig.customApiUrl,
+                    providerConfig.advancedConfig
+                );
             } catch (error) {
-                // 如果是主动中断，不显示错误
                 if ((error as Error).message !== 'Request aborted' && multiModelResponses[index]) {
-                    // 如果用户已经选择答案，不再更新消息
-                    if (!isWaitingForAnswerSelection) {
-                        return;
-                    }
+                    if (!isWaitingForAnswerSelection) return;
                     multiModelResponses[index].error = (error as Error).message;
                     multiModelResponses[index].isLoading = false;
                     multiModelResponses = [...multiModelResponses];
-
-                    // 【修复】catch 块中也尝试更新或创建助手消息
-                    if (!assistantMessageCreated) {
-                        assistantMessageCreated = true;
-                        const lastMessage = messages[messages.length - 1];
-                        if (
-                            lastMessage &&
-                            lastMessage.role === 'assistant' &&
-                            lastMessage.multiModelResponses
-                        ) {
-                            lastMessage.multiModelResponses = [...multiModelResponses];
-                            assistantMessageIndex = messages.length - 1;
-                            messages = [...messages];
-                        } else {
-                            const assistantMessage: Message = {
-                                role: 'assistant',
-                                content: '',
-                                multiModelResponses: [...multiModelResponses],
-                            };
-                            messages = [...messages, assistantMessage];
-                            assistantMessageIndex = messages.length - 1;
-                        }
-                        hasUnsavedChanges = true;
-                        saveCurrentSession(true);
-                    } else if (assistantMessageIndex >= 0 && messages[assistantMessageIndex]) {
-                        messages[assistantMessageIndex].multiModelResponses = [
-                            ...multiModelResponses,
-                        ];
-                        messages = [...messages];
-                        saveCurrentSession(true);
-                    }
+                    await persistMultiModelAssistantSnapshot();
                 }
             }
         });
