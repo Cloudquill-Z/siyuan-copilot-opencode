@@ -65,7 +65,6 @@
         sql,
         exportMdContent,
         openBlock,
-        getBlockKramdown,
         getBlockByID,
         getFileBlob,
         renderSprig,
@@ -160,11 +159,6 @@
     } from './task-types';
     // Agent 模式工具使用强制规则（统一常量）
     // STUBS: ./tools deleted, safe no-op replacements
-    const AVAILABLE_TOOLS: any[] = [];
-    const TOOL_CATEGORIES: any[] = [];
-    const QA_TOOL_CATEGORIES: any[] = [];
-    type ToolConfig = { name: string; autoApprove: boolean; };
-    function createGetSiyuanSkillsTool(_names: string[]) { return null; }
     async function soul(_op: any): Promise<{ success: boolean; content: string }> {
         try {
             const docId = settings.soulDocId?.trim();
@@ -573,8 +567,6 @@
             lastUserMessage,
             thinkingEnabled,
             modelId,
-            chatMode,
-            userToolCount,
             settings,
             contextCount: tempModelSettings.contextCount,
             buildSystemPromptForCurrentRequest,
@@ -955,19 +947,6 @@
                 if (doc.type === 'webpage') {
                     // 网页类型：保持原内容不变（已经获取到内容）
                     content = doc.content;
-                } else if (chatMode === 'plan' && userToolCount > 0) {
-                    // agent模式或启用工具的问答模式：文档只保留ID，块获取kramdown
-                    if (doc.type === 'doc') {
-                        content = ''; // 文档不保存内容，只保留ID
-                    } else {
-                        // 块获取kramdown格式
-                        const blockData = await getBlockKramdown(doc.id);
-                        if (blockData && blockData.kramdown) {
-                            content = blockData.kramdown;
-                        } else {
-                            content = doc.content; // 保留原内容
-                        }
-                    }
                 } else {
                     // ask模式：获取Markdown格式
                     const data = await exportMdContent(doc.id, false, false, 2, 0, false);
@@ -1047,17 +1026,8 @@
         for (const doc of userContextDocs) {
             try {
                 let content: string;
-                if (chatMode === 'plan' && userToolCount > 0) {
-                    if (doc.type === 'doc') {
-                        content = '';
-                    } else {
-                        const blockData = await getBlockKramdown(doc.id);
-                        content = (blockData && blockData.kramdown) || doc.content;
-                    }
-                } else {
-                    const data = await exportMdContent(doc.id, false, false, 2, 0, false);
-                    content = (data && data.content) || doc.content;
-                }
+                const data = await exportMdContent(doc.id, false, false, 2, 0, false);
+                content = (data && data.content) || doc.content;
                 contextDocumentsWithLatestContent.push({
                     id: doc.id,
                     title: doc.title,
@@ -1116,25 +1086,6 @@
         }
 
         try {
-            // 准备 Agent/Ask 模式的工具列表
-            let toolsForAgent: any[] | undefined = undefined;
-            if (chatMode === 'plan' && userToolCount > 0) {
-                const currentSelectedTools = chatMode === 'plan' ? selectedToolsAsk : selectedTools;
-                const selectedToolDefs = AVAILABLE_TOOLS.filter(tool =>
-                    currentSelectedTools.some(t => t.name === tool.function.name)
-                );
-                const filteredToolDefs = selectedToolDefs.filter(
-                    tool => tool.function.name !== 'get_siyuan_skills'
-                );
-                const descTool =
-                    chatMode === 'plan'
-                        ? createGetSiyuanSkillsTool(
-                              filteredToolDefs.map(tool => tool.function.name)
-                          )
-                        : AVAILABLE_TOOLS.find(t => t.function.name === 'get_siyuan_skills');
-                toolsForAgent = descTool ? [descTool, ...filteredToolDefs] : filteredToolDefs;
-            }
-
             // 准备联网搜索工具（如果启用）
             let webSearchTools: any[] | undefined = undefined;
             if (modelConfig.capabilities?.webSearch && modelConfig.webSearchEnabled) {
@@ -1151,9 +1102,7 @@
                 }
             }
 
-            // 合并工具列表
-            const finalTools = [...(toolsForAgent || []), ...(webSearchTools || [])];
-            const toolsToPass = finalTools.length > 0 ? finalTools : undefined;
+            const toolsToPass = webSearchTools?.length ? webSearchTools : undefined;
 
             let fullText = '';
             let totalThinking = '';
@@ -1417,11 +1366,8 @@
 
     // Agent 模式
     let isToolSelectorOpen = false;
-    let selectedTools: ToolConfig[] = []; // 选中的工具配置列表
-    let selectedToolsAsk: ToolConfig[] = []; // 问答模式选中的工具配置列表
     let toolAutoApproveSettings: Record<string, boolean> = {}; // 所有工具的 autoApprove 配置（包括未选中的）
     let toolAutoApproveSettingsAsk: Record<string, boolean> = {}; // 问答模式所有工具的 autoApprove 配置
-    $: userToolCount = 0;
 
     // 记忆当前选择的模式
     $: if (chatMode && settings && !isInitialLoading) {
@@ -1809,7 +1755,6 @@
         affectedBlockIds: Set<string>;
     };
     const pendingDocDiffsByMessage = new Map<number, Map<string, PendingDocDiff>>();
-    let isToolConfigLoaded = false; // 标记工具配置是否已加载
     let lastSavedToolsConfigSnapshot = JSON.stringify({
         selectedTools: [],
         toolAutoApproveSettings: {},
@@ -3339,18 +3284,8 @@
             for (const doc of userContextDocuments) {
                 try {
                     let content: string;
-                    if (chatMode === 'plan' && userToolCount > 0) {
-                        // agent模式或启用工具的问答模式：文档只保留ID，块获取kramdown
-                        if (doc.type === 'doc') {
-                            content = '';
-                        } else {
-                            const blockData = await getBlockKramdown(doc.id);
-                            content = (blockData && blockData.kramdown) || doc.content;
-                        }
-                    } else {
-                        const data = await exportMdContent(doc.id, false, false, 2, 0, false);
-                        content = (data && data.content) || doc.content;
-                    }
+                    const data = await exportMdContent(doc.id, false, false, 2, 0, false);
+                    content = (data && data.content) || doc.content;
                     contextDocumentsWithLatestContent.push({
                         id: doc.id,
                         title: doc.title,
@@ -3542,26 +3477,6 @@
                 let fullText = '';
                 let totalThinking = '';
 
-                // 准备 Agent/Ask 模式的工具列表
-                let toolsForAgent: any[] | undefined = undefined;
-                if (chatMode === 'plan' && userToolCount > 0) {
-                    const currentSelectedTools =
-                        chatMode === 'plan' ? selectedToolsAsk : selectedTools;
-                    const selectedToolDefs = AVAILABLE_TOOLS.filter(tool =>
-                        currentSelectedTools.some(t => t.name === tool.function.name)
-                    );
-                    const filteredToolDefs = selectedToolDefs.filter(
-                        tool => tool.function.name !== 'get_siyuan_skills'
-                    );
-                    const descTool =
-                        chatMode === 'plan'
-                            ? createGetSiyuanSkillsTool(
-                                  filteredToolDefs.map(tool => tool.function.name)
-                              )
-                            : AVAILABLE_TOOLS.find(t => t.function.name === 'get_siyuan_skills');
-                    toolsForAgent = descTool ? [descTool, ...filteredToolDefs] : filteredToolDefs;
-                }
-
                 // 准备联网搜索工具（如果启用）
                 let webSearchTools: any[] | undefined = undefined;
                 if (modelConfig.capabilities?.webSearch && modelConfig.webSearchEnabled) {
@@ -3579,9 +3494,7 @@
                     }
                 }
 
-                // 合并工具列表
-                const finalTools = [...(toolsForAgent || []), ...(webSearchTools || [])];
-                const toolsToPass = finalTools.length > 0 ? finalTools : undefined;
+                const toolsToPass = webSearchTools?.length ? webSearchTools : undefined;
 
                 await runChat(
                     model.provider,
@@ -3681,16 +3594,9 @@
             baseSystemPrompt = `${baseSystemPrompt.trim()}\n\n${modeInstruction}`.trim();
         }
 
-        let hasToolInstruction = false;
-        let hasSoulEnabled = false;
+        const hasToolInstruction = false;
         const hasSoulDoc = !!settings.soulDocId?.trim();
-        if (chatMode === 'plan' && userToolCount > 0) {
-            hasToolInstruction = true;
-            const currentSelectedTools = chatMode === 'plan' ? selectedToolsAsk : selectedTools;
-            hasSoulEnabled = currentSelectedTools.some(t => t.name === 'soul');
-        }
-
-        if (hasSoulEnabled || hasSoulDoc) {
+        if (hasSoulDoc) {
             try {
                 const soulResult = await soul({ operation: 'getDoc' });
                 if (soulResult.success && soulResult.content) {
@@ -4070,38 +3976,18 @@
         }
 
         // 获取所有上下文文档的最新内容
-        // ask模式：使用 exportMdContent 获取 Markdown 格式
-        // edit模式：使用 getBlockKramdown 获取 kramdown 格式（包含块ID信息）
-        // agent模式：文档块只传递ID，普通块获取kramdown
+        // 始终刷新为 Markdown；OpenCode 工具上下文由服务端会话维护。
         const contextDocumentsWithLatestContent: ContextDocument[] = [];
         if (contextDocuments.length > 0) {
             for (const doc of contextDocuments) {
                 try {
                     let content: string;
 
-                    if (chatMode === 'plan' && userToolCount > 0) {
-                        // agent模式或启用工具的问答模式：文档只传递ID
-                        if (doc.type === 'doc') {
-                            content = '';
-                        } else {
-                            // 普通块获取kramdown格式
-                            const blockData = await getBlockKramdown(doc.id);
-                            if (blockData && blockData.kramdown) {
-                                content = blockData.kramdown;
-                            } else {
-                                // 降级使用缓存内容
-                                content = doc.content;
-                            }
-                        }
+                    const data = await exportMdContent(doc.id, false, false, 2, 0, false);
+                    if (data && data.content) {
+                        content = data.content;
                     } else {
-                        // ask模式：获取Markdown格式
-                        const data = await exportMdContent(doc.id, false, false, 2, 0, false);
-                        if (data && data.content) {
-                            content = data.content;
-                        } else {
-                            // 降级使用缓存内容
-                            content = doc.content;
-                        }
+                        content = doc.content;
                     }
 
                     contextDocumentsWithLatestContent.push({
@@ -4174,17 +4060,6 @@
         }
 
         await scrollToBottom(true);
-
-        // DeepSeek 思考模式：开启新一轮对话前清理历史消息中的 reasoning_content，保留工具调用链
-        if (effectiveChatMode === 'plan' && userToolCount > 0 && currentProvider === 'deepseek') {
-            messages = messages.map(msg => {
-                if (msg.role === 'assistant' && msg.reasoning_content) {
-                    const { reasoning_content, ...rest } = msg as any;
-                    return rest as Message;
-                }
-                return msg;
-            });
-        }
 
         const enableThinking =
             !!(modelConfig.capabilities?.thinking && (modelConfig.thinkingEnabled || false));
@@ -7478,375 +7353,18 @@
             }
         }
 
-        // DeepSeek 思考模式：开启新一轮对话前清理历史消息中的 reasoning_content，保留工具调用链
-        if (
-            chatMode === 'plan' &&
-            userToolCount > 0 &&
-            currentProvider === 'deepseek'
-        ) {
-            messages = messages.map(msg => {
-                if (msg.role === 'assistant' && msg.reasoning_content) {
-                    const { reasoning_content, ...rest } = msg as any;
-                    return rest as Message;
-                }
-                return msg;
-            });
-        }
-
-        const isDeepseekThinkingAgent =
-            chatMode === 'plan' &&
-            userToolCount > 0 &&
-            modelConfig &&
-            modelConfig.capabilities?.thinking &&
-            (modelConfig.thinkingEnabled || false);
-
-        // 准备发送给AI的消息（包含系统提示词和上下文文档）
-        // 深拷贝消息数组，避免修改原始消息
-        let messagesToSend = messages
-            .filter(msg => {
-                if (msg.role === 'system') return false;
-                if (msg.role === 'assistant') {
-                    const text =
-                        typeof msg.content === 'string'
-                            ? msg.content
-                            : getMessageText(msg.content || []);
-                    const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
-                    const hasReasoning = !!msg.reasoning_content;
-                    // 保留有 tool_calls 或 reasoning_content 的 assistant 消息，即便正文为空
-                    return (text && text.toString().trim() !== '') || hasToolCalls || hasReasoning;
-                }
-                return true;
-            })
-            .map((msg, index, array) => {
-                const baseMsg: any = {
-                    role: msg.role,
-                    content: msg.content,
-                };
-
-                // 只在字段存在时才包含，避免传递 undefined 字段给 API
-                if (msg.tool_calls) {
-                    baseMsg.tool_calls = msg.tool_calls;
-                }
-                if (msg.tool_call_id) {
-                    baseMsg.tool_call_id = msg.tool_call_id;
-                    baseMsg.name = msg.name;
-                }
-
-                // 检测是否是 DeepSeek 推理模型
-                const isDeepSeekReasonerModel3 = modelConfig
-                    ? /deepseek-(reasoner|r1)/i.test(modelConfig.id)
-                    : false;
-
-                // 只有在启用 thinking 模式或者是 DeepSeek 推理模型时才保留 reasoning_content
-                // Kimi 等模型在未启用 thinking 时看到 reasoning_content 会报错
-                const shouldKeepReasoning3 = isDeepseekThinkingAgent || isDeepSeekReasonerModel3;
-                if (shouldKeepReasoning3 && msg.reasoning_content !== undefined) {
-                    baseMsg.reasoning_content = msg.reasoning_content;
-                }
-
-                // 在启用 thinking 模式或是 DeepSeek 推理模型且有 tool_calls 时，确保 reasoning_content 字段存在
-                if (shouldKeepReasoning3 && msg.tool_calls && msg.tool_calls.length > 0) {
-                    if (baseMsg.reasoning_content === undefined) {
-                        baseMsg.reasoning_content = '';
-                    }
-                }
-
-                // 只处理历史用户消息的上下文（不是最后一条消息）
-                // 最后一条消息将在后面用最新内容处理
-                const isLastMessage = index === array.length - 1;
-                if (
-                    !isLastMessage &&
-                    msg.role === 'user' &&
-                    msg.contextDocuments &&
-                    msg.contextDocuments.length > 0
-                ) {
-                    const hasImages = msg.attachments?.some(att => att.type === 'image');
-
-                    // 获取原始消息内容
-                    const originalContent =
-                        typeof msg.content === 'string' ? msg.content : getMessageText(msg.content);
-
-                    // 构建上下文文本
-                    const contextText = msg.contextDocuments
-                        .map(doc => {
-                            const label =
-                                doc.type === 'doc'
-                                    ? '文档'
-                                    : doc.type === 'webpage'
-                                      ? '网页'
-                                      : '块';
-                            // agent模式或启用工具的问答模式：文档块只传递ID，不传递内容
-                            if (
-                                chatMode === 'plan' &&
-                                userToolCount > 0 &&
-                                doc.type === 'doc'
-                            ) {
-                                return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\``;
-                            }
-                            return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\`\n\n\`\`\`markdown\n${doc.content}\n\`\`\``;
-                        })
-                        .join('\n\n---\n\n');
-
-                    // 如果有图片附件，使用多模态格式
-                    if (hasImages) {
-                        const contentParts: any[] = [];
-
-                        // 添加文本内容和上下文
-                        let textContent = originalContent;
-                        textContent += `\n\n---\n\n以下是相关内容作为上下文：\n\n${contextText}`;
-                        contentParts.push({ type: 'text', text: textContent });
-
-                        // 添加图片
-                        msg.attachments?.forEach(att => {
-                            if (att.type === 'image') {
-                                contentParts.push({
-                                    type: 'image_url',
-                                    image_url: { url: att.data },
-                                });
-                            }
-                        });
-
-                        // 添加文本文件内容
-                        const fileTexts = msg.attachments
-                            ?.filter(att => att.type === 'file')
-                            .map(att => `## 文件: ${att.name}\n\n\`\`\`\n${att.data}\n\`\`\`\n`)
-                            .join('\n\n---\n\n');
-
-                        if (fileTexts) {
-                            contentParts.push({
-                                type: 'text',
-                                text: `\n\n以下是附件文件内容：\n\n${fileTexts}`,
-                            });
-                        }
-
-                        baseMsg.content = contentParts;
-                    } else {
-                        // 纯文本格式
-                        let enhancedContent = originalContent;
-
-                        // 添加文本文件附件
-                        if (msg.attachments && msg.attachments.length > 0) {
-                            const attachmentTexts = msg.attachments
-                                .map(att => {
-                                    if (att.type === 'file') {
-                                        return `## 文件: ${att.name}\n\n\`\`\`\n${att.data}\n\`\`\`\n`;
-                                    }
-                                    return '';
-                                })
-                                .filter(Boolean)
-                                .join('\n\n---\n\n');
-
-                            if (attachmentTexts) {
-                                enhancedContent += `\n\n---\n\n以下是附件内容：\n\n${attachmentTexts}`;
-                            }
-                        }
-
-                        // 添加上下文文档
-                        enhancedContent += `\n\n---\n\n以下是相关内容作为上下文：\n\n${contextText}`;
-
-                        baseMsg.content = enhancedContent;
-                    }
-                }
-
-                return baseMsg;
-            });
-
-        // 处理最后一条用户消息，添加附件和上下文文档
-        if (messagesToSend.length > 0) {
-            const lastMessage = messagesToSend[messagesToSend.length - 1];
-            if (lastMessage.role === 'user') {
-                const lastUserMessage = messages[messages.length - 1];
-                const hasImages = lastUserMessage.attachments?.some(att => att.type === 'image');
-
-                // 查找上一条assistant消息是否有生成的图片（用于图片编辑）
-                let previousGeneratedImages: any[] = [];
-                const lastAssistantMsg = [...messages].reverse().find(m => m.role === 'assistant');
-                if (lastAssistantMsg) {
-                    // 检查generatedImages或attachments中的图片
-                    if (
-                        lastAssistantMsg.generatedImages &&
-                        lastAssistantMsg.generatedImages.length > 0
-                    ) {
-                        // 从路径加载图片并转换为 blob URL
-                        previousGeneratedImages = await Promise.all(
-                            lastAssistantMsg.generatedImages.map(async img => {
-                                let imageUrl = '';
-                                if (img.path) {
-                                    // 从路径加载图片
-                                    imageUrl = (await loadAsset(img.path)) || '';
-                                } else if (img.data) {
-                                    // 兼容旧数据（base64格式）
-                                    imageUrl = `data:${img.mimeType || 'image/png'};base64,${img.data}`;
-                                }
-                                return {
-                                    type: 'image_url' as const,
-                                    image_url: { url: imageUrl },
-                                };
-                            })
-                        );
-                    } else if (
-                        lastAssistantMsg.attachments &&
-                        lastAssistantMsg.attachments.length > 0
-                    ) {
-                        // 从附件中获取图片
-                        const imageAttachments = lastAssistantMsg.attachments.filter(
-                            att => att.type === 'image'
-                        );
-                        previousGeneratedImages = await Promise.all(
-                            imageAttachments.map(async att => {
-                                let imageUrl = att.data;
-                                // 如果附件有路径且当前data不可用，从路径重新加载
-                                if (att.path && (!imageUrl || !imageUrl.startsWith('blob:'))) {
-                                    imageUrl = (await loadAsset(att.path)) || att.data;
-                                }
-                                return {
-                                    type: 'image_url' as const,
-                                    image_url: { url: imageUrl },
-                                };
-                            })
-                        );
-                    } else if (typeof lastAssistantMsg.content === 'string') {
-                        // 从Markdown内容中提取图片 ![alt](url)
-                        const imageRegex = /!\[.*?\]\(([^)]+)\)/g;
-                        const content = lastAssistantMsg.content;
-                        let match;
-                        while ((match = imageRegex.exec(content)) !== null) {
-                            const url = match[1];
-                            // 处理 assets 路径的图片
-                            if (
-                                isPluginAssetPath(url)
-                            ) {
-                                try {
-                                    const blobUrl = await loadAsset(url);
-                                    if (blobUrl) {
-                                        previousGeneratedImages.push({
-                                            type: 'image_url' as const,
-                                            image_url: { url: blobUrl },
-                                        });
-                                    }
-                                } catch (error) {
-                                    console.error('Failed to load asset image:', error);
-                                }
-                            } else if (url.startsWith('http://') || url.startsWith('https://')) {
-                                // HTTP/HTTPS URL 直接使用
-                                previousGeneratedImages.push({
-                                    type: 'image_url' as const,
-                                    image_url: { url: url },
-                                });
-                            }
-                        }
-                    }
-                }
-
-                // 如果有图片附件或上一条有生成的图片，使用多模态格式
-                if (hasImages || previousGeneratedImages.length > 0) {
-                    const contentParts: any[] = [];
-
-                    // 先添加用户输入
-                    let textContent =
-                        typeof lastUserMessage.content === 'string'
-                            ? lastUserMessage.content
-                            : getMessageText(lastUserMessage.content);
-
-                    // 然后添加上下文文档（如果有）
-                    if (contextDocumentsWithLatestContent.length > 0) {
-                        const contextText = contextDocumentsWithLatestContent
-                            .map(doc => {
-                                const label =
-                                    doc.type === 'doc'
-                                        ? '文档'
-                                        : doc.type === 'webpage'
-                                          ? '网页'
-                                          : '块';
-                                return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\`\n\n\`\`\`markdown\n${doc.content}\n\`\`\``;
-                            })
-                            .join('\n\n---\n\n');
-                        textContent += `\n\n---\n\n以下是相关内容作为上下文：\n\n${contextText}`;
-                    }
-
-                    contentParts.push({ type: 'text', text: textContent });
-
-                    // 添加用户上传的图片
-                    lastUserMessage.attachments?.forEach(att => {
-                        if (att.type === 'image') {
-                            contentParts.push({
-                                type: 'image_url',
-                                image_url: { url: att.data },
-                            });
-                        }
-                    });
-
-                    // 添加上一次生成的图片（用于图片编辑）
-                    previousGeneratedImages.forEach(img => {
-                        contentParts.push(img);
-                    });
-
-                    // 添加文本文件内容
-                    const fileTexts = lastUserMessage.attachments
-                        ?.filter(att => att.type === 'file')
-                        .map(att => `## 文件: ${att.name}\n\n\`\`\`\n${att.data}\n\`\`\`\n`)
-                        .join('\n\n---\n\n');
-
-                    if (fileTexts) {
-                        contentParts.push({
-                            type: 'text',
-                            text: `\n\n以下是附件文件内容：\n\n${fileTexts}`,
-                        });
-                    }
-
-                    lastMessage.content = contentParts;
-                } else {
-                    // 纯文本格式
-                    let enhancedContent =
-                        typeof lastUserMessage.content === 'string'
-                            ? lastUserMessage.content
-                            : getMessageText(lastUserMessage.content);
-
-                    // 添加文本文件附件
-                    if (lastUserMessage.attachments && lastUserMessage.attachments.length > 0) {
-                        const attachmentTexts = lastUserMessage.attachments
-                            .map(att => {
-                                if (att.type === 'file') {
-                                    return `## 文件: ${att.name}\n\n\`\`\`\n${att.data}\n\`\`\`\n`;
-                                }
-                                return '';
-                            })
-                            .filter(Boolean)
-                            .join('\n\n---\n\n');
-
-                        if (attachmentTexts) {
-                            enhancedContent += `\n\n---\n\n以下是附件内容：\n\n${attachmentTexts}`;
-                        }
-                    }
-
-                    // 添加上下文文档
-                    if (contextDocumentsWithLatestContent.length > 0) {
-                        const contextText = contextDocumentsWithLatestContent
-                            .map(doc => {
-                                const label =
-                                    doc.type === 'doc'
-                                        ? '文档'
-                                        : doc.type === 'webpage'
-                                          ? '网页'
-                                          : '块';
-                                return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\`\n\n\`\`\`markdown\n${doc.content}\n\`\`\``;
-                            })
-                            .join('\n\n---\n\n');
-                        enhancedContent += `\n\n---\n\n以下是相关内容作为上下文：\n\n${contextText}`;
-                    }
-
-                    lastMessage.content = enhancedContent;
-                }
-            }
-        }
-
-        const { baseSystemPrompt, hasToolInstruction } =
-            await buildSystemPromptForCurrentRequest();
-
-        // 添加最终的系统提示词
-        if (baseSystemPrompt.trim() || hasToolInstruction) {
-            messagesToSend.unshift({ role: 'system', content: baseSystemPrompt });
-        }
+        const userContent = getMessageText(lastUserMessage.content);
+        const enableThinking =
+            !!(modelConfig.capabilities?.thinking && modelConfig.thinkingEnabled);
+        const messagesToSend = await prepareMessagesForAI(
+            messages,
+            contextDocumentsWithLatestContent,
+            userContent,
+            lastUserMessage,
+            enableThinking,
+            modelConfig.id
+        );
+        lastPreparedContextTokens = estimateMessagesContextTokens(messagesToSend);
 
         // 创建新的 AbortController
         setController(currentSessionId, new AbortController());

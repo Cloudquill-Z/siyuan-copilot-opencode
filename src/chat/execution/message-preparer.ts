@@ -17,8 +17,6 @@ export interface PrepareMessagesOptions {
     lastUserMessage: PreparedMessage;
     thinkingEnabled?: boolean;
     modelId: string;
-    chatMode: 'plan' | 'build';
-    userToolCount: number;
     settings: any;
     contextCount: number;
     buildSystemPromptForCurrentRequest: () => Promise<{ baseSystemPrompt: string; hasToolInstruction: boolean }>;
@@ -32,8 +30,6 @@ export async function prepareMessagesForAI(options: PrepareMessagesOptions): Pro
         lastUserMessage,
         thinkingEnabled = false,
         modelId,
-        chatMode,
-        userToolCount,
         settings,
         contextCount,
         buildSystemPromptForCurrentRequest,
@@ -74,8 +70,7 @@ export async function prepareMessagesForAI(options: PrepareMessagesOptions): Pro
             // 只有在启用 thinking 模式时才保留相关内容
             // 特别是 Kimi 等模型，如果启用了 thinking，历史 assistant 消息必须包含 reasoning_content
             const isDeepSeekReasonerModel = /deepseek-(reasoner|r1)/i.test(modelId || '');
-            const shouldKeepReasoning =
-                (thinkingEnabled && userToolCount > 0) || isDeepSeekReasonerModel;
+            const shouldKeepReasoning = thinkingEnabled || isDeepSeekReasonerModel;
 
             if (msg.tool_calls) {
                 baseMsg.tool_calls = msg.tool_calls;
@@ -116,15 +111,6 @@ export async function prepareMessagesForAI(options: PrepareMessagesOptions): Pro
                                 : doc.type === 'webpage'
                                   ? '网页'
                                   : '块';
-
-                        // agent模式或启用工具的问答模式：文档块只传递ID，不传递内容
-                        if (
-                            chatMode === 'plan' &&
-                            userToolCount > 0 &&
-                            doc.type === 'doc'
-                        ) {
-                            return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\``;
-                        }
 
                         // 其他情况：传递完整内容
                         if (doc.content) {
@@ -366,15 +352,6 @@ export async function prepareMessagesForAI(options: PrepareMessagesOptions): Pro
                                     : doc.type === 'webpage'
                                       ? '网页'
                                       : '块';
-
-                            // agent模式或启用工具的问答模式：文档块只传递ID，不传递内容
-                            if (
-                                chatMode === 'plan' &&
-                                userToolCount > 0 &&
-                                doc.type === 'doc'
-                            ) {
-                                return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\``;
-                            }
 
                             // 其他情况：传递完整内容
                             if (doc.content) {
