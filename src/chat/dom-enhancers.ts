@@ -376,7 +376,7 @@ export function cleanupCodeBlocks(element: HTMLElement) {
                 // 创建复制按钮
                 const copyButton = document.createElement('button');
                 copyButton.className = 'code-block-copy-btn';
-                copyButton.innerHTML = '<svg><use xlink:href="#iconCopy"></use></svg>';
+                copyButton.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24"><use xlink:href="#iconCopy"></use></svg>';
                 copyButton.title = '复制代码';
 
                 // 添加复制功能
@@ -389,11 +389,11 @@ export function cleanupCodeBlocks(element: HTMLElement) {
                             pushMsg('已复制');
                             // 更新按钮图标
                             copyButton.innerHTML =
-                                '<svg><use xlink:href="#iconCheck"></use></svg>';
+                                '<svg width="14" height="14" viewBox="0 0 24 24"><use xlink:href="#iconCheck"></use></svg>';
                             copyButton.classList.add('copied');
                             setTimeout(() => {
                                 copyButton.innerHTML =
-                                    '<svg><use xlink:href="#iconCopy"></use></svg>';
+                                    '<svg width="14" height="14" viewBox="0 0 24 24"><use xlink:href="#iconCopy"></use></svg>';
                                 copyButton.classList.remove('copied');
                             }, 2000);
                         })

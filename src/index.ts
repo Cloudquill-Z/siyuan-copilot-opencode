@@ -1711,7 +1711,7 @@ export default class PluginSample extends Plugin {
         //布局加载完成的时候,会自动调用这个函数
         // 注册AI侧栏
         const pluginInstance = this;
-        this.addDock({
+        const dockResult = this.addDock({
             config: {
                 position: "RightBottom",
                 size: { width: 400, height: 0 },
@@ -1734,6 +1734,30 @@ export default class PluginSample extends Plugin {
             destroy() {
                 pluginInstance.aiSidebarApps.destroy(this.element as HTMLElement);
             }
+        });
+
+        // 插件重载时，SiYuan 会恢复 dock 按钮的 active 状态，但可能不会重新调用 init 挂载组件。
+        // 如果 dock 处于展开状态但面板内容为空，则主动重新初始化以恢复侧边栏显示。
+        requestAnimationFrame(() => {
+            setTimeout(() => {
+                if (!pluginInstance.isOpenCodeInitCurrent(layoutRunId)) return;
+                const dockType = pluginInstance.name + AI_SIDEBAR_TYPE;
+                const dockBtn = document.querySelector(`span.dock__item[data-type="${dockType}"]`) as HTMLElement;
+                const model = dockResult.model;
+                const element = model?.element as HTMLElement;
+                if (
+                    dockBtn &&
+                    dockBtn.classList.contains('dock__item--active') &&
+                    element &&
+                    !pluginInstance.aiSidebarApps.has(element)
+                ) {
+                    try {
+                        model.init(model);
+                    } catch (e) {
+                        console.warn('[AI Sidebar] re-init dock failed:', e);
+                    }
+                }
+            }, 0);
         });
         // 注册已保存的小程序图标
         // 由于 onload() 中已经调用了 loadSettings()，
