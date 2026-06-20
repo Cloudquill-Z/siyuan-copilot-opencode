@@ -20,5 +20,8 @@ assert.ok(metrics.scriptLines <= 5_000, `unexpected script growth: ${metrics.scr
 assert.ok(metrics.styleLines <= 2, `sidebar styles must remain external: ${metrics.styleLines}`);
 assert.doesNotMatch(source, /async function saveBase64ImagesInContent/);
 assert.doesNotMatch(source, /async function replaceAssetPathsWithBlob/);
+assert.doesNotMatch(source, /runChat\(/, 'model transport belongs in execution modules');
+assert.doesNotMatch(source, /getPluginFileBlob\(/, 'session file access belongs in the repository');
+assert.doesNotMatch(source, /saveAsset\(/, 'attachment persistence belongs in attachment workflows');
 
 console.log('ai sidebar boundary baseline', metrics);

@@ -69,8 +69,7 @@
     import { TaskStateController } from './chat/task-state-controller';
     import { SessionRepository } from './chat/session-repository';
     import { hydrateSessionMessages } from './chat/session-hydrator';
-    import { AttachmentController } from './chat/attachment-controller';
-    import { AttachmentWorkflow } from './chat/attachment-workflow';
+    import { createAttachmentServices } from './chat/attachment-workflow';
     import {
         ContextController,
         buildDocumentSearchQuery,
@@ -90,16 +89,8 @@
         putFile,
         removeFile,
     } from './api';
-    import { saveAsset, readAssetAsText, revokeLoadedAssetUrls } from './utils/assets';
-    import {
-        CHAT_SESSIONS_PATH,
-        getLegacySessionPath,
-        getPluginFileBlob,
-        getSessionPath,
-        isPluginAssetPath,
-        loadJsonFile,
-        saveJsonFile,
-    } from './pluginPaths';
+    import { readAssetAsText, revokeLoadedAssetUrls } from './utils/assets';
+    import { isPluginAssetPath } from './pluginPaths';
     import { createDiagnosticLogger, shouldStartDiagnosticLog, type DiagnosticLogger,
         type DiagnosticLogLevel, type DiagnosticLogMode } from './diagnostic-logger';
     import { SUMMARY_EVENT, WEBAPP_TAB_TYPE } from './pluginNamespace';
@@ -292,14 +283,11 @@
     // 附件管理
     let currentAttachments: MessageAttachment[] = [];
     let isUploadingFile = false;
-    const attachmentController = new AttachmentController(
-        (file, name) => saveAsset(file, name),
-        attachments => {
+    const { controller: attachmentController, workflow: attachmentWorkflow } =
+        createAttachmentServices(attachments => {
             currentAttachments = attachments;
             isUploadingFile = attachmentController.isSaving;
-        }
-    );
-    const attachmentWorkflow = new AttachmentWorkflow(attachmentController);
+        });
 
     // 网页链接功能
     let isWebLinkDialogOpen = false;
@@ -4036,21 +4024,9 @@
                     const webviewResult = await fetchWithWebView(webviewUrl);
 
                     if (webviewResult.success && webviewResult.markdown) {
-                        // 从 URL 中提取文件名
-                        const urlObj = new URL(webviewUrl);
-                        const fileName = `${urlObj.hostname.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.md`;
-
-                        // 保存为 SiYuan 资源
-                        const assetPath = await saveAsset(
-                            new Blob([webviewResult.markdown], { type: 'text/markdown' }),
-                            fileName
-                        );
-
-                        // 添加到附件列表，标记为网页类型（与添加网页链接弹窗一致）
-                        attachmentController.addWebPage(
+                        await attachmentWorkflow.addResolvedWebPage(
                             webviewUrl,
-                            webviewResult.markdown,
-                            assetPath
+                            webviewResult.markdown
                         );
 
                         pushMsg(`✓ 成功添加网页: ${webviewResult.title || tabTitle || webviewUrl}`);
@@ -4435,18 +4411,7 @@
     // 处理保存会话到笔记
     async function handleSaveSessionToNote(sessionId: string) {
         try {
-            // 加载会话消息
-            const path = getSessionPath(sessionId);
-            const blob =
-                await getPluginFileBlob(path) ||
-                await getPluginFileBlob(getLegacySessionPath(sessionId));
-            if (!blob) {
-                pushErrMsg('会话文件不存在');
-                return;
-            }
-            const text = await blob.text();
-            const sessionData = JSON.parse(text);
-            const sessionMessages = sessionData?.messages || [];
+            const sessionMessages = await sessionRepository.loadMessages(sessionId);
 
             if (sessionMessages.length === 0) {
                 pushErrMsg(t('aiSidebar.errors.emptySession'));
@@ -4470,13 +4435,9 @@
         try {
             const session = sessions.find(item => item.id === sessionId);
             if (!session) throw new Error('会话不存在');
-            const blob =
-                (await getPluginFileBlob(getSessionPath(sessionId))) ||
-                (await getPluginFileBlob(getLegacySessionPath(sessionId)));
-            if (!blob) throw new Error('会话文件不存在');
-            const sessionData = JSON.parse(await blob.text());
+            const sessionMessages = await sessionRepository.loadMessages(sessionId);
             const markdownBody = buildSessionMarkdown(
-                sessionData?.messages || [],
+                sessionMessages,
                 getSessionExportContext()
             );
             if (!markdownBody.trim()) throw new Error('会话没有可导出的消息');
@@ -4580,13 +4541,7 @@
 
     // 提示词管理函数
     async function loadPrompts() {
-        try {
-            const data = await plugin.loadData('prompts.json');
-            prompts = data?.prompts || [];
-        } catch (error) {
-            console.error('Load prompts error:', error);
-            prompts = [];
-        }
+        prompts = await promptManagerDialog.load();
     }
 
     function openPromptManager() {

@@ -22,8 +22,10 @@ assert.doesNotMatch(shell, /class="ai-sidebar__messages"/,
     'message markup must not remain in the composition shell');
 assert.match(messages, /class="ai-sidebar__messages"/);
 assert.match(messages, /multiModelResponses/);
+assert.match(messages, /export let messages: Message\[\]/);
 assert.match(toolbar, /<SessionManager/);
 assert.match(composer, /class="ai-sidebar__input-container"/);
+assert.match(composer, /export let chatMode: ChatMode/);
 assert.doesNotMatch(shell, /class="ai-sidebar__input-container"/,
     'composer markup must not remain in the composition shell');
 

@@ -17,6 +17,16 @@
         open = true;
     }
 
+    export async function load(): Promise<any[]> {
+        try {
+            prompts = (await plugin.loadData('prompts.json'))?.prompts || [];
+        } catch (error) {
+            console.error('Load prompts error:', error);
+            prompts = [];
+        }
+        return prompts;
+    }
+
     export function remove(promptId: string) {
         confirm(t('aiSidebar.confirm.deletePrompt.title'), t('aiSidebar.confirm.deletePrompt.message'), async () => {
             prompts = prompts.filter(prompt => prompt.id !== promptId);

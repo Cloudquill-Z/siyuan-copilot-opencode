@@ -68,4 +68,20 @@ export class AttachmentWorkflow {
         }
         return successCount;
     }
+
+    async addResolvedWebPage(url: string, markdown: string): Promise<void> {
+        const host = new URL(url).hostname.replace(/[^a-zA-Z0-9]/g, '_');
+        const path = await saveAsset(
+            new Blob([markdown], { type: 'text/markdown' }),
+            `${host}_${Date.now()}.md`
+        );
+        this.controller.addWebPage(url, markdown, path);
+    }
+}
+
+export function createAttachmentServices(
+    onChange: (attachments: any[]) => void
+): { controller: AttachmentController; workflow: AttachmentWorkflow } {
+    const controller = new AttachmentController((file, name) => saveAsset(file, name), onChange);
+    return { controller, workflow: new AttachmentWorkflow(controller) };
 }
