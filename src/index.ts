@@ -23,6 +23,7 @@ import ChatDialog from "./components/ChatDialog.svelte";
 import { updateSettings, getSettings } from "./stores/settings";
 import { getModelCapabilities } from "./utils/modelCapabilities";
 import { ComponentMountRegistry } from "./utils/componentMountRegistry";
+import { getDockRestoreDecision } from "./utils/dockRestore";
 import {
     CHAT_SESSIONS_PATH,
     OPENCODE_WORKSPACE_DIR,
@@ -94,6 +95,7 @@ export default class PluginSample extends Plugin {
     private domainIconMap: Map<string, string> = new Map(); // 缓存域名与图标文件名的映射
     private openCodeInitRunId = 0;
     private isUnloaded = true;
+    private dockRestoreTimer: number | null = null;
 
     /**
      * 加载 WebView 历史记录
@@ -1736,58 +1738,44 @@ export default class PluginSample extends Plugin {
             }
         });
 
-        // 插件重载时，SiYuan 会恢复 dock 按钮的 active 状态，但可能不会重新调用 init 挂载组件。
-        // 如果 dock 处于展开状态但面板内容为空，则主动重新初始化以恢复侧边栏显示。
-        // 使用 MutationObserver 监听 dock 按钮状态变化，配合重试机制确保可靠恢复。
+        // 插件重载时，Dock 按钮和面板可能晚于 onLayoutReady 才恢复。
+        // 持续等待实际元素就绪，避免把“尚未生成”误判成“恢复完成”。
         const dockType = pluginInstance.name + AI_SIDEBAR_TYPE;
-        const reinitDock = () => {
-            if (!pluginInstance.isOpenCodeInitCurrent(layoutRunId)) return true;
-            const dockBtn = document.querySelector(`span.dock__item[data-type="${dockType}"]`) as HTMLElement;
+        const restoreDock = () => {
+            const dockBtn = document.querySelector(`.dock__item[data-type="${dockType}"]`) as HTMLElement | null;
             const model = dockResult.model;
-            const element = model?.element as HTMLElement;
-            if (!element) return true;
-            // 已挂载则无需处理
-            if (pluginInstance.aiSidebarApps.has(element)) return true;
-            // 按钮处于 active 状态，或面板元素可见且为空 → 重新挂载
-            const isActive = dockBtn?.classList.contains('dock__item--active');
-            const isVisible = element.offsetParent !== null && element.children.length === 0;
-            if (isActive || isVisible) {
+            const element = model?.element as HTMLElement | undefined;
+            const decision = getDockRestoreDecision({
+                lifecycleCurrent: pluginInstance.isOpenCodeInitCurrent(layoutRunId),
+                elementReady: !!element,
+                mounted: !!element && pluginInstance.aiSidebarApps.has(element),
+                buttonActive: dockBtn?.classList.contains('dock__item--active') ?? false,
+                panelVisible: !!element && element.offsetParent !== null,
+            });
+            if (decision === 'mount' && element) {
                 try {
                     model.init(model);
-                    return true;
+                    return 'stop';
                 } catch (e) {
                     console.warn('[AI Sidebar] re-init dock failed:', e);
+                    return 'wait';
                 }
             }
-            return false;
+            return decision;
         };
 
         requestAnimationFrame(() => {
-            // 首次尝试（短延迟等待 DOM 稳定）
-            setTimeout(() => {
-                if (reinitDock()) return;
-
-                // 首次失败，用 MutationObserver 监听按钮 class 变化
-                const dockBtn = document.querySelector(`span.dock__item[data-type="${dockType}"]`) as HTMLElement;
-                if (dockBtn) {
-                    const observer = new MutationObserver(() => {
-                        if (reinitDock()) {
-                            observer.disconnect();
-                        }
-                    });
-                    observer.observe(dockBtn, { attributes: true, attributeFilter: ['class'] });
-                    // 10 秒后自动停止监听
-                    setTimeout(() => observer.disconnect(), 10_000);
-                }
-
-                // 同时用定时器重试几次，覆盖 Observer 可能遗漏的情况
-                let retries = 0;
-                const retryTimer = setInterval(() => {
-                    if (reinitDock() || ++retries >= 5) {
-                        clearInterval(retryTimer);
+            if (restoreDock() === 'stop') return;
+            let retries = 0;
+            pluginInstance.dockRestoreTimer = window.setInterval(() => {
+                retries += 1;
+                if (restoreDock() === 'stop' || retries >= 50) {
+                    if (pluginInstance.dockRestoreTimer !== null) {
+                        window.clearInterval(pluginInstance.dockRestoreTimer);
+                        pluginInstance.dockRestoreTimer = null;
                     }
-                }, 200);
-            }, 50);
+                }
+            }, 200);
         });
         // 注册已保存的小程序图标
         // 由于 onload() 中已经调用了 loadSettings()，
@@ -2169,6 +2157,10 @@ export default class PluginSample extends Plugin {
         //当插件被禁用的时候，会自动调用这个函数
         this.isUnloaded = true;
         this.openCodeInitRunId++;
+        if (this.dockRestoreTimer !== null) {
+            window.clearInterval(this.dockRestoreTimer);
+            this.dockRestoreTimer = null;
+        }
         this.eventBus.off("open-menu-doctree", this.openMenuDoctreeBindThis);
         this.eventBus.off("click-editortitleicon", this.clickEditorTitleIconBindThis);
         this.eventBus.off("open-menu-link", this.openMenuLinkBindThis);

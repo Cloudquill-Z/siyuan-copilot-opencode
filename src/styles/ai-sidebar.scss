@@ -4924,9 +4924,20 @@
         --composer-accent-soft: color-mix(in srgb, var(--composer-accent) 10%, transparent);
         position: relative;
         border-width: 1px;
-        border-color: color-mix(in srgb, var(--composer-accent) 58%, var(--b3-border-color));
+        border-color: transparent;
         background: var(--b3-theme-background);
         box-shadow: 0 2px 10px rgba(0, 0, 0, 0.055);
+
+        &::after {
+            content: '';
+            position: absolute;
+            inset: -1px;
+            z-index: 2;
+            border: 1px solid color-mix(in srgb, var(--composer-accent) 58%, var(--b3-border-color));
+            border-radius: inherit;
+            box-sizing: border-box;
+            pointer-events: none;
+        }
 
         &--answer {
             --composer-accent: var(--b3-card-success-color, #4f8f6b);
@@ -4937,10 +4948,13 @@
         }
 
         &:focus-within {
-            border-color: color-mix(in srgb, var(--composer-accent) 76%, var(--b3-border-color));
             box-shadow:
                 0 2px 10px rgba(0, 0, 0, 0.055),
                 0 0 0 3px var(--composer-accent-soft);
+
+            &::after {
+                border-color: color-mix(in srgb, var(--composer-accent) 76%, var(--b3-border-color));
+            }
         }
     }
 

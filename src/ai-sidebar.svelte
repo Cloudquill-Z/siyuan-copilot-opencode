@@ -132,6 +132,7 @@
         buildSessionMarkdown,
         cleanModelName,
         createSessionExportSnapshot,
+        refreshSessionExportContext,
         resolveAssistantDisplayName,
         sanitizeDocumentName,
         type SessionExportSnapshot,
@@ -4449,9 +4450,13 @@
             const session = sessions.find(item => item.id === sessionId);
             if (!session) throw new Error('会话不存在');
             const sessionMessages = await sessionRepository.loadMessages(sessionId);
+            const exportContext = await refreshSessionExportContext(
+                () => plugin.loadSettings(),
+                getSessionExportContext()
+            );
             const markdownBody = buildSessionMarkdown(
                 sessionMessages,
-                getSessionExportContext()
+                exportContext
             );
             if (!markdownBody.trim()) throw new Error('会话没有可导出的消息');
 

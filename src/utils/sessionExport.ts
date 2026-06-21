@@ -13,6 +13,21 @@ export interface SessionExportSnapshot {
     messages: any[];
 }
 
+export async function refreshSessionExportContext(
+    loadSettings: () => Promise<{ userName?: string } | null | undefined>,
+    context: SessionExportContext
+): Promise<SessionExportContext> {
+    try {
+        const latestSettings = await loadSettings();
+        return {
+            ...context,
+            userName: latestSettings?.userName ?? context.userName,
+        };
+    } catch {
+        return context;
+    }
+}
+
 export function cleanModelName(value?: string): string {
     return String(value || '').replace(/^(?:\s*✅)+\s*/, '').trim();
 }
