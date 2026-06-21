@@ -2,11 +2,9 @@
     import { onMount, tick } from 'svelte';
     import { t } from '../../utils/i18n';
     import MultiModelSelector from '../MultiModelSelector.svelte';
-    import TodoProgress from './TodoProgress.svelte';
     import type { ContextDocument, MessageAttachment, QuestionRequest, ThinkingEffort } from '../../ai-chat';
     import type { ChatMode } from '../../utils/chatMode';
     import type { MultiModelChoice } from '../../chat/execution/multi-model-state';
-    import type { OpenCodeTodo } from '../../chat/todo-state';
     type Prompt = { id: string; title: string; content: string; createdAt: number };
     export let THINKING_EFFORT_OPTIONS: Array<{ value: ThinkingEffort; label: string }>;
     export let abortMessage: any;
@@ -14,7 +12,6 @@
     export let activeQuestionRequest: QuestionRequest | null;
     export let activeSessions: Set<string>;
     export let activeTaskIds: string[];
-    export let openCodeTodos: OpenCodeTodo[];
     export let addClipboardText: any;
     export let addCurrentDocToContext: any;
     export let applyCommand: any;
@@ -355,8 +352,6 @@
         on:dragleave={handleDragLeave}
         on:drop={handleDrop}
     >
-        <TodoProgress {openCodeTodos} />
-
         <div class="ai-sidebar__task-tabs" aria-label="任务切换">
             <div class="ai-sidebar__task-tab-list">
                 {#each activeTaskIds as taskId, index (taskId)}

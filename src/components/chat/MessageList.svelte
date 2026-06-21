@@ -5,6 +5,8 @@
     import type { MessageGroup } from '../../chat/message-groups';
     import type { MultiModelChoice, MultiModelResponse } from '../../chat/execution/multi-model-state';
     import type { OpenCodeTimelineItem } from '../../task-types';
+    import type { OpenCodeTodo } from '../../chat/todo-state';
+    import TodoProgress from './TodoProgress.svelte';
     export let chatMode: ChatMode;
     export let copyMessage: any;
     export let deleteMessage: any;
@@ -42,6 +44,7 @@
     export let openCodeProcessCollapsed: Record<string, boolean>;
     export let openCodeTimeline: OpenCodeTimelineItem[];
     export let openCodeToolParts: any[];
+    export let openCodeTodos: OpenCodeTodo[];
     export let openDocument: any;
     export let openImageViewer: any;
     export let openSaveToNoteDialog: any;
@@ -3038,4 +3041,6 @@
                 </div>
             </div>
         {/if}
+
+        <TodoProgress {openCodeTodos} />
     </div>

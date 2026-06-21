@@ -5040,6 +5040,7 @@
         {openCodeProcessCollapsed}
         {openCodeTimeline}
         {openCodeToolParts}
+        {openCodeTodos}
         {openDocument}
         {openImageViewer}
         {openSaveToNoteDialog}
@@ -5083,7 +5084,6 @@
         {activeQuestionRequest}
         {activeSessions}
         {activeTaskIds}
-        {openCodeTodos}
         {addClipboardText}
         {addCurrentDocToContext}
         {applyCommand}
