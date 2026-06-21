@@ -433,7 +433,8 @@
             "requestFailed": "AI Request Failed",
             "applyEditFailed": "Failed to apply edit",
             "getBlockFailed": "Failed to get block content",
-            "autoUploadImageFailed": "Failed to auto upload image"
+            "autoUploadImageFailed": "Failed to auto upload image",
+            "maxConcurrentTasksReached": "The concurrent task limit (${limit}) has been reached. Wait for a task to finish or stop one first."
         },
         "success": {
             "copySuccess": "Message copied",

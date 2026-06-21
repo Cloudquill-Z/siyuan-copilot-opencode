@@ -12,6 +12,7 @@
     } from '../../../api';
     import {
         buildSessionMarkdown,
+        refreshSessionExportContext,
         sanitizeDocumentName,
         type SessionExportContext,
         type SessionExportSnapshot,
@@ -172,7 +173,11 @@
                 documentName.trim() || snapshot.title || fallbackTitle,
                 fallbackTitle
             );
-            const markdown = buildSessionMarkdown(snapshot.messages, exportContext);
+            const latestExportContext = await refreshSessionExportContext(
+                () => plugin.loadSettings(),
+                exportContext
+            );
+            const markdown = buildSessionMarkdown(snapshot.messages, latestExportContext);
             if (!markdown.trim()) return pushErrMsg('消息内容为空，无法保存');
 
             path = toRelativePath(pathKeyword);

@@ -5,6 +5,14 @@ const composerStyles = await readFile(
     new URL('../src/styles/ai-sidebar.scss', import.meta.url),
     'utf8'
 );
+const saveToNoteDialogSource = await readFile(
+    new URL('../src/components/chat/dialogs/SaveToNoteDialog.svelte', import.meta.url),
+    'utf8'
+);
+const settingsPanelSource = await readFile(
+    new URL('../src/SettingsPanel.svelte', import.meta.url),
+    'utf8'
+);
 
 assert.match(
     composerStyles,
@@ -48,5 +56,23 @@ assert.match(
     /^## 子亮\n\n你好/,
     '下载会话应优先使用持久化设置中的最新用户名'
 );
+
+assert.match(
+    saveToNoteDialogSource,
+    /refreshSessionExportContext\([\s\S]*?buildSessionMarkdown\(snapshot\.messages, latestExportContext\)/,
+    '保存到笔记也应在执行时读取最新用户名'
+);
+
+const { canStartConcurrentTask, coerceSelectOptionValue, normalizeConcurrentTaskLimit } =
+    await import('../src/utils/settingsBehavior.ts');
+
+assert.equal(coerceSelectOptionValue('4', 4), 4, '数字设置重新载入后应保持数字类型');
+assert.equal(coerceSelectOptionValue('queue', 'guide'), 'queue');
+assert.equal(normalizeConcurrentTaskLimit('3'), 3);
+assert.equal(canStartConcurrentTask(2, 3), true);
+assert.equal(canStartConcurrentTask(3, 3), false, '达到并发上限后必须阻止新任务');
+
+assert.match(settingsPanelSource, /class="settings-layout"/, '设置页应使用清晰的双栏布局');
+assert.match(settingsPanelSource, /class="settings-page-header"/, '设置内容应提供统一页头');
 
 console.log('Regression tests passed');

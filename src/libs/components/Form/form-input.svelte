@@ -1,5 +1,6 @@
 <script lang="ts">
     import { createEventDispatcher } from 'svelte';
+    import { coerceSelectOptionValue } from '../../../utils/settingsBehavior';
     export let type: string; // Setting Type
     export let key: string;
     export let value: any;
@@ -99,8 +100,8 @@
         on:change={changed}
         {style}
     >
-        {#each Object.entries(options) as [value, text]}
-            <option {value}>{text}</option>
+        {#each Object.entries(options) as [optionValue, text]}
+            <option value={coerceSelectOptionValue(optionValue, value)}>{text}</option>
         {/each}
     </select>
 {:else if type == 'slider'}

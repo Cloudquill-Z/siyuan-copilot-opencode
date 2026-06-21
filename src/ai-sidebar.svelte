@@ -67,6 +67,10 @@
     import { prepareDiffOperation } from './chat/diff-view';
     import { estimateComposerContextTokens, estimateMessagesContextTokens } from './chat/token-estimator';
     import { TaskStateController } from './chat/task-state-controller';
+    import {
+        canStartConcurrentTask,
+        normalizeConcurrentTaskLimit,
+    } from './utils/settingsBehavior';
     import { SessionRepository } from './chat/session-repository';
     import { hydrateSessionMessages } from './chat/session-hydrator';
     import { createAttachmentServices } from './chat/attachment-workflow';
@@ -2650,6 +2654,7 @@
     async function sendMessage() {
         const trimmedInput = currentInput.trim();
         if ((!trimmedInput && currentAttachments.length === 0) || isLoading) return;
+        if (!activeSessions.has(currentSessionId) && !ensureConcurrentTaskSlot()) return;
 
         let memoryCommandPromptForRun = '';
         if (isMemoryInitCommand(trimmedInput)) {
@@ -4288,6 +4293,7 @@
     }
 
     async function newSession() {
+        if (!ensureConcurrentTaskSlot()) return;
         saveActiveTaskState();
         finalizePendingSelection();
         // 如果有未保存的更改，自动保存当前会话
@@ -4295,6 +4301,16 @@
             await saveCurrentSession();
         }
         doNewSession();
+    }
+
+    function ensureConcurrentTaskSlot(): boolean {
+        const limit = normalizeConcurrentTaskLimit(settings.maxConcurrentTasks);
+        if (canStartConcurrentTask(activeSessions.size, limit)) return true;
+        pushErrMsg(
+            t('aiSidebar.errors.maxConcurrentTasksReached', { limit: String(limit) }) ||
+                `当前已有 ${limit} 个任务运行中。请等待任务完成或先停止一个任务。`
+        );
+        return false;
     }
 
     function doNewSession() {

@@ -434,7 +434,8 @@
             "requestFailed": "AI 请求失败",
             "applyEditFailed": "应用编辑失败",
             "getBlockFailed": "获取块内容失败",
-            "autoUploadImageFailed": "自动上传图片失败"
+            "autoUploadImageFailed": "自动上传图片失败",
+            "maxConcurrentTasksReached": "当前已达到最大并行任务数（${limit}）。请等待任务完成或先停止一个任务。"
         },
         "success": {
             "copySuccess": "消息已复制",

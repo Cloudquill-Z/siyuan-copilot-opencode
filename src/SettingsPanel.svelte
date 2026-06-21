@@ -47,6 +47,8 @@
 
     let isRefreshingModels = false;
     let isRestartingOpenCode = false;
+    let saveState: 'idle' | 'saving' | 'saved' | 'error' = 'idle';
+    let saveStateTimer: ReturnType<typeof setTimeout> | null = null;
     let modelSearchQuery = '';
     let tokenStatsRange: 'today' | '7d' | '30d' | 'all' = '7d';
     let connectionStatus: ConnectionStatus = {
@@ -444,8 +446,17 @@
     };
 
     async function saveSettings() {
-        await plugin.saveSettings(settings);
-        updateSettings(JSON.parse(JSON.stringify(settings)));
+        saveState = 'saving';
+        if (saveStateTimer) clearTimeout(saveStateTimer);
+        try {
+            await plugin.saveSettings(settings);
+            updateSettings(JSON.parse(JSON.stringify(settings)));
+            saveState = 'saved';
+            saveStateTimer = setTimeout(() => (saveState = 'idle'), 1600);
+        } catch (error) {
+            saveState = 'error';
+            pushErrMsg(`保存设置失败: ${(error as Error).message}`);
+        }
     }
 
     function ensureMemorySettings() {
@@ -470,6 +481,8 @@
 
     onDestroy(() => {
         unsubscribeConnectionStatus();
+        if (saveTimer) clearTimeout(saveTimer);
+        if (saveStateTimer) clearTimeout(saveStateTimer);
     });
 
     async function runload() {
@@ -583,31 +596,71 @@
     }
 
     $: currentGroup = groups.find(group => group.name === focusGroup);
+    $: currentGroupDescription = getGroupDescription(focusGroup);
+
+    function getGroupDescription(groupName: string): string {
+        const descriptions: Record<string, string> = {
+            [t('settings.settingsGroup.systemPrompt')]: '定义 AI 的基础角色、工作边界和长期行为。',
+            [t('settings.settingsGroup.platformManagement')]: '管理 OpenCode 服务状态、地址与可用模型。',
+            [t('settings.settingsGroup.displayAndOperation')]: '调整身份显示、交互方式、任务并发和诊断选项。',
+            [t('settings.settingsGroup.tokenStats') || 'Token 统计']: '查看不同时间范围和模型的 Token 使用情况。',
+            [t('settings.settingsGroup.noteExport')]: '设置对话保存到笔记时使用的笔记本和默认路径。',
+            [t('settings.settingsGroup.sessionManagement') || '会话管理']: '管理会话命名方式与相关自动化行为。',
+            [t('settings.settingsGroup.soul') || '记忆']: '配置长期记忆的存储位置、提取范围与注入限制。',
+            [t('settings.settingsGroup.reset') || 'Reset Settings']: '恢复默认配置；此操作会覆盖当前设置。',
+        };
+        return descriptions[groupName] || '管理 OpenCode 插件设置。';
+    }
 </script>
 
-<div class="fn__flex-1 fn__flex config__panel">
-    <ul class="b3-tab-bar b3-list b3-list--background">
-        {#each groups as group}
-            <li
-                data-name="editor"
-                class:b3-list-item--focus={group.name === focusGroup}
-                class="b3-list-item"
-                on:click={() => {
-                    focusGroup = group.name;
-                }}
-                on:keydown={e => {
-                    if (e.key === 'Enter' || e.key === ' ') {
+<div class="settings-layout">
+    <aside class="settings-sidebar">
+        <div class="settings-sidebar__brand">
+            <div class="settings-sidebar__product">OpenCode</div>
+            <div class="settings-sidebar__caption">插件设置</div>
+        </div>
+        <div class="settings-nav" aria-label="设置分类" role="tablist">
+            {#each groups as group}
+                <button
+                    type="button"
+                    class="settings-nav__item"
+                    class:settings-nav__item--active={group.name === focusGroup}
+                    aria-selected={group.name === focusGroup}
+                    on:click={() => {
                         focusGroup = group.name;
-                    }
-                }}
-                role="tab"
-                tabindex="0"
-            >
-                <span class="b3-list-item__text">{group.name}</span>
-            </li>
-        {/each}
-    </ul>
-    <div class="config__tab-wrap">
+                    }}
+                    role="tab"
+                >
+                    <span>{group.name}</span>
+                </button>
+            {/each}
+        </div>
+        <div
+            class="settings-save-state"
+            class:settings-save-state--saving={saveState === 'saving'}
+            class:settings-save-state--saved={saveState === 'saved'}
+            class:settings-save-state--error={saveState === 'error'}
+        >
+            <span class="settings-save-state__dot"></span>
+            {saveState === 'saving'
+                ? '正在保存…'
+                : saveState === 'saved'
+                  ? '已保存'
+                  : saveState === 'error'
+                    ? '保存失败'
+                    : '修改自动保存'}
+        </div>
+    </aside>
+    <main class="settings-main">
+        <header class="settings-page-header">
+            <div class="settings-page-header__copy">
+                <div class="settings-page-header__eyebrow">设置</div>
+                <h2>{focusGroup}</h2>
+                <p>{currentGroupDescription}</p>
+            </div>
+            <span class="settings-version">v{pluginManifest.version}</span>
+        </header>
+        <div class="config__tab-wrap">
         {#if focusGroup === t('settings.settingsGroup.systemPrompt')}
             <SettingPanel
                 group={currentGroup?.name || ''}
@@ -1075,32 +1128,236 @@
                 on:changed={onChanged}
             />
         {/if}
-    </div>
+        </div>
+    </main>
 </div>
 
 <style lang="scss">
-    .config__panel {
+    .settings-layout {
         height: 100%;
-        display: flex;
-        flex-direction: row;
+        display: grid;
+        grid-template-columns: 196px minmax(0, 1fr);
         overflow: hidden;
+        background: var(--b3-theme-background);
         container-type: inline-size;
         container-name: settings-panel;
     }
-    .config__panel > .b3-tab-bar {
-        width: min(30%, 170px);
+
+    .settings-sidebar {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        padding: 18px 12px 12px;
+        border-right: 1px solid var(--b3-border-color);
+        background: var(--b3-theme-surface);
+    }
+
+    .settings-sidebar__brand {
+        padding: 0 10px 16px;
+    }
+
+    .settings-sidebar__product {
+        color: var(--b3-theme-on-background);
+        font-size: 16px;
+        font-weight: 650;
+        line-height: 1.3;
+    }
+
+    .settings-sidebar__caption {
+        margin-top: 3px;
+        color: var(--b3-theme-on-surface-light);
+        font-size: 12px;
+        line-height: 1.4;
+    }
+
+    .settings-nav {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        gap: 4px;
+        min-height: 0;
+        overflow-y: auto;
+    }
+
+    .settings-nav__item {
+        display: flex;
+        align-items: center;
+        width: 100%;
+        min-height: 38px;
+        padding: 8px 10px;
+        border: 1px solid transparent;
+        border-radius: 7px;
+        background: transparent;
+        color: var(--b3-theme-on-surface);
+        font: inherit;
+        font-size: 13px;
+        line-height: 1.4;
+        text-align: left;
+        cursor: pointer;
+        transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+
+        &:hover {
+            background: var(--b3-list-hover);
+            color: var(--b3-theme-on-background);
+        }
+
+        &:focus-visible {
+            outline: 2px solid var(--b3-theme-primary);
+            outline-offset: 1px;
+        }
+
+        &--active {
+            border-color: color-mix(in srgb, var(--b3-theme-primary) 28%, var(--b3-border-color));
+            background: var(--b3-theme-primary-lightest);
+            color: var(--b3-theme-primary);
+            font-weight: 600;
+        }
+    }
+
+    .settings-save-state {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 32px;
+        margin-top: 10px;
+        padding: 6px 10px;
+        color: var(--b3-theme-on-surface-light);
+        font-size: 11px;
+    }
+
+    .settings-save-state__dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--b3-theme-on-surface-light);
+        opacity: 0.55;
+    }
+
+    .settings-save-state--saving .settings-save-state__dot {
+        background: var(--b3-card-warning-color);
+        animation: settings-save-pulse 1s ease-in-out infinite;
+    }
+
+    .settings-save-state--saved {
+        color: var(--b3-card-success-color);
+
+        .settings-save-state__dot {
+            background: var(--b3-card-success-color);
+            opacity: 1;
+        }
+    }
+
+    .settings-save-state--error {
+        color: var(--b3-card-error-color);
+
+        .settings-save-state__dot {
+            background: var(--b3-card-error-color);
+            opacity: 1;
+        }
+    }
+
+    @keyframes settings-save-pulse {
+        50% { opacity: 0.25; }
+    }
+
+    .settings-main {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .settings-page-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 24px;
+        padding: 20px 24px 18px;
+        border-bottom: 1px solid var(--b3-border-color);
+        background: var(--b3-theme-background);
+    }
+
+    .settings-page-header__copy {
+        min-width: 0;
+
+        h2 {
+            margin: 3px 0 0;
+            color: var(--b3-theme-on-background);
+            font-size: 20px;
+            font-weight: 650;
+            line-height: 1.3;
+        }
+
+        p {
+            max-width: 640px;
+            margin: 5px 0 0;
+            color: var(--b3-theme-on-surface-light);
+            font-size: 12px;
+            line-height: 1.55;
+        }
+    }
+
+    .settings-page-header__eyebrow {
+        color: var(--b3-theme-primary);
+        font-size: 11px;
+        font-weight: 650;
+        letter-spacing: 0.08em;
+    }
+
+    .settings-version {
         flex-shrink: 0;
+        padding: 4px 8px;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 999px;
+        color: var(--b3-theme-on-surface-light);
+        background: var(--b3-theme-surface);
+        font-size: 11px;
     }
 
     .config__tab-wrap {
         flex: 1;
-        height: 100%;
         overflow-y: auto;
         overflow-x: hidden;
-        padding: 2px;
+        padding: 20px 24px 28px;
         display: flex;
         flex-direction: column;
         min-height: 0;
+    }
+
+    :global(.config__tab-container_plugin) {
+        border: 1px solid var(--b3-border-color);
+        border-radius: 9px;
+        background: var(--b3-theme-background);
+        overflow: hidden;
+    }
+
+    :global(.config__tab-container_plugin .item-wrap.b3-label) {
+        margin: 0;
+        padding: 16px;
+        border-bottom: 1px solid var(--b3-border-color);
+    }
+
+    :global(.config__tab-container_plugin .item-wrap.b3-label:last-child) {
+        border-bottom: none;
+    }
+
+    :global(.config__tab-container_plugin .item-wrap .title) {
+        color: var(--b3-theme-on-background);
+        font-size: 13px;
+        font-weight: 600;
+    }
+
+    :global(.config__tab-container_plugin .b3-label__text) {
+        margin-top: 4px;
+        color: var(--b3-theme-on-surface-light);
+        font-size: 12px;
+        line-height: 1.5;
+    }
+
+    :global(.config__tab-container_plugin .b3-text-field),
+    :global(.config__tab-container_plugin .b3-select) {
+        min-height: 34px;
     }
 
     .model-management-panel {
@@ -1110,13 +1367,14 @@
         flex: 1;
         min-height: 0;
         overflow: hidden;
-        padding: 16px;
+        padding: 0;
     }
 
     .model-management-panel__section {
-        background: var(--b3-theme-surface);
-        border-radius: 6px;
-        padding: 12px 16px;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 9px;
+        background: var(--b3-theme-background);
+        padding: 16px;
     }
 
     .opencode-runtime-panel {
@@ -1295,7 +1553,7 @@
         gap: 16px;
         flex: 1;
         min-height: 0;
-        padding: 16px;
+        padding: 0;
         overflow-y: auto;
     }
 
@@ -1473,7 +1731,7 @@
         gap: 16px;
         flex: 1;
         overflow-y: auto;
-        padding: 16px;
+        padding: 0;
     }
 
     .memory-settings-panel__grid {
@@ -1489,7 +1747,7 @@
         min-height: 40px;
         padding: 8px 12px;
         border: 1px solid var(--b3-border-color);
-        border-radius: 6px;
+        border-radius: 8px;
         color: var(--b3-theme-on-background);
         background: var(--b3-theme-surface);
     }
@@ -1497,7 +1755,7 @@
     .memory-settings-panel__compact {
         padding: 12px;
         border: 1px solid var(--b3-border-color);
-        border-radius: 6px;
+        border-radius: 8px;
         background: var(--b3-theme-surface);
     }
 
@@ -1531,15 +1789,16 @@
 
     .auto-rename-model-selector {
         padding: 16px;
-        background: var(--b3-theme-surface);
-        border-radius: 6px;
+        border: 1px solid var(--b3-border-color);
+        background: var(--b3-theme-background);
+        border-radius: 9px;
         margin-top: 8px;
     }
 
     .config__item {
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 10px;
     }
 
     .config__item-label {
@@ -1549,8 +1808,8 @@
     }
 
     .config__item-title {
-        font-size: 14px;
-        font-weight: 500;
+        font-size: 13px;
+        font-weight: 600;
         color: var(--b3-theme-on-background);
     }
 
@@ -1564,6 +1823,11 @@
         display: flex;
         gap: 8px;
         align-items: center;
+
+        > .b3-text-field,
+        > .b3-select {
+            min-height: 34px;
+        }
 
         .b3-select {
             flex: 1;
@@ -1587,8 +1851,49 @@
     }
 
     @container settings-panel (max-width: 599px) {
+        .settings-layout {
+            grid-template-columns: 1fr;
+            grid-template-rows: auto minmax(0, 1fr);
+        }
+
+        .settings-sidebar {
+            padding: 10px;
+            border-right: none;
+            border-bottom: 1px solid var(--b3-border-color);
+        }
+
+        .settings-sidebar__brand,
+        .settings-save-state {
+            display: none;
+        }
+
+        .settings-nav {
+            flex-direction: row;
+            overflow-x: auto;
+            overflow-y: hidden;
+        }
+
+        .settings-nav__item {
+            width: auto;
+            min-width: max-content;
+            min-height: 34px;
+            padding: 6px 10px;
+        }
+
+        .settings-page-header {
+            padding: 16px;
+        }
+
+        .settings-page-header__copy h2 {
+            font-size: 18px;
+        }
+
+        .config__tab-wrap {
+            padding: 16px;
+        }
+
         .model-management-panel {
-            padding: 8px;
+            padding: 0;
         }
 
         .model-management-panel__toolbar {
@@ -1610,20 +1915,15 @@
         }
     }
 
-    @container settings-panel (max-width: 768px) {
-        .config__panel > .b3-tab-bar {
-            width: min(40%, 170px);
-            min-width: 112px;
-            overflow-y: auto;
-            overflow-x: hidden;
+    @container settings-panel (min-width: 600px) and (max-width: 768px) {
+        .settings-layout {
+            grid-template-columns: 172px minmax(0, 1fr);
         }
 
-        .config__panel > .b3-tab-bar .b3-list-item__text {
-            display: inline-block !important;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 100%;
+        .settings-page-header,
+        .config__tab-wrap {
+            padding-left: 18px;
+            padding-right: 18px;
         }
     }
 </style>
