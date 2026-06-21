@@ -60,21 +60,7 @@
   overflow: hidden;
 }
 
-.ai-sidebar__brand {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--oc-primary-light);
-  opacity: 0.8;
-  margin-left: auto;
-  white-space: nowrap;
-}
-
-.ai-sidebar__brand svg {
-  width: 14px;
-  height: 14px;
-}
+/* Brand and header styles are defined in styles/ai-sidebar.scss with higher specificity */
 
 .ai-sidebar__unsaved {
   color: var(--oc-warning);
@@ -568,4 +554,130 @@
   top: 0.15em;
   width: 0.8em;
   height: 0.8em;
+}
+
+/* ── Code Block Styles ─────────────────────────────────────── */
+
+/* 代码块工具栏（绝对定位到代码块顶部内侧） */
+.ai-sidebar .code-block-toolbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  background: transparent;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.ai-sidebar .code-block-toolbar > * {
+  pointer-events: auto;
+}
+
+/* 代码块语言标签（左上角） */
+.ai-sidebar .code-block-lang-label {
+  font-size: 12px;
+  color: var(--b3-theme-on-surface-light);
+  font-family: var(--b3-font-family-code);
+  line-height: 1.2;
+  user-select: none;
+  font-weight: 500;
+}
+
+/* 代码块复制按钮（右上角，悬停显示） */
+.ai-sidebar .code-block-copy-btn {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: none;
+  background: var(--b3-theme-surface);
+  color: var(--b3-theme-on-surface-light);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: opacity 0.2s, background 0.2s, color 0.2s;
+  box-sizing: border-box;
+  overflow: hidden;
+  flex-shrink: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ai-sidebar .code-block-copy-btn svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.ai-sidebar .code-block-copy-btn:hover {
+  background: var(--b3-list-hover);
+  color: var(--b3-theme-on-surface);
+}
+
+.ai-sidebar .code-block-copy-btn.copied {
+  color: var(--b3-theme-primary);
+}
+
+/* 代码块悬停时显示复制按钮 */
+.ai-sidebar .ai-message__content pre:hover .code-block-copy-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* 代码块容器样式 */
+.ai-sidebar .ai-message__content pre {
+  position: relative;
+  margin: 8px 0;
+  padding: 0 !important;
+  border-radius: 6px;
+  background: var(--b3-theme-surface);
+  border: 1px solid var(--b3-border-color);
+  box-shadow: var(--b3-tooltips-shadow);
+  overflow: hidden;
+  max-height: 600px;
+  display: flex;
+  flex-direction: column;
+}
+
+.ai-sidebar .ai-message__content pre code {
+  display: block;
+  padding: 12px !important;
+  margin: 0;
+  margin-top: 37px;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  font-family: var(--b3-font-family-code);
+  font-size: 0.9em;
+  line-height: 1.5;
+  background: transparent !important;
+}
+
+.ai-sidebar .ai-message__content pre code::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.ai-sidebar .ai-message__content pre code::-webkit-scrollbar-track {
+  background: var(--b3-theme-background);
+  border-radius: 4px;
+}
+
+.ai-sidebar .ai-message__content pre code::-webkit-scrollbar-thumb {
+  background: var(--b3-scroll-color);
+  border-radius: 4px;
+}
+
+.ai-sidebar .ai-message__content pre code::-webkit-scrollbar-thumb:hover {
+  background: var(--b3-theme-on-surface-light);
 }
