@@ -2,6 +2,7 @@ import type { Message, QuestionRequest } from '../../ai-chat';
 import type { ChatMode } from '../../utils/chatMode';
 import { base64ToBlob, saveAsset } from '../../utils/assets';
 import { runChat } from './run-controller';
+import type { OpenCodeTodo } from '../todo-state';
 
 export interface GeneratedImageAsset {
     mimeType: string;
@@ -23,6 +24,7 @@ export async function runSingleModelTarget(options: {
     onThinkingChunk: (chunk: string) => void;
     onThinkingComplete: () => void;
     onToolPartUpdate: (update: any) => void;
+    onTodoUpdated: (todos: OpenCodeTodo[]) => void;
     onPermissionAsked: (request: any) => void;
     onQuestionAsked: (request: QuestionRequest) => void;
     onChunk: (chunk: string) => void | Promise<void>;
@@ -66,6 +68,7 @@ export async function runSingleModelTarget(options: {
             onThinkingChunk: options.onThinkingChunk,
             onThinkingComplete: options.onThinkingComplete,
             onToolPartUpdate: options.onToolPartUpdate,
+            onTodoUpdated: options.onTodoUpdated,
             onPermissionAsked: options.onPermissionAsked,
             onQuestionAsked: options.onQuestionAsked,
             onChunk: options.onChunk,

@@ -67,6 +67,7 @@
     import { prepareDiffOperation } from './chat/diff-view';
     import { estimateComposerContextTokens, estimateMessagesContextTokens } from './chat/token-estimator';
     import { TaskStateController } from './chat/task-state-controller';
+    import type { OpenCodeTodo } from './chat/todo-state';
     import {
         canStartConcurrentTask,
         normalizeConcurrentTaskLimit,
@@ -190,6 +191,7 @@
         streamingMessage: string;
         streamingThinking: string;
         openCodeToolParts: any[];
+        openCodeTodos: OpenCodeTodo[];
         openCodeTimeline: OpenCodeTimelineItem[];
         isThinkingPhase: boolean;
         isLoading: boolean;
@@ -425,6 +427,7 @@
             streamingMessage,
             streamingThinking,
             openCodeToolParts,
+            openCodeTodos,
             openCodeTimeline,
             isThinkingPhase,
             isLoading,
@@ -447,6 +450,7 @@
         streamingMessage = state.streamingMessage;
         streamingThinking = state.streamingThinking;
         openCodeToolParts = state.openCodeToolParts;
+        openCodeTodos = state.openCodeTodos;
         openCodeTimeline = state.openCodeTimeline;
         isThinkingPhase = state.isThinkingPhase;
         isLoading = state.isLoading;
@@ -465,6 +469,7 @@
             streamingMessage: '',
             streamingThinking: '',
             openCodeToolParts: [],
+            openCodeTodos: [],
             openCodeTimeline: [],
             isThinkingPhase: false,
             isLoading: false,
@@ -561,6 +566,15 @@
         }
         markTaskUnread(taskId);
         updateStoredTaskState(taskId, state => applyTaskRuntimeToolUpdate(state, update));
+    }
+
+    function updateTodosForTask(taskId: string, todos: OpenCodeTodo[]) {
+        if (isActiveTask(taskId)) {
+            openCodeTodos = [...todos];
+            return;
+        }
+        markTaskUnread(taskId);
+        updateStoredTaskState(taskId, state => ({ ...state, openCodeTodos: [...todos] }));
     }
 
     // 在新窗口打开菜单
@@ -911,6 +925,7 @@
     let toolCallsExpanded: Record<string, boolean> = {}; // 工具调用是否展开，默认折叠
     let toolCallResultsExpanded: Record<string, boolean> = {}; // 工具结果是否展开，默认折叠
     let openCodeToolParts: any[] = []; // OpenCode 工具调用实时状态
+    let openCodeTodos: OpenCodeTodo[] = []; // 当前 OpenCode 会话的实时 Todo 清单
 
     async function appendStreamingThinking(chunk: string) {
         if (!chunk) return;
@@ -2787,6 +2802,7 @@
         streamingMessage = '';
         streamingThinking = '';
         openCodeToolParts = [];
+        openCodeTodos = [];
         resetOpenCodeTimeline();
         streamingThinkingCollapsed = true;
         streamingToolCallsCollapsed = true;
@@ -2865,6 +2881,7 @@
                             }
                         },
                         onToolPartUpdate: (update: any) => updateToolPartForTask(runTaskId, update),
+                        onTodoUpdated: (todos: OpenCodeTodo[]) => updateTodosForTask(runTaskId, todos),
                         onPermissionAsked: handleOpenCodePermissionAsked,
                         onQuestionAsked: handleOpenCodeQuestionAsked,
                         onChunk: async (chunk: string) => {
@@ -5066,6 +5083,7 @@
         {activeQuestionRequest}
         {activeSessions}
         {activeTaskIds}
+        {openCodeTodos}
         {addClipboardText}
         {addCurrentDocToContext}
         {applyCommand}

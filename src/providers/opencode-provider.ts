@@ -11,6 +11,7 @@ import {
 } from "./realtime-completion-watcher";
 import { getOpenCodeAgentForChatMode } from "../utils/chatMode";
 import { getOpenCodeServerAuthHeader } from "../utils/opencode";
+import { normalizeOpenCodeTodos, type OpenCodeTodo } from "../chat/todo-state";
 
 export type { OpenCodeModelInfo } from "./opencode-models";
 
@@ -48,6 +49,7 @@ export interface OpenCodeChatOptions {
     onThinkingChunk?: (text: string) => void;
     onThinkingComplete?: (thinking: string) => void;
     onToolPartUpdate?: (update: OpenCodeToolPartUpdate) => void;
+    onTodoUpdated?: (todos: OpenCodeTodo[]) => void;
     tools?: any;
     customBody?: any;
     onPermissionAsked?: (req: PermissionRequest) => void;
@@ -708,6 +710,7 @@ interface EventStreamCallbacks {
     onTextDelta?: (delta: string, partId: string) => void;
     onReasoningDelta?: (delta: string, partId: string) => void;
     onToolPartUpdate?: (part: any) => void;
+    onTodoUpdated?: (todos: OpenCodeTodo[]) => void;
     onSessionIdle?: () => void;
     onSessionError?: (error: any) => void;
     onPermissionAsked?: (payload: PermissionRequest) => void;
@@ -923,7 +926,11 @@ class EventStreamClient {
                 }
             }
 
-            if ((eventType.startsWith('tool.execute.') || eventType.toLowerCase().includes('tool')) && callbacks.onToolPartUpdate) {
+            if (eventType === 'todo.updated') {
+                const sessionID = props.sessionID || props.sessionId;
+                if (!sessionID || sessionID !== this.targetSessionId) return;
+                callbacks.onTodoUpdated?.(normalizeOpenCodeTodos(props.todos));
+            } else if ((eventType.startsWith('tool.execute.') || eventType.toLowerCase().includes('tool')) && callbacks.onToolPartUpdate) {
                 const sid = props.sessionID || props.sessionId || props.call?.sessionID;
                 if (sid && sid !== this.targetSessionId) return;
 
@@ -1453,6 +1460,13 @@ export async function chatOpenCode(
                         );
                         if (!options.onToolPartUpdate) return;
                         options.onToolPartUpdate(isOpenCodeToolPartUpdate(part) ? part : toolPartToUpdate(part));
+                    },
+                    onTodoUpdated: (todos) => {
+                        realtimeHadUsefulActivity = true;
+                        completionWatcher?.markPermissionWaiting(false);
+                        completionWatcher?.markActivity('todo-updated');
+                        logDiagnostic(diagnosticLogger, 'todo.updated', { count: todos.length, todos });
+                        options.onTodoUpdated?.(todos);
                     },
                     onSessionIdle: () => {
                         logDiagnostic(diagnosticLogger, 'session.status', {

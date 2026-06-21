@@ -1,4 +1,5 @@
 import type { Message } from './ai-chat';
+import type { OpenCodeTodo } from './chat/todo-state';
 
 export type OpenCodeTimelineItem =
     | { type: 'text'; id: string; content: string; isFinal?: boolean }
@@ -32,6 +33,7 @@ export interface TaskRuntime {
     streamingThinking: string;
     openCodeTimeline: OpenCodeTimelineItem[];
     openCodeToolParts: any[];
+    openCodeTodos: OpenCodeTodo[];
     isThinkingPhase: boolean;
     abortController: AbortController | null;
 }
@@ -44,6 +46,7 @@ export interface TaskViewState {
     streamingMessage: string;
     streamingThinking: string;
     openCodeToolParts: any[];
+    openCodeTodos: OpenCodeTodo[];
     openCodeTimeline: OpenCodeTimelineItem[];
     isThinkingPhase: boolean;
     isLoading: boolean;

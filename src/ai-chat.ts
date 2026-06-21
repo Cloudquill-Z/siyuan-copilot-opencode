@@ -6,6 +6,7 @@ import { chatOpenCode, fetchOpenCodeModels, deleteOpenCodeSession, type OpenCode
 import type { DiagnosticLogger } from './diagnostic-logger';
 import { parseOpenCodeModelId } from './utils/opencode';
 import { OPENCODE_WORKSPACE_DIR } from './pluginPaths';
+import type { OpenCodeTodo } from './chat/todo-state';
 
 export interface MessageAttachment {
     type: 'image' | 'file';
@@ -125,6 +126,7 @@ export interface ChatOptions {
     onThinkingChunk?: (chunk: string) => void;
     onThinkingComplete?: (thinking: string) => void;
     onToolPartUpdate?: (update: OpenCodeToolPartUpdate) => void;
+    onTodoUpdated?: (todos: OpenCodeTodo[]) => void;
     tools?: any;
     onPermissionAsked?: (req: PermissionRequest) => void;
     onQuestionAsked?: (req: QuestionRequest) => void;
@@ -251,6 +253,7 @@ export async function chat(
             onThinkingChunk: options.onThinkingChunk,
             onThinkingComplete: options.onThinkingComplete,
             onToolPartUpdate: options.onToolPartUpdate,
+            onTodoUpdated: options.onTodoUpdated,
             tools: options.tools,
             customBody: options.customBody,
             onPermissionAsked: options.onPermissionAsked,
