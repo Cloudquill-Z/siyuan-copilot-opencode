@@ -6,6 +6,13 @@
     },
     "settings": {
         "settingsPanel": "Settings Panel",
+        "pages": {
+            "connection": { "name": "Connection & Models", "description": "Connect to OpenCode and manage the models available in chat." },
+            "conversation": { "name": "Conversation", "description": "Adjust identity, input behavior, task concurrency, and the AI system prompt." },
+            "automation": { "name": "Automation & Export", "description": "Configure automatic session naming and defaults for saving chats to SiYuan." },
+            "memory": { "name": "Long-term Memory", "description": "Manage memory sources, extraction behavior, and injected context limits." },
+            "diagnostics": { "name": "Diagnostics & Maintenance", "description": "Review token usage, control diagnostics, and perform maintenance actions." }
+        },
         "settingsGroup": {
             "ai": "AI Settings",
             "aiPlatform": "AI Platform Configuration",

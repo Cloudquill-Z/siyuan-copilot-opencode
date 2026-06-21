@@ -40,9 +40,10 @@
             message: '',
         };
 
-    interface ISettingGroup {
+    interface SettingsPage {
+        id: 'connection' | 'conversation' | 'automation' | 'memory' | 'diagnostics';
         name: string;
-        items: ISettingItem[];
+        description: string;
     }
 
     let isRefreshingModels = false;
@@ -224,210 +225,167 @@
         }
     }
 
-    let groups: ISettingGroup[] = [
+    const pages: SettingsPage[] = [
         {
-            name: t('settings.settingsGroup.systemPrompt'),
-            items: [
-                {
-                    key: 'aiSystemPrompt',
-                    value: settings.aiSystemPrompt,
-                    type: 'textarea',
-                    title: t('settings.ai.systemPrompt.title'),
-                    description: t('settings.ai.systemPrompt.description'),
-                    direction: 'row',
-                    rows: 4,
-                    placeholder: t('settings.ai.systemPrompt.placeholder'),
-                },
-            ],
+            id: 'connection',
+            name: t('settings.pages.connection.name') || '连接与模型',
+            description: t('settings.pages.connection.description') || '连接 OpenCode 服务，并管理对话中可用的模型。',
         },
         {
-            name: t('settings.settingsGroup.platformManagement'),
-            items: [],
+            id: 'conversation',
+            name: t('settings.pages.conversation.name') || '对话体验',
+            description: t('settings.pages.conversation.description') || '调整身份显示、输入方式、任务并发和 AI 基础行为。',
         },
         {
-            name: t('settings.settingsGroup.displayAndOperation'),
-            items: [
-                {
-                    key: 'userName',
-                    value: settings.userName,
-                    type: 'textinput',
-                    title: t('settings.userName.title') || '用户名称',
-                    description:
-                        t('settings.userName.description') ||
-                        '设置聊天消息顶部显示的用户名称',
-                    placeholder: t('settings.userName.placeholder') || '留空显示用户',
-                },
-                {
-                    key: 'sendMessageShortcut',
-                    value: settings.sendMessageShortcut,
-                    type: 'select',
-                    title: t('settings.sendMessageShortcut.title'),
-                    description: t('settings.sendMessageShortcut.description'),
-                    options: {
-                        'ctrl+enter': t('settings.sendMessageShortcut.options.ctrlEnter'),
-                        enter: t('settings.sendMessageShortcut.options.enter'),
-                    },
-                },
-                {
-                    key: 'executionMessageMode',
-                    value: settings.executionMessageMode,
-                    type: 'select',
-                    title: t('settings.executionMessageMode.title') || '执行中发送',
-                    description:
-                        t('settings.executionMessageMode.description') ||
-                        '选择 AI 正在执行时继续发送消息的处理方式',
-                    options: {
-                        guide: t('settings.executionMessageMode.options.guide') || '引导',
-                        queue: t('settings.executionMessageMode.options.queue') || '排队',
-                    },
-                },
-                {
-                    key: 'maxConcurrentTasks',
-                    value: settings.maxConcurrentTasks,
-                    type: 'select',
-                    title: t('settings.maxConcurrentTasks.title') || '最大并行任务数',
-                    description:
-                        t('settings.maxConcurrentTasks.description') ||
-                        '限制后台同时运行的 OpenCode 任务数量',
-                    options: {
-                        1: '1',
-                        2: '2',
-                        3: '3',
-                        4: '4',
-                    },
-                },
-                {
-                    key: 'diagnosticLogMode',
-                    value: settings.diagnosticLogMode,
-                    type: 'select',
-                    title: t('settings.diagnosticLogMode.title') || 'OpenCode 诊断日志',
-                    description:
-                        t('settings.diagnosticLogMode.description') ||
-                        '记录下一次 OpenCode 请求的时间线、工具事件和可见思考片段',
-                    options: {
-                        off: t('settings.diagnosticLogMode.options.off') || '关闭',
-                        next: t('settings.diagnosticLogMode.options.next') || '仅下一次',
-                        always: t('settings.diagnosticLogMode.options.always') || '一直开启',
-                    },
-                },
-                {
-                    key: 'diagnosticLogLevel',
-                    value: settings.diagnosticLogLevel,
-                    type: 'select',
-                    title: t('settings.diagnosticLogLevel.title') || '诊断日志详细程度',
-                    description:
-                        t('settings.diagnosticLogLevel.description') ||
-                        '安全摘要默认脱敏和截断；完整诊断会记录更多提示词与输出片段',
-                    options: {
-                        safe: t('settings.diagnosticLogLevel.options.safe') || '安全摘要',
-                        full: t('settings.diagnosticLogLevel.options.full') || '完整诊断',
-                    },
-                },
-                {
-                    key: 'messageFontSize',
-                    value: settings.messageFontSize,
-                    type: 'number',
-                    title: t('settings.messageFontSize.title'),
-                    description: t('settings.messageFontSize.description'),
-                    number: {
-                        min: 5,
-                        max: 32,
-                        step: 1,
-                    },
-                },
-            ],
+            id: 'automation',
+            name: t('settings.pages.automation.name') || '自动化与导出',
+            description: t('settings.pages.automation.description') || '配置会话自动命名和保存到思源笔记的默认方式。',
         },
         {
-            name: t('settings.settingsGroup.tokenStats') || 'Token 统计',
-            items: [],
+            id: 'memory',
+            name: t('settings.pages.memory.name') || '长期记忆',
+            description: t('settings.pages.memory.description') || '管理记忆来源、提取策略和注入对话的内容范围。',
         },
         {
-            name: t('settings.settingsGroup.noteExport'),
-            items: [
-                {
-                    key: 'exportNotebook',
-                    value: settings.exportNotebook,
-                    type: 'select',
-                    title: t('settings.exportNotebook.title'),
-                    description: t('settings.exportNotebook.description'),
-                    options: notebookOptions,
-                },
-                {
-                    key: 'exportDefaultPath',
-                    value: settings.exportDefaultPath,
-                    type: 'textinput',
-                    title: t('settings.exportDefaultPath.title'),
-                    description: t('settings.exportDefaultPath.description'),
-                    placeholder: t('settings.exportDefaultPath.placeholder'),
-                },
-            ],
-        },
-        {
-            name: t('settings.settingsGroup.sessionManagement') || '会话管理',
-            items: [
-                {
-                    key: 'autoRenameSession',
-                    value: settings.autoRenameSession,
-                    type: 'checkbox',
-                    title: t('settings.autoRenameSession.title') || '会话自动重命名',
-                    description:
-                        t('settings.autoRenameSession.description') ||
-                        '在首次发送消息时，自动使用AI生成会话标题',
-                },
-            ],
-        },
-        {
-            name: t('settings.settingsGroup.soul') || '记忆',
-            items: [
-                {
-                    key: 'soulDocId',
-                    value: settings.soulDocId,
-                    type: 'textinput',
-                    title: t('settings.soulDocId.title') || '灵魂文档 ID',
-                    description:
-                        t('settings.soulDocId.description') ||
-                        '设置核心档案使用的思源文档 ID。',
-                    placeholder:
-                        t('settings.soulDocId.placeholder') ||
-                        '输入文档块 ID，如 20260312120000-xxxxxxxx',
-                },
-            ],
-        },
-        {
-            name: t('settings.settingsGroup.reset') || 'Reset Settings',
-            items: [
-                {
-                    key: 'reset',
-                    value: '',
-                    type: 'button',
-                    title: t('settings.reset.title') || 'Reset Settings',
-                    description:
-                        t('settings.reset.description') || 'Reset all settings to default values',
-                    button: {
-                        label: t('settings.reset.label') || 'Reset',
-                        callback: async () => {
-                            confirm(
-                                t('settings.reset.title') || 'Reset Settings',
-                                t('settings.reset.confirmMessage') ||
-                                    'Are you sure you want to reset all settings to default values? This action cannot be undone.',
-                                async () => {
-                                    settings = { ...getDefaultSettings() };
-                                    updateGroupItems();
-                                    await saveSettings();
-                                    await pushMsg(t('settings.reset.message'));
-                                },
-	                                () => {
-                                    // 用户取消重置，无需提示。
-	                                }
-	                            );
-                        },
-                    },
-                },
-            ],
+            id: 'diagnostics',
+            name: t('settings.pages.diagnostics.name') || '诊断与维护',
+            description: t('settings.pages.diagnostics.description') || '查看 Token 使用、控制诊断记录并执行维护操作。',
         },
     ];
 
-    let focusGroup = groups[0].name;
+    let activePageId: SettingsPage['id'] = 'connection';
+    $: activePage = pages.find(page => page.id === activePageId) || pages[0];
+
+    $: conversationItems = [
+        {
+            key: 'userName',
+            value: settings.userName,
+            type: 'textinput',
+            title: t('settings.userName.title') || '用户名称',
+            description: t('settings.userName.description') || '设置聊天消息顶部显示的用户名称',
+            placeholder: t('settings.userName.placeholder') || '留空显示用户',
+        },
+        {
+            key: 'sendMessageShortcut',
+            value: settings.sendMessageShortcut,
+            type: 'select',
+            title: t('settings.sendMessageShortcut.title'),
+            description: t('settings.sendMessageShortcut.description'),
+            options: {
+                'ctrl+enter': t('settings.sendMessageShortcut.options.ctrlEnter'),
+                enter: t('settings.sendMessageShortcut.options.enter'),
+            },
+        },
+        {
+            key: 'executionMessageMode',
+            value: settings.executionMessageMode,
+            type: 'select',
+            title: t('settings.executionMessageMode.title') || '执行中发送',
+            description: t('settings.executionMessageMode.description') || '选择 AI 正在执行时继续发送消息的处理方式',
+            options: {
+                guide: t('settings.executionMessageMode.options.guide') || '引导',
+                queue: t('settings.executionMessageMode.options.queue') || '排队',
+            },
+        },
+        {
+            key: 'maxConcurrentTasks',
+            value: settings.maxConcurrentTasks,
+            type: 'select',
+            title: t('settings.maxConcurrentTasks.title') || '最大并行任务数',
+            description: t('settings.maxConcurrentTasks.description') || '限制后台同时运行的 OpenCode 任务数量',
+            options: { 1: '1', 2: '2', 3: '3', 4: '4' },
+        },
+        {
+            key: 'messageFontSize',
+            value: settings.messageFontSize,
+            type: 'number',
+            title: t('settings.messageFontSize.title'),
+            description: t('settings.messageFontSize.description'),
+            number: { min: 5, max: 32, step: 1 },
+        },
+        {
+            key: 'aiSystemPrompt',
+            value: settings.aiSystemPrompt,
+            type: 'textarea',
+            title: t('settings.ai.systemPrompt.title'),
+            description: t('settings.ai.systemPrompt.description'),
+            direction: 'row',
+            rows: 6,
+            placeholder: t('settings.ai.systemPrompt.placeholder'),
+        },
+    ] as ISettingItem[];
+
+    $: automationToggleItems = [
+        {
+            key: 'autoRenameSession',
+            value: settings.autoRenameSession,
+            type: 'checkbox',
+            title: t('settings.autoRenameSession.title') || '会话自动重命名',
+            description: t('settings.autoRenameSession.description') || '在首次发送消息时，自动使用 AI 生成会话标题',
+        },
+    ] as ISettingItem[];
+
+    $: exportItems = [
+        {
+            key: 'exportNotebook',
+            value: settings.exportNotebook,
+            type: 'select',
+            title: t('settings.exportNotebook.title'),
+            description: t('settings.exportNotebook.description'),
+            options: notebookOptions,
+        },
+        {
+            key: 'exportDefaultPath',
+            value: settings.exportDefaultPath,
+            type: 'textinput',
+            title: t('settings.exportDefaultPath.title'),
+            description: t('settings.exportDefaultPath.description'),
+            placeholder: t('settings.exportDefaultPath.placeholder'),
+        },
+    ] as ISettingItem[];
+
+    $: diagnosticItems = [
+        {
+            key: 'diagnosticLogMode',
+            value: settings.diagnosticLogMode,
+            type: 'select',
+            title: t('settings.diagnosticLogMode.title') || 'OpenCode 诊断日志',
+            description: t('settings.diagnosticLogMode.description') || '记录 OpenCode 请求的时间线、工具事件和可见思考片段',
+            options: {
+                off: t('settings.diagnosticLogMode.options.off') || '关闭',
+                next: t('settings.diagnosticLogMode.options.next') || '仅下一次',
+                always: t('settings.diagnosticLogMode.options.always') || '一直开启',
+            },
+        },
+        ...(settings.diagnosticLogMode !== 'off'
+            ? [{
+                key: 'diagnosticLogLevel',
+                value: settings.diagnosticLogLevel,
+                type: 'select',
+                title: t('settings.diagnosticLogLevel.title') || '诊断日志详细程度',
+                description: t('settings.diagnosticLogLevel.description') || '安全摘要默认脱敏和截断；完整诊断会记录更多提示词与输出片段',
+                options: {
+                    safe: t('settings.diagnosticLogLevel.options.safe') || '安全摘要',
+                    full: t('settings.diagnosticLogLevel.options.full') || '完整诊断',
+                },
+            }]
+            : []),
+    ] as ISettingItem[];
+
+    function resetSettings() {
+        confirm(
+            t('settings.reset.title') || '恢复默认设置',
+            t('settings.reset.confirmMessage') || '确定恢复全部默认设置吗？此操作无法撤销。',
+            async () => {
+                settings = normalizeSettings(getDefaultSettings());
+                await saveSettings();
+                await pushMsg(t('settings.reset.message'));
+            },
+            () => {
+                // 用户取消重置，无需提示。
+            }
+        );
+    }
 
     interface ChangeEvent {
         group: string;
@@ -506,7 +464,6 @@
             await validateSoulDocId();
         }
 
-        updateGroupItems();
     }
 
     async function loadNotebooks() {
@@ -579,38 +536,6 @@
         }
     }
 
-    function updateGroupItems() {
-        groups = groups.map(group => ({
-            ...group,
-            items: group.items.map(item => {
-                const updatedItem: any = {
-                    ...item,
-                    value: settings[item.key] ?? item.value,
-                };
-                if (item.key === 'exportNotebook') {
-                    updatedItem.options = notebookOptions;
-                }
-                return updatedItem;
-            }),
-        }));
-    }
-
-    $: currentGroup = groups.find(group => group.name === focusGroup);
-    $: currentGroupDescription = getGroupDescription(focusGroup);
-
-    function getGroupDescription(groupName: string): string {
-        const descriptions: Record<string, string> = {
-            [t('settings.settingsGroup.systemPrompt')]: '定义 AI 的基础角色、工作边界和长期行为。',
-            [t('settings.settingsGroup.platformManagement')]: '管理 OpenCode 服务状态、地址与可用模型。',
-            [t('settings.settingsGroup.displayAndOperation')]: '调整身份显示、交互方式、任务并发和诊断选项。',
-            [t('settings.settingsGroup.tokenStats') || 'Token 统计']: '查看不同时间范围和模型的 Token 使用情况。',
-            [t('settings.settingsGroup.noteExport')]: '设置对话保存到笔记时使用的笔记本和默认路径。',
-            [t('settings.settingsGroup.sessionManagement') || '会话管理']: '管理会话命名方式与相关自动化行为。',
-            [t('settings.settingsGroup.soul') || '记忆']: '配置长期记忆的存储位置、提取范围与注入限制。',
-            [t('settings.settingsGroup.reset') || 'Reset Settings']: '恢复默认配置；此操作会覆盖当前设置。',
-        };
-        return descriptions[groupName] || '管理 OpenCode 插件设置。';
-    }
 </script>
 
 <div class="settings-layout">
@@ -620,18 +545,18 @@
             <div class="settings-sidebar__caption">插件设置</div>
         </div>
         <div class="settings-nav" aria-label="设置分类" role="tablist">
-            {#each groups as group}
+            {#each pages as page}
                 <button
                     type="button"
                     class="settings-nav__item"
-                    class:settings-nav__item--active={group.name === focusGroup}
-                    aria-selected={group.name === focusGroup}
+                    class:settings-nav__item--active={page.id === activePageId}
+                    aria-selected={page.id === activePageId}
                     on:click={() => {
-                        focusGroup = group.name;
+                        activePageId = page.id;
                     }}
                     role="tab"
                 >
-                    <span>{group.name}</span>
+                    <span>{page.name}</span>
                 </button>
             {/each}
         </div>
@@ -655,20 +580,22 @@
         <header class="settings-page-header">
             <div class="settings-page-header__copy">
                 <div class="settings-page-header__eyebrow">设置</div>
-                <h2>{focusGroup}</h2>
-                <p>{currentGroupDescription}</p>
+                <h2>{activePage.name}</h2>
+                <p>{activePage.description}</p>
             </div>
             <span class="settings-version">v{pluginManifest.version}</span>
         </header>
         <div class="config__tab-wrap">
-        {#if focusGroup === t('settings.settingsGroup.systemPrompt')}
-            <SettingPanel
-                group={currentGroup?.name || ''}
-                settingItems={currentGroup?.items || []}
-                display={true}
-                on:changed={onChanged}
-            />
-        {:else if focusGroup === t('settings.settingsGroup.platformManagement')}
+        {#if activePageId === 'conversation'}
+            <div data-page-settings="userName sendMessageShortcut executionMessageMode maxConcurrentTasks messageFontSize aiSystemPrompt">
+                <SettingPanel
+                    group={activePage.name}
+                    settingItems={conversationItems}
+                    display={true}
+                    on:changed={onChanged}
+                />
+            </div>
+        {:else if activePageId === 'connection'}
             <div class="model-management-panel">
                 <div class="model-management-panel__section">
                     <div class="config__item">
@@ -795,11 +722,14 @@
                     {/if}
                 </div>
             </div>
-        {:else if focusGroup === (t('settings.settingsGroup.sessionManagement') || '会话管理')}
-            <div class="session-management-panel">
+        {:else if activePageId === 'automation'}
+            <div
+                class="session-management-panel"
+                data-page-settings="autoRenameSession exportNotebook exportDefaultPath"
+            >
                 <SettingPanel
-                    group={currentGroup?.name || ''}
-                    settingItems={currentGroup?.items || []}
+                    group={activePage.name}
+                    settingItems={automationToggleItems}
                     display={true}
                     on:changed={onChanged}
                 />
@@ -866,8 +796,21 @@
                         </div>
                     </div>
                 {/if}
+
+                <div class="settings-section">
+                    <div class="settings-section__heading">
+                        <strong>保存到笔记</strong>
+                        <span>设置保存对话时默认使用的笔记本和相对路径。</span>
+                    </div>
+                    <SettingPanel
+                        group={activePage.name}
+                        settingItems={exportItems}
+                        display={true}
+                        on:changed={onChanged}
+                    />
+                </div>
             </div>
-        {:else if focusGroup === (t('settings.settingsGroup.tokenStats') || 'Token 统计')}
+        {:else if activePageId === 'diagnostics'}
             <div class="token-stats-panel">
                 <div class="token-stats-panel__header">
                     <div>
@@ -947,8 +890,31 @@
                         </div>
                     {/if}
                 </div>
+
+                <div class="settings-section" data-page-settings="diagnosticLogMode diagnosticLogLevel">
+                    <div class="settings-section__heading">
+                        <strong>诊断日志</strong>
+                        <span>仅在排查 OpenCode 请求问题时开启。</span>
+                    </div>
+                    <SettingPanel
+                        group={activePage.name}
+                        settingItems={diagnosticItems}
+                        display={true}
+                        on:changed={onChanged}
+                    />
+                </div>
+
+                <div class="settings-danger-zone">
+                    <div>
+                        <strong>{t('settings.reset.title') || '恢复默认设置'}</strong>
+                        <span>{t('settings.reset.description') || '清除当前配置并恢复插件默认值。'}</span>
+                    </div>
+                    <button class="b3-button b3-button--cancel" type="button" on:click={resetSettings}>
+                        {t('settings.reset.label') || '恢复默认设置'}
+                    </button>
+                </div>
             </div>
-        {:else if focusGroup === (t('settings.settingsGroup.soul') || '记忆')}
+        {:else if activePageId === 'memory'}
             <div class="memory-settings-panel">
                 <div class="config__item">
                     <div class="config__item-label">
@@ -970,6 +936,7 @@
                     </div>
                 </div>
 
+                {#if settings.memory.enabled}
                 <div class="config__item">
                     <div class="config__item-label">
                         <div class="config__item-title">
@@ -1119,14 +1086,12 @@
                     {t('settings.memory.initCommandHint') ||
                         '在聊天中发送 /init，让 OpenCode 扫描笔记仓库并写入 Agent 总览。'}
                 </div>
+                {:else}
+                    <div class="settings-dependent-hint">
+                        开启长期记忆后，可继续配置记忆笔记本、核心档案和注入范围。
+                    </div>
+                {/if}
             </div>
-        {:else}
-            <SettingPanel
-                group={currentGroup?.name || ''}
-                settingItems={currentGroup?.items || []}
-                display={true}
-                on:changed={onChanged}
-            />
         {/if}
         </div>
     </main>
@@ -1358,6 +1323,75 @@
     :global(.config__tab-container_plugin .b3-text-field),
     :global(.config__tab-container_plugin .b3-select) {
         min-height: 34px;
+    }
+
+    .settings-section {
+        margin-top: 24px;
+    }
+
+    .settings-section__heading {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-bottom: 8px;
+
+        strong {
+            color: var(--b3-theme-on-background);
+            font-size: 14px;
+            font-weight: 650;
+        }
+
+        span {
+            color: var(--b3-theme-on-surface-light);
+            font-size: 12px;
+            line-height: 1.5;
+        }
+    }
+
+    .settings-dependent-hint {
+        margin-top: 12px;
+        padding: 16px;
+        border: 1px dashed var(--b3-border-color);
+        border-radius: 9px;
+        background: var(--b3-theme-surface);
+        color: var(--b3-theme-on-surface-light);
+        font-size: 12px;
+        line-height: 1.55;
+    }
+
+    .settings-danger-zone {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-top: 24px;
+        padding: 16px;
+        border: 1px solid color-mix(in srgb, var(--b3-card-error-color) 35%, var(--b3-border-color));
+        border-radius: 9px;
+        background: color-mix(in srgb, var(--b3-card-error-background) 55%, var(--b3-theme-background));
+
+        > div {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        strong {
+            color: var(--b3-card-error-color);
+            font-size: 13px;
+            font-weight: 650;
+        }
+
+        span {
+            color: var(--b3-theme-on-surface-light);
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        button {
+            flex-shrink: 0;
+        }
     }
 
     .model-management-panel {
@@ -1912,6 +1946,15 @@
 
         .model-management-panel__count {
             text-align: center;
+        }
+
+        .settings-danger-zone {
+            align-items: stretch;
+            flex-direction: column;
+
+            button {
+                width: 100%;
+            }
         }
     }
 
