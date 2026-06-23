@@ -4,6 +4,7 @@ import {
     openTab,
     getBackend,
     openWindow,
+    getModelByDockType,
 } from "siyuan";
 
 import { pushMsg, pushErrMsg, putFile, getFileBlob, readDir } from "./api";
@@ -96,6 +97,7 @@ export default class PluginSample extends Plugin {
     private openCodeInitRunId = 0;
     private isUnloaded = true;
     private dockRestoreTimer: number | null = null;
+    private readonly aiSidebarRootSelector = '[data-opencode-ai-sidebar-root="true"]';
 
     /**
      * 加载 WebView 历史记录
@@ -322,6 +324,19 @@ export default class PluginSample extends Plugin {
         if (mime.includes('icon') || mime.includes('ico')) return 'ico';
         if (mime.includes('webp')) return 'webp';
         return 'png';
+    }
+
+    private mountAISidebar(element: HTMLElement) {
+        if (!element) return;
+        if (this.aiSidebarApps.has(element) && element.querySelector(this.aiSidebarRootSelector)) {
+            return;
+        }
+        this.aiSidebarApps.set(element, new AISidebar({
+            target: element,
+            props: {
+                plugin: this
+            }
+        }));
     }
 
     private dataURItoBlob(dataURI: string): Blob | null {
@@ -1725,13 +1740,7 @@ export default class PluginSample extends Plugin {
             },
             type: AI_SIDEBAR_TYPE,
             init(dock) {
-                const element = dock.element as HTMLElement;
-                pluginInstance.aiSidebarApps.set(element, new AISidebar({
-                    target: dock.element,
-                    props: {
-                        plugin: pluginInstance
-                    }
-                }));
+                pluginInstance.mountAISidebar(dock.element as HTMLElement);
             },
             destroy() {
                 pluginInstance.aiSidebarApps.destroy(this.element as HTMLElement);
@@ -1743,18 +1752,20 @@ export default class PluginSample extends Plugin {
         const dockType = pluginInstance.name + AI_SIDEBAR_TYPE;
         const restoreDock = () => {
             const dockBtn = document.querySelector(`.dock__item[data-type="${dockType}"]`) as HTMLElement | null;
-            const model = dockResult.model;
+            const model = (getModelByDockType(dockType) || dockResult.model) as any;
             const element = model?.element as HTMLElement | undefined;
             const decision = getDockRestoreDecision({
                 lifecycleCurrent: pluginInstance.isOpenCodeInitCurrent(layoutRunId),
                 elementReady: !!element,
+                elementConnected: element?.isConnected ?? false,
                 mounted: !!element && pluginInstance.aiSidebarApps.has(element),
+                hasSidebarRoot: !!element && !!element.querySelector(pluginInstance.aiSidebarRootSelector),
                 buttonActive: dockBtn?.classList.contains('dock__item--active') ?? false,
                 panelVisible: !!element && element.offsetParent !== null,
             });
             if (decision === 'mount' && element) {
                 try {
-                    model.init(model);
+                    pluginInstance.mountAISidebar(element);
                     return 'stop';
                 } catch (e) {
                     console.warn('[AI Sidebar] re-init dock failed:', e);

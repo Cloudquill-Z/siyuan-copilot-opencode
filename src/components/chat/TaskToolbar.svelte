@@ -22,6 +22,7 @@
     export let onOpenWindow: () => void;
     export let onToggleFullscreen: () => void;
     export let onOpenSettings: () => void;
+    export let getSessionElapsedText: (session: any) => string;
 
     let showOpenMenu = false;
     onMount(() => {
@@ -49,6 +50,7 @@
         on:update={event => onUpdate(event.detail.sessions)}
         on:saveToNote={event => onSaveToNote(event.detail.sessionId)}
         on:exportFile={event => onExportFile(event.detail.sessionId)}
+        {getSessionElapsedText}
     />
     <button class="ai-sidebar__toolbar-btn" title={t('aiSidebar.actions.copyAllChat')} on:click={onCopyAll}><svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg></button>
     <button class="ai-sidebar__toolbar-btn" title={t('aiSidebar.actions.saveToNote')} on:click={onSaveCurrent}><svg class="b3-button__icon"><use xlink:href="#iconDownload"></use></svg></button>

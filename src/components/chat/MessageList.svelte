@@ -28,6 +28,7 @@
     export let handleContextMenu: any;
     export let handleScroll: any;
     export let isLoading: boolean;
+    export let currentTaskElapsedText: string;
     export let isContextCompactionLikely: boolean;
     export let isThinkingCollapsed: any;
     export let isThinkingPhase: boolean;
@@ -1956,6 +1957,9 @@
             >
                 <div class="ai-message__header">
                     <span class="ai-message__role">🤖 {getCurrentAssistantDisplayName()}</span>
+                    {#if currentTaskElapsedText}
+                        <span class="ai-message__elapsed">耗时 {currentTaskElapsedText}</span>
+                    {/if}
                 </div>
 
                 {#if isContextCompactionLikely}

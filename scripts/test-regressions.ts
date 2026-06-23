@@ -109,10 +109,69 @@ assert.equal(
     '恢复为 active 的 Dock 应重新挂载组件'
 );
 assert.equal(
+    getDockRestoreDecision({
+        lifecycleCurrent: true,
+        elementReady: true,
+        elementConnected: true,
+        mounted: false,
+        hasSidebarRoot: false,
+        buttonActive: true,
+        panelVisible: false,
+    }),
+    'mount',
+    'Dock 面板已恢复但内容为空时必须补挂载组件'
+);
+assert.equal(
+    getDockRestoreDecision({
+        lifecycleCurrent: true,
+        elementReady: true,
+        elementConnected: true,
+        mounted: true,
+        hasSidebarRoot: true,
+        buttonActive: true,
+        panelVisible: true,
+    }),
+    'stop',
+    '已挂载且已有侧栏根节点时应停止恢复'
+);
+assert.equal(
     getDockRestoreDecision({ lifecycleCurrent: false, elementReady: false, mounted: false }),
     'stop',
     '过期插件生命周期必须停止恢复'
 );
+
+const {
+    finishTaskRuntime,
+    formatTaskElapsed,
+    getTaskElapsedMs,
+    startTaskRuntime,
+} = await import('../src/task-types.ts');
+
+const runtimeStarted = startTaskRuntime({
+    ...{
+        messages: [],
+        currentInput: '',
+        currentAttachments: [],
+        contextDocuments: [],
+        streamingMessage: '',
+        streamingThinking: '',
+        openCodeToolParts: [],
+        openCodeTodos: [],
+        openCodeTimeline: [],
+        isThinkingPhase: false,
+        isLoading: false,
+        hasUnsavedChanges: false,
+        lastPreparedContextTokens: 0,
+    },
+}, 1_000);
+assert.equal(runtimeStarted.startedAt, 1_000, '任务开始时应记录 startedAt');
+assert.equal(runtimeStarted.finishedAt, undefined, '任务开始时不应记录 finishedAt');
+assert.equal(getTaskElapsedMs(runtimeStarted, 62_500), 61_500, '运行中任务应按当前时间计算耗时');
+assert.equal(formatTaskElapsed(61_500), '01:01', '分钟级耗时应格式化为 mm:ss');
+assert.equal(formatTaskElapsed(3_661_000), '1:01:01', '小时级耗时应格式化为 h:mm:ss');
+const runtimeFinished = finishTaskRuntime(runtimeStarted, 63_000);
+assert.equal(runtimeFinished.finishedAt, 63_000, '任务结束时应记录 finishedAt');
+assert.equal(getTaskElapsedMs(runtimeFinished, 70_000), 62_000, '已结束任务应固定使用 finishedAt 计算耗时');
 
 const { buildSessionMarkdown, refreshSessionExportContext } = await import(
     '../src/utils/sessionExport.ts'

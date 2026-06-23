@@ -156,6 +156,10 @@
         appendTaskRuntimeText,
         appendTaskRuntimeThinking,
         applyTaskRuntimeToolUpdate,
+        finishTaskRuntime,
+        formatTaskElapsed,
+        getTaskElapsedMs,
+        startTaskRuntime,
         type OpenCodeTimelineItem,
         type TaskSession,
     } from './task-types';
@@ -197,12 +201,18 @@
         isLoading: boolean;
         hasUnsavedChanges: boolean;
         lastPreparedContextTokens: number;
+        startedAt?: number;
+        finishedAt?: number;
     }
 
     let messages: Message[] = [];
     let currentInput = '';
     let isInputComposing = false;
     let isLoading = false;
+    let startedAt: number | undefined;
+    let finishedAt: number | undefined;
+    let runtimeNow = Date.now();
+    let runtimeClockTimer: number | null = null;
     let streamingMessage = '';
     let streamingThinkingCollapsed = true;
     let streamingToolCallsCollapsed = true;
@@ -433,6 +443,8 @@
             isLoading,
             hasUnsavedChanges,
             lastPreparedContextTokens,
+            startedAt,
+            finishedAt,
         };
     }
 
@@ -456,6 +468,8 @@
         isLoading = state.isLoading;
         hasUnsavedChanges = state.hasUnsavedChanges;
         lastPreparedContextTokens = state.lastPreparedContextTokens || 0;
+        startedAt = state.startedAt;
+        finishedAt = state.finishedAt;
     }
 
     function blankTaskState(): SidebarSessionState {
@@ -475,8 +489,61 @@
             isLoading: false,
             hasUnsavedChanges: false,
             lastPreparedContextTokens: 0,
+            startedAt: undefined,
+            finishedAt: undefined,
         };
     }
+
+    function beginTaskRuntime(now = Date.now()) {
+        const next = startTaskRuntime(captureActiveTaskState(), now);
+        startedAt = next.startedAt;
+        finishedAt = next.finishedAt;
+        isLoading = next.isLoading;
+        runtimeNow = now;
+        if (currentSessionId) markSessionRuntimeStarted(currentSessionId, now);
+    }
+
+    function completeTaskRuntime(now = Date.now()) {
+        const next = finishTaskRuntime(captureActiveTaskState(), now);
+        finishedAt = next.finishedAt;
+        isLoading = next.isLoading;
+        runtimeNow = now;
+        if (currentSessionId) markSessionRuntimeFinished(currentSessionId, now);
+    }
+
+    function markSessionRuntimeStarted(taskId: string, now = Date.now()) {
+        sessions = sessions.map(session => session.id === taskId
+            ? { ...session, status: 'running', startedAt: now, finishedAt: undefined }
+            : session
+        );
+    }
+
+    function markSessionRuntimeFinished(taskId: string, now = Date.now()) {
+        sessions = sessions.map(session => session.id === taskId
+            ? { ...session, status: 'completed', finishedAt: session.startedAt ? now : session.finishedAt }
+            : session
+        );
+    }
+
+    function getTaskStateForDisplay(taskId: string): SidebarSessionState {
+        if (taskId === activeTaskKey()) return captureActiveTaskState();
+        return taskStateController.getState(taskId);
+    }
+
+    function getTaskElapsedText(taskId: string): string {
+        const state = getTaskStateForDisplay(taskId);
+        const elapsed = getTaskElapsedMs(state, runtimeNow);
+        return elapsed > 0 ? formatTaskElapsed(elapsed) : '';
+    }
+
+    function getSessionElapsedText(session: ChatSession): string {
+        const elapsed = getTaskElapsedMs(session, runtimeNow);
+        return elapsed > 0 ? formatTaskElapsed(elapsed) : '';
+    }
+
+    $: currentTaskElapsedText = getTaskElapsedMs({ startedAt, finishedAt }, runtimeNow) > 0
+        ? formatTaskElapsed(getTaskElapsedMs({ startedAt, finishedAt }, runtimeNow))
+        : '';
 
     function ensureActiveTaskTab(taskId: string) {
         taskStateController.ensureTab(taskId, activeTaskKey(), activeSessions);
@@ -1293,6 +1360,10 @@
     let unsubscribe: () => void;
 
     onMount(async () => {
+        runtimeClockTimer = window.setInterval(() => {
+            runtimeNow = Date.now();
+        }, 1000);
+
         settings = await plugin.loadSettings();
 
 
@@ -1534,6 +1605,10 @@
             savePathSearchTimeout = null;
         }
         revokeLoadedAssetUrls();
+        if (runtimeClockTimer !== null) {
+            window.clearInterval(runtimeClockTimer);
+            runtimeClockTimer = null;
+        }
 
         // 如果有未保存的更改，自动保存当前会话
         if (hasUnsavedChanges && messages.filter(m => m.role !== 'system').length > 0) {
@@ -2358,7 +2433,7 @@
         currentInput = '';
         attachmentController.replace([]);
         contextController.replace([]);
-        isLoading = true;
+        if (!startedAt || !isLoading) beginTaskRuntime();
         isWaitingForAnswerSelection = true;
         selectedAnswerIndex = null; // 重置选择的答案索引，因为这是新的多模型对话
         hasUnsavedChanges = true;
@@ -2380,9 +2455,12 @@
                     createdAt: now,
                     updatedAt: now,
                     status: 'running',
+                    startedAt: startedAt || now,
+                    finishedAt: undefined,
                 };
                 sessions = [newSession, ...sessions];
                 currentSessionId = newSession.id;
+                markSessionRuntimeStarted(newSession.id, startedAt || now);
                 replaceActiveDraftWithTask(newSession.id);
                 await saveSessions();
 
@@ -2397,7 +2475,7 @@
         const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
         if (!lastUserMessage) {
             pushErrMsg(t('aiSidebar.errors.noUserMessage'));
-            isLoading = false;
+            completeTaskRuntime();
             return;
         }
 
@@ -2434,6 +2512,7 @@
         if (validModels.length === 0) {
             pushErrMsg('所选的多模型已全部失效，请重新选择模型');
             enableMultiModel = false;
+            completeTaskRuntime();
             return;
         }
 
@@ -2505,7 +2584,7 @@
             settled: persistMultiModelAssistantSnapshot,
         });
 
-        isLoading = false;
+        completeTaskRuntime();
         setController(currentSessionId, null);
     }
 
@@ -2578,7 +2657,7 @@
 
     // 发送消息
     async function handleOpenCodeCommand(input: string) {
-        isLoading = true;
+        beginTaskRuntime();
         const parts = input.slice(1).split(/\s+/);
         const command = parts[0];
         const args = parts.slice(1).join(' ');
@@ -2617,7 +2696,7 @@
             hasUnsavedChanges = true;
         } finally {
             currentInput = '';
-            isLoading = false;
+            completeTaskRuntime();
         }
     }
 
@@ -2689,7 +2768,7 @@
         }
 
         // 【修复】立即设置加载状态，防止并发点击触发多次发送
-        isLoading = true;
+        beginTaskRuntime();
 
         // 等待拖拽后仍在后台落盘的附件，保证会话里有稳定的 path
         try {
@@ -2701,7 +2780,7 @@
         // 如果处于等待选择答案状态，阻止发送
         if (isWaitingForAnswerSelection) {
             pushErrMsg(t('multiModel.waitingSelection'));
-            isLoading = false;
+            completeTaskRuntime();
             return;
         }
 
@@ -2709,20 +2788,20 @@
         const providerConfig = getCurrentProviderConfig();
         if (!providerConfig) {
             pushErrMsg(t('aiSidebar.errors.noProvider'));
-            isLoading = false;
+            completeTaskRuntime();
             return;
         }
 
         if (providerRequiresApiKey(currentProvider) && !providerConfig.apiKey) {
             pushErrMsg(t('aiSidebar.errors.noApiKey'));
-            isLoading = false;
+            completeTaskRuntime();
             return;
         }
 
         const modelConfig = getCurrentModelConfig();
         if (!modelConfig) {
             pushErrMsg(t('aiSidebar.errors.noModel'));
-            isLoading = false;
+            completeTaskRuntime();
             return;
         }
 
@@ -2734,7 +2813,7 @@
             } catch (e) {
                 console.error('Failed to parse custom body:', e);
                 pushErrMsg('自定义参数 JSON 格式错误');
-                isLoading = false;
+                completeTaskRuntime();
                 return;
             }
         }
@@ -2824,9 +2903,12 @@
                 createdAt: now,
                 updatedAt: now,
                 status: 'running',
+                startedAt: startedAt || now,
+                finishedAt: undefined,
             };
             sessions = [newSession, ...sessions];
             currentSessionId = newSession.id;
+            markSessionRuntimeStarted(newSession.id, startedAt || now);
             replaceActiveDraftWithTask(newSession.id);
             await saveSessions();
 
@@ -2946,7 +3028,7 @@
 
                             if (!taskIsActive) {
                                 markTaskUnread(runTaskId);
-                                updateStoredTaskState(runTaskId, state => ({
+                                updateStoredTaskState(runTaskId, state => finishTaskRuntime({
                                     ...state,
                                     messages: [...state.messages, assistantMessage],
                                     streamingMessage: '',
@@ -2954,9 +3036,9 @@
                                     openCodeToolParts: [],
                                     openCodeTimeline: [],
                                     isThinkingPhase: false,
-                                    isLoading: false,
                                     hasUnsavedChanges: true,
                                 }));
+                                markSessionRuntimeFinished(runTaskId);
                                 setController(runTaskId, null);
                                 const completedState = getStoredTaskState(runTaskId);
                                 await saveTaskStateSession(runTaskId, completedState);
@@ -2978,7 +3060,7 @@
                             openCodeToolParts = [];
                             resetOpenCodeTimeline();
                             isThinkingPhase = false;
-                            isLoading = false;
+                            completeTaskRuntime();
                             setController(runTaskId, null);
                             hasUnsavedChanges = true;
 
@@ -2999,7 +3081,7 @@
                                 if (error.message !== 'Request aborted') {
                                     markTaskUnread(runTaskId);
                                 }
-                                updateStoredTaskState(runTaskId, state => ({
+                                updateStoredTaskState(runTaskId, state => finishTaskRuntime({
                                     ...state,
                                     messages:
                                         error.message !== 'Request aborted'
@@ -3016,9 +3098,9 @@
                                     openCodeToolParts: [],
                                     openCodeTimeline: [],
                                     isThinkingPhase: false,
-                                    isLoading: false,
                                     hasUnsavedChanges: error.message !== 'Request aborted' || state.hasUnsavedChanges,
                                 }));
+                                markSessionRuntimeFinished(runTaskId);
                                 setController(runTaskId, null);
                                 void saveTaskStateSession(runTaskId, getStoredTaskState(runTaskId));
                                 void closeDiagnosticLog(diagnosticLogger, 'ui.failed', {
@@ -3035,7 +3117,7 @@
                                 messages = [...messages, errorMessage];
                                 hasUnsavedChanges = true;
                             }
-                            isLoading = false;
+                            completeTaskRuntime();
                             streamingMessage = '';
                             streamingThinking = '';
                             openCodeToolParts = [];
@@ -3067,7 +3149,7 @@
                 );
                 messages = [...messages, errorMessage];
                 hasUnsavedChanges = true;
-                isLoading = false;
+                completeTaskRuntime();
                 streamingMessage = '';
                 streamingThinking = '';
                 openCodeToolParts = [];
@@ -3155,7 +3237,7 @@
                 isWaitingForAnswerSelection = false;
                 selectedAnswerIndex = null;
                 selectedTabIndex = 0;
-                isLoading = false;
+                completeTaskRuntime();
                 setController(currentSessionId, null);
                 return;
             }
@@ -3172,9 +3254,9 @@
                 streamingMessage = '';
                 streamingThinking = '';
                 openCodeToolParts = [];
-        resetOpenCodeTimeline();
+                resetOpenCodeTimeline();
                 isThinkingPhase = false;
-                isLoading = false;
+                completeTaskRuntime();
 
                 // 转换 LaTeX 数学公式格式为 Markdown 格式
                 const convertedMessage = convertLatexToMarkdown(tempStreamingMessage);
@@ -3197,9 +3279,9 @@
                 streamingMessage = '';
                 streamingThinking = '';
                 openCodeToolParts = [];
-        resetOpenCodeTimeline();
+                resetOpenCodeTimeline();
                 isThinkingPhase = false;
-                isLoading = false;
+                completeTaskRuntime();
             }
             setController(currentSessionId, null);
         }
@@ -4941,6 +5023,7 @@
     class:ai-sidebar--fullscreen={isFullscreen}
     class:ai-sidebar--sidebar={mode === 'sidebar'}
     class:ai-sidebar--dialog={mode === 'dialog'}
+    data-opencode-ai-sidebar-root="true"
     bind:this={sidebarContainer}
     on:keydown={handleModeShortcut}
 >
@@ -4995,6 +5078,7 @@
         onOpenWindow={openInNewWindow}
         onToggleFullscreen={toggleFullscreen}
         onOpenSettings={openSettings}
+        {getSessionElapsedText}
     />
 
     <MessageList
@@ -5026,6 +5110,7 @@
         {handleContextMenu}
         {handleScroll}
         {isLoading}
+        {currentTaskElapsedText}
         {isContextCompactionLikely}
         {isThinkingCollapsed}
         {isThinkingPhase}
@@ -5107,6 +5192,7 @@
         {formatTokenCount}
         {getFilteredCommands}
         {getTaskTabTitle}
+        {getTaskElapsedText}
         {handleDragLeave}
         {handleDragOver}
         {handleDrop}

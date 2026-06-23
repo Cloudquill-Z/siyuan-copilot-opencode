@@ -26,6 +26,8 @@ export interface TaskSession {
     status?: TaskStatus;
     openCodeSessionId?: string;
     lastError?: string;
+    startedAt?: number;
+    finishedAt?: number;
 }
 
 export interface TaskRuntime {
@@ -36,6 +38,8 @@ export interface TaskRuntime {
     openCodeTodos: OpenCodeTodo[];
     isThinkingPhase: boolean;
     abortController: AbortController | null;
+    startedAt?: number;
+    finishedAt?: number;
 }
 
 export interface TaskViewState {
@@ -52,6 +56,8 @@ export interface TaskViewState {
     isLoading: boolean;
     hasUnsavedChanges: boolean;
     lastPreparedContextTokens: number;
+    startedAt?: number;
+    finishedAt?: number;
 }
 
 export function normalizeTaskSession(raw: any): TaskSession {
@@ -67,7 +73,51 @@ export function normalizeTaskSession(raw: any): TaskSession {
         status: raw?.status || 'completed',
         openCodeSessionId: raw?.openCodeSessionId,
         lastError: raw?.lastError,
+        startedAt: Number(raw?.startedAt) || undefined,
+        finishedAt: Number(raw?.finishedAt) || undefined,
     };
+}
+
+export function startTaskRuntime<T extends { isLoading?: boolean; startedAt?: number; finishedAt?: number }>(
+    state: T,
+    now = Date.now()
+): T & { isLoading: boolean; startedAt: number; finishedAt?: number } {
+    return {
+        ...state,
+        isLoading: true,
+        startedAt: now,
+        finishedAt: undefined,
+    };
+}
+
+export function finishTaskRuntime<T extends { isLoading?: boolean; startedAt?: number; finishedAt?: number }>(
+    state: T,
+    now = Date.now()
+): T & { isLoading: boolean; finishedAt?: number } {
+    return {
+        ...state,
+        isLoading: false,
+        finishedAt: state.startedAt ? now : state.finishedAt,
+    };
+}
+
+export function getTaskElapsedMs(
+    state: { startedAt?: number; finishedAt?: number },
+    now = Date.now()
+): number {
+    if (!state.startedAt) return 0;
+    return Math.max(0, (state.finishedAt || now) - state.startedAt);
+}
+
+export function formatTaskElapsed(ms: number): string {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const seconds = totalSeconds % 60;
+    const totalMinutes = Math.floor(totalSeconds / 60);
+    const minutes = totalMinutes % 60;
+    const hours = Math.floor(totalMinutes / 60);
+    const pad = (value: number) => String(value).padStart(2, '0');
+    if (hours > 0) return `${hours}:${pad(minutes)}:${pad(seconds)}`;
+    return `${pad(minutes)}:${pad(seconds)}`;
 }
 
 function getOpenCodeToolPartKey(part: any): string {

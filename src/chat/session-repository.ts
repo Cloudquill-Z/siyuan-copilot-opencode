@@ -116,10 +116,14 @@ export class SessionRepository<T extends TaskSession = TaskSession> {
         const now = Date.now();
         const messageCount = options.messages.filter(message => message.role !== 'system').length;
         const existing = merged.find(session => session.id === options.sessionId);
+        const localSession = options.sessions.find(session => session.id === options.sessionId);
         const created = !existing;
         if (existing) {
             existing.updatedAt = now;
             existing.messageCount = messageCount;
+            if (localSession?.startedAt) existing.startedAt = localSession.startedAt;
+            if (localSession?.finishedAt) existing.finishedAt = localSession.finishedAt;
+            if (localSession?.status) existing.status = localSession.status;
         } else {
             merged.unshift({
                 id: options.sessionId,
@@ -127,7 +131,9 @@ export class SessionRepository<T extends TaskSession = TaskSession> {
                 messageCount,
                 createdAt: now,
                 updatedAt: now,
-                status: 'completed',
+                status: localSession?.status || 'completed',
+                startedAt: localSession?.startedAt,
+                finishedAt: localSession?.finishedAt,
             } as T);
         }
 

@@ -38,6 +38,7 @@
     export let fileInputElement: HTMLInputElement;
     export let formatTokenCount: any;
     export let getFilteredCommands: any;
+    export let getTaskElapsedText: (taskId: string) => string;
     export let getTaskTabTitle: any;
     export let handleDragLeave: any;
     export let handleDragOver: any;
@@ -358,17 +359,21 @@
                     {@const active = taskId === currentActiveTaskId}
                     {@const running = activeSessions.has(taskId)}
                     {@const unread = unreadTaskIds.has(taskId)}
+                    {@const elapsed = getTaskElapsedText(taskId)}
                     <button
                         type="button"
                         class="ai-sidebar__task-tab"
                         class:ai-sidebar__task-tab--active={active}
                         class:ai-sidebar__task-tab--running={running}
                         class:ai-sidebar__task-tab--unread={unread}
-                        title={`${index + 1}. ${getTaskTabTitle(taskId)} / Cmd/Ctrl + ${index + 1}`}
+                        title={`${index + 1}. ${getTaskTabTitle(taskId)}${elapsed ? ` · 耗时 ${elapsed}` : ''} / Cmd/Ctrl + ${index + 1}`}
                         on:click={() => selectActiveTaskTab(taskId)}
                         on:contextmenu|preventDefault|stopPropagation={e => closeActiveTaskTab(taskId, e)}
                     >
                         <span class="ai-sidebar__task-tab-index">{index + 1}</span>
+                        {#if running && elapsed}
+                            <span class="ai-sidebar__task-tab-elapsed">{elapsed}</span>
+                        {/if}
                         {#if unread}
                             <span class="ai-sidebar__task-tab-dot" aria-hidden="true"></span>
                         {/if}

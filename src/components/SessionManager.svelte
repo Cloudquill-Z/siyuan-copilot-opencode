@@ -6,6 +6,7 @@
     export let sessions: ChatSession[] = [];
     export let currentSessionId: string = '';
     export let isOpen = false;
+    export let getSessionElapsedText: (session: ChatSession) => string = () => '';
 
     const dispatch = createEventDispatcher();
 
@@ -23,6 +24,9 @@
         createdAt: number;
         updatedAt: number;
         pinned?: boolean; // 是否钉住
+        status?: string;
+        startedAt?: number;
+        finishedAt?: number;
     }
 
     // 右键菜单状态
@@ -392,6 +396,7 @@
                     <div class="session-manager__empty">{t('aiSidebar.session.empty')}</div>
                 {:else}
                     {#each sortedSessions as session}
+                        {@const elapsed = getSessionElapsedText(session)}
                         <div
                             class="session-item"
                             class:session-item--active={session.id === currentSessionId}
@@ -435,6 +440,9 @@
                                                 : 0)}
                                         {t('aiSidebar.messages.messageCount')}
                                     </span>
+                                    {#if elapsed}
+                                        <span class="session-item__elapsed">耗时 {elapsed}</span>
+                                    {/if}
                                 </div>
                             </div>
                             {#if !isMultiSelectMode}
@@ -682,9 +690,16 @@
 
     .session-item__info {
         display: flex;
+        flex-wrap: wrap;
         gap: 12px;
         font-size: 11px;
         color: var(--b3-theme-on-surface-light);
+    }
+
+    .session-item__elapsed {
+        color: var(--b3-theme-primary);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
     }
 
     .session-item__delete {
